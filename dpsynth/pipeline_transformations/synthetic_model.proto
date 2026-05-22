@@ -1,0 +1,162 @@
+// Copyright 2026 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+edition = "2024";
+
+package research.privacy.synthetic_tabular_data;
+
+import "google/protobuf/struct.proto";
+
+option features.field_presence = IMPLICIT;
+option java_outer_classname = "SyntheticModelOuterClass";
+
+// Top-level message to hold the trained model and dataset descriptor.
+message SyntheticModel {
+  MarkovRandomFieldModel mrf_model = 1;
+  DatasetDescriptor descriptor = 2;
+}
+
+// Represents a Numpy or JAX array.
+message NumpyArray {
+  repeated int64 shape = 1;
+  string dtype = 2;
+  bytes data = 3;
+}
+
+// Represents mbi.Domain
+message Domain {
+  repeated string attributes = 1;
+  repeated int64 shape = 2;
+}
+
+// Represents mbi.Factor
+message Factor {
+  Domain domain = 1;
+  NumpyArray values = 2;
+}
+
+// Represents mbi.CliqueVector
+message CliqueVector {
+  message Clique {
+    repeated string attributes = 1;
+  }
+
+  message CliqueFactorPair {
+    Clique clique = 1;
+    Factor factor = 2;
+  }
+
+  Domain domain = 1;
+  repeated Clique cliques = 2;
+  repeated CliqueFactorPair arrays = 3;
+}
+
+// Represents mbi.MarkovRandomField
+message MarkovRandomFieldModel {
+  CliqueVector potentials = 1;
+  CliqueVector marginals = 2;
+  double total = 3;
+}
+
+// Represents mbi.LinearMeasurement
+message LinearMeasurement {
+  NumpyArray noisy_measurement = 1;
+  CliqueVector.Clique clique = 2;
+  double stddev = 3;
+}
+
+// Represents dataset_descriptor.DataType enum
+message DataType {
+  enum Enum {
+    UNSUPPORTED = 0;
+    INT = 1;
+    ENUM = 2;
+    BOOL = 3;
+    STR = 4;
+    FLOAT = 5;
+  }
+}
+
+// Represents domain.CategoricalAttribute
+message CategoricalAttribute {
+  // Corresponds to list[None | bool | int | str]
+  google.protobuf.ListValue possible_values = 1;
+  int32 out_of_domain_index = 2;
+}
+
+// Represents domain.NumericalAttribute
+message NumericalAttribute {
+  double min_value = 1;
+  double max_value = 2;
+  bool clip_to_range = 3;
+  string dtype = 4;
+}
+
+// Represents dataset_descriptor.AttributeDescriptor
+message AttributeDescriptor {
+  string name = 1;
+  DataType.Enum data_type = 2;
+
+  oneof attribute_domain_type {
+    CategoricalAttribute categorical_attribute = 3;
+    NumericalAttribute numerical_attribute = 4;
+  }
+
+  repeated double quantiles = 5;
+  LinearMeasurement measurement = 6;
+}
+
+// Represents proto_descriptors.ProtoFieldNode
+message ProtoFieldNode {
+  string name = 1;
+  DataType.Enum data_type = 2;
+  bool is_message = 3;
+  CategoricalAttribute categorical_attribute = 4;  // for enum
+  repeated ProtoFieldNode children = 5;
+}
+
+// Represents dataset_descriptor.DataRecordConverter
+message DataRecordConverter {
+  enum ConverterType {
+    UNSPECIFIED = 0;
+    CSV = 1;
+    TFRECORD = 2;
+    PROTO = 3;
+  }
+
+  message Attribute {
+    string name = 1;
+    DataType.Enum type = 2;
+  }
+
+  message Attributes {
+    repeated Attribute attributes = 1;
+  }
+
+  ConverterType converter_type = 4;
+
+  oneof converter_state {
+    // For CSVConverter and TFRecordConverter
+    Attributes ordered_attributes = 1;
+
+    // For ProtoConverter
+    ProtoFieldNode proto_field_graph = 3;
+  }
+}
+
+// Represents dataset_descriptor.DatasetDescriptor
+message DatasetDescriptor {
+  repeated AttributeDescriptor attributes = 1;
+  DataRecordConverter data_record_converter = 2;
+}

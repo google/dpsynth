@@ -1,0 +1,44 @@
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dpsynth"
+description = "Differentially Private Synthetic Tabular Data Generation"
+readme = "README.md"
+requires-python = ">=3.12,<3.14"
+license = {file = "LICENSE"}
+authors = [{name = "dpsynth authors", email="mckennar@google.com"}]
+classifiers = [
+    "License :: OSI Approved :: Apache Software License",
+    "Intended Audience :: Science/Research",
+]
+keywords = []
+dependencies = [
+    "absl-py",
+    "attrs",
+    "numpy",
+    "pandas",
+    "pydantic>=2.0",
+    "pyyaml",
+    "pipeline-dp",
+    "mbi @ git+https://github.com/ryan112358/mbi.git",
+]
+dynamic = ["version"]
+
+[project.urls]
+homepage = "https://github.com/google/dpsynth"
+repository = "https://github.com/google/dpsynth"
+changelog = "https://github.com/google/dpsynth/blob/main/CHANGELOG.md"
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "pytest-xdist",
+]
+
+[tool.setuptools.dynamic]
+version = {attr = "dpsynth.__version__"}
+
+[tool.setuptools.packages.find]
+namespaces = false

@@ -1,0 +1,8 @@
+Refactor dpsynth for open-sourcing and address lint findings.
+
+- Transitioned from Protobufs to Dataclasses in the open-source version for central types in `diagnostic_info.py`.
+- Removed Google-specific technologies (F1, Capacitor, CNS references) from the open-source version via Copybara tags and ad-hoc replacements.
+- Fixed various lint findings (line lengths, unused imports, indentation) in `scalable_pipeline_api.md`, `contributors_guide.md`, `run_data_generation_from_model.py`, `comparison.py`, and `creating_data_recorder_converter_test.py`.
+- Verified that all tests pass in Google3.
+
+PUBLIC: Refactor dpsynth for open-sourcing, removing Google-internal dependencies and transitioning to dataclasses for OSS.

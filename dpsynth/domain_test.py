@@ -1,0 +1,90 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+import math
+
+from absl.testing import absltest
+from dpsynth import domain
+
+
+class TestDomain(absltest.TestCase):
+
+  def test_valid_attribute(self):
+    attribute = domain.CategoricalAttribute(
+        possible_values=['a', 'b', 'c'], out_of_domain_index=0
+    )
+    self.assertEqual(attribute.size, 3)
+
+    attribute = domain.NumericalAttribute(
+        min_value=0, max_value=10, clip_to_range=True
+    )
+    self.assertEqual(attribute.min_value, 0)
+    self.assertEqual(attribute.max_value, 10)
+    self.assertEqual(attribute.clip_to_range, True)
+
+  def test_empty_possible_values(self):
+    with self.assertRaises(ValueError):
+      domain.CategoricalAttribute(possible_values=[])
+
+  def test_invalid_out_of_domain_index(self):
+    with self.assertRaises(ValueError):
+      domain.CategoricalAttribute(
+          possible_values=['a', 'b'], out_of_domain_index=2
+      )
+
+  def test_invalid_range(self):
+    with self.assertRaises(ValueError):
+      domain.NumericalAttribute(min_value=10, max_value=0)
+
+  def test_to_from_yaml_roundtrip(self):
+    original_domain = {
+        'cat': domain.CategoricalAttribute(possible_values=['A', 'B', 'C']),
+        'num': domain.NumericalAttribute(min_value=0, max_value=10),
+    }
+
+    temp_file = self.create_tempfile('temp.yaml', mode='w+')
+    domain.to_yaml_file(original_domain, temp_file.full_path)
+    loaded_domain = domain.from_yaml_file(temp_file.full_path)
+    self.assertEqual(loaded_domain, original_domain)
+
+  def test_standardize_categorical(self):
+    attribute = domain.CategoricalAttribute(
+        possible_values=['a', 'b', 'c'], out_of_domain_index=1
+    )
+    self.assertEqual(attribute.standardize('a'), 'a')
+    self.assertEqual(attribute.standardize('b'), 'b')
+    self.assertEqual(attribute.standardize('c'), 'c')
+    self.assertEqual(attribute.standardize(0), 'b')
+    self.assertEqual(attribute.standardize(None), 'b')
+    self.assertEqual(attribute.standardize([1, 2, 3]), 'b')
+
+  def test_standardize_numerical(self):
+
+    in_domain_values = [0, 5, 10]
+    ood_values = [-5, 15, math.nan, -math.inf, math.inf, 'a', None, (3, 4)]
+
+    attribute = domain.NumericalAttribute(0, 10, clip_to_range=True)
+    for value in in_domain_values + ood_values:
+      self.assertBetween(attribute.standardize(value), 0, 10)
+
+    attribute = domain.NumericalAttribute(0, 10, clip_to_range=False)
+    for value in in_domain_values:
+      self.assertEqual(attribute.standardize(value), value)
+
+    for value in ood_values:
+      self.assertIsNone(attribute.standardize(value))
+
+
+if __name__ == '__main__':
+  absltest.main()

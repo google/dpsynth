@@ -1,0 +1,59 @@
+// Copyright 2026 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+edition = "2024";
+
+package research.privacy.synthetic_tabular_data;
+
+option features.field_presence = IMPLICIT;
+option java_outer_classname = "DiagnosticInfo";
+
+message DiagnosticInformation {
+  double epsilon = 1;
+  double delta = 2;
+  string mechanism = 3;
+
+  // Information about operations performed.
+  repeated DPOperation dp_operations = 4;
+  repeated string attribute_names = 5;
+
+  // Size of compressed attributes. Same order as attribute_names.
+  repeated int64 compressed_attribute_sizes = 6;
+
+  // Total variance measurements (between synthetic and original dataset).
+  repeated RoundInfo round_info = 7;
+}
+
+message DPOperation {
+  string name = 1;
+  string mechanism_type = 2;
+  double epsilon = 3;
+  double delta = 4;
+  double sigma = 5;
+  int64 count = 6;
+}
+
+message RoundInfo {
+  repeated MarginalL1Distance l1_distances = 1;
+  repeated Attributes selected_attributes = 2;
+}
+
+message Attributes {
+  repeated int64 attributes = 1;
+}
+
+message MarginalL1Distance {
+  Attributes attributes = 1;
+  double value = 2;
+}
