@@ -162,6 +162,13 @@ def generate_from_model(
     num_out_records: Number of synthetic output records to generate.
     output_format: The format of the output synthetic data.
     backend: The backend to use for data generation.
+    proto_type: unused for now.
+
+  Returns:
+    Synthetic data. PCollection if `model` is a PCollection,
+    otherwise a list.
+  """
+
   if backend is None:
     backend = _infer_backend(model)
 

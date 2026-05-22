@@ -1,6 +1,0 @@
-Automate LeakR check in Copybara with custom dictionary.
-
-- Updated `copy.bara.sky` to use `leakr_custom.dic` in `leakr.check()`.
-- Added `leakr_custom.dic` to version control.
-
-PUBLIC: Automate LeakR check in Copybara with custom dictionary.
