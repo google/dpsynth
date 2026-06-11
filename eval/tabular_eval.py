@@ -17,11 +17,11 @@
 from typing import Any
 
 import apache_beam as beam
-from dpsynth.eval import attribute_statistics
-from dpsynth.eval import correlation_computation
-from dpsynth.eval import marginal_total_variance
-from dpsynth.eval import one_way_distribution_computation
-from dpsynth.eval import types
+from eval import attribute_statistics
+from eval import correlation_computation
+from eval import marginal_total_variance
+from eval import one_way_distribution_computation
+from eval import types
 from dpsynth.pipeline_transformations import diagnostic_info
 import pipeline_dp
 

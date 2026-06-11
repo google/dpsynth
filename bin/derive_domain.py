@@ -20,7 +20,7 @@ from absl import app
 from absl import flags
 from absl import logging
 from dpsynth import domain
-from dpsynth.bin import _read_csv_args
+from bin import _read_csv_args
 import fancyflags as ff
 import numpy as np
 import pandas as pd

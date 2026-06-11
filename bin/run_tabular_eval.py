@@ -23,8 +23,8 @@ from absl import flags
 import apache_beam as beam
 from dpsynth.dataset_descriptors import dataset_descriptor
 from dpsynth.dataset_descriptors import proto_descriptors
-from dpsynth.eval import tabular_eval
-from dpsynth.eval import types
+from eval import tabular_eval
+from eval import types
 from dpsynth.pipeline_transformations import diagnostic_info
 from google.protobuf import text_format
 import pandas as pd

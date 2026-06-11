@@ -13,8 +13,8 @@
 # limitations under the License.
 
 from absl.testing import absltest
-from dpsynth.eval import tabular_eval
-from dpsynth.eval import types
+from eval import tabular_eval
+from eval import types
 from dpsynth.pipeline_transformations import diagnostic_info
 import pipeline_dp
 

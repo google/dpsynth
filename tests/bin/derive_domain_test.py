@@ -14,7 +14,7 @@
 
 from absl.testing import absltest
 from dpsynth import domain
-from dpsynth.bin import derive_domain
+from bin import derive_domain
 import numpy as np
 import pandas as pd
 

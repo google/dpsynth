@@ -13,7 +13,7 @@
 # limitations under the License.
 
 from absl.testing import absltest
-from dpsynth.eval import one_way_distribution_computation
+from eval import one_way_distribution_computation
 from dpsynth.pipeline_transformations import diagnostic_info
 import pipeline_dp
 

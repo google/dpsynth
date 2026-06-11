@@ -27,7 +27,7 @@ python3 bin/main.py \
 from absl import app
 from absl import flags
 import dpsynth
-from dpsynth.bin import _read_csv_args
+from bin import _read_csv_args
 import fancyflags as ff
 import pandas as pd
 

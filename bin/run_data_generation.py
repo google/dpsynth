@@ -22,7 +22,7 @@ from absl import flags
 import apache_beam as beam
 from dpsynth import data_generation
 from dpsynth import domain
-from dpsynth.bin import _proto_class_flag
+from bin import _proto_class_flag
 from dpsynth.dataset_descriptors import csv_descriptor
 from dpsynth.dataset_descriptors import proto_descriptors
 from dpsynth.dataset_descriptors import tfrecord_descriptor
