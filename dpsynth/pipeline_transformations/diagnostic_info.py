@@ -15,6 +15,9 @@
 """Module for updating diagnostic information."""
 
 import copy
+from dpsynth.pipeline_transformations import types
+import pipeline_dp
+
 from dataclasses import dataclass, field
 from typing import Optional
 

@@ -24,7 +24,7 @@ dependencies = [
     "pipeline-dp",
     "tensorflow",
     "apache-beam",
-    "dp-accounting",
+    "dp_accounting @ git+https://github.com/google/differential-privacy.git#subdirectory=python/dp_accounting",
     "jax[cpu]",
     "more-itertools",
     "networkx",
