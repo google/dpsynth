@@ -29,6 +29,7 @@ from dpsynth.dataset_descriptors import tfrecord_descriptor
 from dpsynth.pipeline_transformations import aim
 from dpsynth.pipeline_transformations import input_output
 from dpsynth.pipeline_transformations import types
+from google.protobuf import message
 import pipeline_dp
 
 
