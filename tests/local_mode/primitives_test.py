@@ -190,6 +190,70 @@ class SelectPartitionsSipsTest(parameterized.TestCase):
       )
 
 
+class SelectPartitionsGaussianThresholdingTest(absltest.TestCase):
+
+  def setUp(self):
+    super().setUp()
+    self.rng = np.random.default_rng(42)
+
+  def test_basic_operation(self):
+    data = np.array([1] * 50 + [2] * 5)
+    selected, counts, sigma = (
+        primitives.select_partitions_gaussian_thresholding(
+            self.rng, data, gdp_budget=10.0, delta=1e-5
+        )
+    )
+    self.assertIn(1, selected)
+    self.assertEqual(sigma, 1.0 / np.sqrt(10.0))
+    self.assertEqual(selected.size, counts.size)
+
+  def test_empty_data(self):
+    data = np.array([], dtype=int)
+    selected, counts, sigma = (
+        primitives.select_partitions_gaussian_thresholding(
+            self.rng, data, gdp_budget=1.0, delta=1e-5
+        )
+    )
+    self.assertEmpty(selected)
+    self.assertEmpty(counts)
+    self.assertEqual(sigma, 1.0)
+
+  def test_high_budget_selects_all(self):
+    data = np.array([1, 2, 3, 4, 5])
+    selected, _, _ = primitives.select_partitions_gaussian_thresholding(
+        self.rng, data, gdp_budget=1e6, delta=0.1
+    )
+    self.assertCountEqual(selected, [1, 2, 3, 4, 5])
+
+  def test_zero_budget_raises(self):
+    data = np.array([1, 2, 3])
+    with self.assertRaises(ValueError):
+      primitives.select_partitions_gaussian_thresholding(
+          self.rng, data, gdp_budget=-0.1, delta=1e-5
+      )
+    with self.assertRaises(ValueError):
+      primitives.select_partitions_gaussian_thresholding(
+          self.rng, data, gdp_budget=1.0, delta=-0.001
+      )
+
+  def test_rare_items_not_selected(self):
+    # One item with many occurrences, another with just 1.
+    # With moderate budget and tight delta, the rare item should be dropped.
+    data = np.array([1] * 100 + [2])
+    selected, _, _ = primitives.select_partitions_gaussian_thresholding(
+        self.rng, data, gdp_budget=0.5, delta=1e-6
+    )
+    self.assertIn(1, selected)
+    self.assertNotIn(2, selected)
+
+  def test_string_data_type(self):
+    data = np.array(["a", "b", "a", "a", "c", "a", "c"])
+    selected, _, _ = primitives.select_partitions_gaussian_thresholding(
+        self.rng, data, gdp_budget=10.0, delta=1e-5
+    )
+    self.assertTrue(all(isinstance(p, str) for p in selected))
+
+
 class GaussianHistogramTest(absltest.TestCase):
 
   def setUp(self):

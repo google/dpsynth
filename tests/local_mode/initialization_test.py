@@ -104,5 +104,68 @@ class CategoricalInitializerTest(absltest.TestCase):
     )
 
 
+class OpenSetCategoricalInitializerTest(absltest.TestCase):
+
+  def test_dp_event(self):
+    attr = domain.OpenSetCategoricalAttribute(default_value=None)
+    rng = np.random.default_rng(0)
+    initializer = initialization.OpenSetCategoricalInitializer(
+        name='test', attribute=attr, delta=1e-5, rng=rng
+    )
+    event = initializer.dp_event(zcdp_rho=0.5)
+    self.assertIsInstance(event, dp_accounting.GaussianDpEvent)
+
+  def test_call_noiseless(self):
+    attr = domain.OpenSetCategoricalAttribute(default_value=None)
+    rng = np.random.default_rng(42)
+    initializer = initialization.OpenSetCategoricalInitializer(
+        name='col', attribute=attr, delta=1e-5, rng=rng
+    )
+    # 'A' appears 100 times, 'B' 50, 'C' 1 (rare).
+    data = np.array(['A'] * 100 + ['B'] * 50 + ['C'] * 1)
+    result = initializer(zcdp_rho=np.inf, data=data)
+
+    self.assertIsInstance(result, initialization.ColumnMeasurement)
+    self.assertIsNotNone(result.measurement)
+    # With infinite budget, all values with count > 0 should be selected.
+    discovered = set(result.categorical_attribute.possible_values)
+    self.assertIn('A', discovered)
+    self.assertIn('B', discovered)
+    self.assertIn(None, discovered)  # default value always present
+    # Default value is always first.
+    self.assertIsNone(result.categorical_attribute.possible_values[0])
+    self.assertEqual(result.categorical_attribute.out_of_domain_index, 0)
+
+  def test_undiscovered_values_map_to_default(self):
+    attr = domain.OpenSetCategoricalAttribute(default_value='OTHER')
+    rng = np.random.default_rng(0)
+    initializer = initialization.OpenSetCategoricalInitializer(
+        name='col', attribute=attr, delta=1e-5, rng=rng
+    )
+    data = np.array(['A'] * 100 + ['B'] * 50)
+    result = initializer(zcdp_rho=np.inf, data=data)
+
+    transform_fn = result.transform_fn
+    # Discovered values map to valid indices.
+    idx_a = transform_fn('A')
+    self.assertIsInstance(idx_a, int)
+    # Unknown value maps to the out-of-domain (default) index at 0.
+    self.assertEqual(result.categorical_attribute.out_of_domain_index, 0)
+    self.assertEqual(transform_fn('Z'), 0)
+
+  def test_empty_data(self):
+    attr = domain.OpenSetCategoricalAttribute(default_value=None)
+    rng = np.random.default_rng(0)
+    initializer = initialization.OpenSetCategoricalInitializer(
+        name='col', attribute=attr, delta=1e-5, rng=rng
+    )
+    data = np.array([], dtype=str)
+    result = initializer(zcdp_rho=np.inf, data=data)
+
+    # Only the default value should be in the domain.
+    self.assertEqual(result.categorical_attribute.possible_values, [None])
+    self.assertEqual(result.categorical_attribute.size, 1)
+
+
 if __name__ == '__main__':
   absltest.main()
