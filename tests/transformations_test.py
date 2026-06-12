@@ -165,6 +165,52 @@ class TestDataTransformations(absltest.TestCase):
     self.assertBetween(transform_fn.inverse(interval1), 0, 5)
     self.assertBetween(transform_fn.inverse(interval2), 5, 10)
 
+  def test_discretize_interval_handling_sample(self):
+    attr = domain.NumericalAttribute(
+        min_value=0, max_value=100, interval_handling='sample'
+    )
+    _, transform_fn = transformations.create_discretize_transformation(
+        attr, [50]
+    )
+    interval = pd.Interval(50, 100)
+    values = set()
+    for _ in range(50):
+      value = transform_fn.inverse(interval)
+      self.assertBetween(value, 50, 100)
+      values.add(value)
+    # Sample mode should produce non-constant output (unlike midpoint).
+    self.assertGreater(len(values), 1)
+    self.assertIsNone(transform_fn.inverse(None))
+
+  def test_discretize_interval_handling_interval(self):
+    attr = domain.NumericalAttribute(
+        min_value=0, max_value=10, interval_handling='interval'
+    )
+    _, transform_fn = transformations.create_discretize_transformation(
+        attr, [5]
+    )
+    interval = pd.Interval(5, 10)
+    self.assertEqual(transform_fn.inverse(interval), interval)
+    self.assertIsNone(transform_fn.inverse(None))
+
+  def test_discretize_reverse_semi_infinite_intervals(self):
+    # Midpoint mode: semi-infinite intervals should return the finite endpoint.
+    attr = domain.NumericalAttribute(min_value=0, max_value=10)
+    _, transform_fn = transformations.create_discretize_transformation(
+        attr, [5]
+    )
+    self.assertEqual(transform_fn.inverse(pd.Interval(5, np.inf)), 5)
+    self.assertEqual(transform_fn.inverse(pd.Interval(-np.inf, 5)), 5)
+    # Sample mode: semi-infinite intervals should also return the finite end.
+    attr_sample = domain.NumericalAttribute(
+        min_value=0, max_value=10, interval_handling='sample'
+    )
+    _, transform_fn_sample = transformations.create_discretize_transformation(
+        attr_sample, [5]
+    )
+    self.assertEqual(transform_fn_sample.inverse(pd.Interval(5, np.inf)), 5)
+    self.assertEqual(transform_fn_sample.inverse(pd.Interval(-np.inf, 5)), 5)
+
   def test_rare_value_merging_some_rare_values(self):
     rare_mask = np.array([True, False, True, False])
     size, transform_fn = (

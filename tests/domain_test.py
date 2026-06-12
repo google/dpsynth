@@ -58,6 +58,21 @@ class TestDomain(absltest.TestCase):
     loaded_domain = domain.from_yaml_file(temp_file.full_path)
     self.assertEqual(loaded_domain, original_domain)
 
+  def test_interval_handling_yaml_roundtrip(self):
+    original_domain = {
+        'num': domain.NumericalAttribute(
+            min_value=0, max_value=10, interval_handling='sample'
+        ),
+    }
+    temp_file = self.create_tempfile('temp.yaml', mode='w+')
+    domain.to_yaml_file(original_domain, temp_file.full_path)
+    loaded_domain = domain.from_yaml_file(temp_file.full_path)
+    self.assertEqual(loaded_domain, original_domain)
+
+  def test_invalid_interval_handling(self):
+    with self.assertRaises(ValueError):
+      domain.NumericalAttribute(0, 10, interval_handling='bad')
+
   def test_standardize_categorical(self):
     attribute = domain.CategoricalAttribute(
         possible_values=['a', 'b', 'c'], out_of_domain_index=1
