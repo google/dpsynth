@@ -15,6 +15,7 @@
 """Computes one-way marginal distances."""
 
 from collections.abc import Iterable
+import dataclasses
 from typing import Any
 from dpsynth.eval import types
 from dpsynth.pipeline_transformations import diagnostic_info
