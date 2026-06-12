@@ -47,3 +47,6 @@ version = {attr = "dpsynth.__version__"}
 
 [tool.setuptools.packages.find]
 namespaces = false
+
+[tool.pytest.ini_options]
+pythonpath = ["."]

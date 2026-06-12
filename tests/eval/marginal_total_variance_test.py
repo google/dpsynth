@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 from absl.testing import absltest
-from dpsynth.eval import marginal_total_variance
+from eval import marginal_total_variance
 import pipeline_dp
 
 

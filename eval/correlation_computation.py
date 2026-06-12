@@ -17,7 +17,7 @@
 from collections.abc import Iterable
 import itertools
 from typing import Any
-from dpsynth.eval import types
+from eval import types
 from dpsynth.pipeline_transformations import diagnostic_info
 import numpy as np
 import pipeline_dp

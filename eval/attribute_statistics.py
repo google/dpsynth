@@ -18,8 +18,8 @@ import collections
 import dataclasses
 from typing import Any
 
-from dpsynth.eval import correlation_computation
-from dpsynth.eval import types
+from eval import correlation_computation
+from eval import types
 from dpsynth.pipeline_transformations import diagnostic_info
 import pipeline_dp
 from pipeline_dp import pipeline_functions
