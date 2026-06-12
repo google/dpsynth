@@ -25,9 +25,9 @@ class InitializationTest(absltest.TestCase):
     attr = domain.NumericalAttribute(min_value=0, max_value=10)
     rng = np.random.default_rng(0)
     initializer = initialization.NumericalInitializer(
-        name='test', num_partitions=4, attribute=attr, rng=rng
+        name='test', num_partitions=4, attribute=attr
     )
-    event = initializer.dp_event(1.0)
+    event = initializer.calibrate(zcdp_rho=1.0).dp_event
     self.assertIsInstance(event, dp_accounting.ComposedDpEvent)
     self.assertLen(event.events, 2)
     for e in event.events:
@@ -37,13 +37,13 @@ class InitializationTest(absltest.TestCase):
     attr = domain.NumericalAttribute(min_value=0, max_value=10)
     rng = np.random.default_rng(0)
     initializer = initialization.NumericalInitializer(
-        name='test', num_partitions=4, attribute=attr, rng=rng
+        name='test', num_partitions=4, attribute=attr
     )
 
     data = np.array([1, 2, 3, 4, 5, 6, 7, 8, 9])
     # Level 0 median [1..9] --> 5
     # Level 1 medians: [1..5] --> 3, [6..9] --> 7.5
-    measurement = initializer(np.inf, data)
+    measurement = initializer.calibrate(zcdp_rho=np.inf)(rng, data)
 
     self.assertIsInstance(measurement, initialization.ColumnMeasurement)
     self.assertEqual(measurement.categorical_attribute.size, 4)
@@ -62,9 +62,9 @@ class CategoricalInitializerTest(absltest.TestCase):
     attr = domain.CategoricalAttribute(possible_values=['A', 'B', 'C'])
     rng = np.random.default_rng(0)
     initializer = initialization.CategoricalInitializer(
-        name='test', attribute=attr, rng=rng
+        name='test', attribute=attr
     )
-    event = initializer.dp_event(zcdp_rho=0.5)
+    event = initializer.calibrate(zcdp_rho=0.5).dp_event
     self.assertIsInstance(event, dp_accounting.GaussianDpEvent)
     # rho = 0.5 => sigma = 1/sqrt(2*0.5) = 1.0
     self.assertEqual(event.noise_multiplier, 1.0)
@@ -73,10 +73,10 @@ class CategoricalInitializerTest(absltest.TestCase):
     attr = domain.CategoricalAttribute(possible_values=['A', 'B', 'C'])
     rng = np.random.default_rng(0)
     initializer = initialization.CategoricalInitializer(
-        name='col', attribute=attr, rng=rng
+        name='col', attribute=attr
     )
     data = np.array(['A', 'A', 'B', 'C', 'C', 'C'])
-    result = initializer(zcdp_rho=np.inf, data=data)
+    result = initializer.calibrate(zcdp_rho=np.inf)(rng, data)
 
     self.assertIsInstance(result, initialization.ColumnMeasurement)
     self.assertEqual(result.categorical_attribute, attr)
@@ -93,10 +93,10 @@ class CategoricalInitializerTest(absltest.TestCase):
     )
     rng = np.random.default_rng(0)
     initializer = initialization.CategoricalInitializer(
-        name='col', attribute=attr, rng=rng
+        name='col', attribute=attr
     )
     data = np.array(['X', 'Y', 'Z', 'W'])
-    result = initializer(zcdp_rho=np.inf, data=data)
+    result = initializer.calibrate(zcdp_rho=np.inf)(rng, data)
 
     # 'Z' and 'W' are OOD, mapped to index 0 (None).
     np.testing.assert_array_equal(

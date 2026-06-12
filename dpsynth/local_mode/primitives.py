@@ -18,19 +18,81 @@ These implementations only depened on numpy and scipy and utilize vectorized
 operations for efficiency in single-machine environments.
 """
 
+from __future__ import annotations
+
+import abc
+import dataclasses
+import math
+from typing import Any
+
+import dp_accounting
 import numpy as np
 import scipy.special
 import scipy.stats
 
 
-def median(
+class DPMechanism(abc.ABC):
+  """Abstract base class for differentially private mechanisms.
+
+  A DPMechanism encapsulates a randomized algorithm that satisfies differential
+  privacy. Usage follows a two-phase pattern:
+
+  1. **Configure**: Create the mechanism with algorithm-specific parameters.
+  2. **Calibrate**: Call ``calibrate(zcdp_rho=...)`` to bind a privacy budget,
+     returning a new mechanism instance whose natural privacy parameter (e.g.,
+     Gaussian sigma, exponential mechanism epsilon) has been set accordingly.
+  3. **Run**: Call the calibrated mechanism on data via ``__call__``.
+
+  Subclasses should be parameterized by their **natural** privacy parameter
+  (e.g., ``sigma`` for the Gaussian mechanism, ``epsilon`` for the exponential
+  mechanism). The ``calibrate`` method converts from the universal zCDP budget
+  to the mechanism's natural parameter.
+
+  The ``dp_event`` property returns the ``dp_accounting.DpEvent`` characterizing
+  the privacy cost of the calibrated mechanism.
+  """
+
+  @abc.abstractmethod
+  def calibrate(self, *, zcdp_rho: float) -> DPMechanism:
+    """Returns a new mechanism calibrated to the given zCDP budget.
+
+    Converts the zCDP budget ``rho`` into the mechanism's natural privacy
+    parameter and returns a new instance with that parameter set.
+
+    Args:
+      zcdp_rho: The zCDP privacy budget (rho).
+
+    Returns:
+      A new DPMechanism instance calibrated to the given budget.
+    """
+
+  @property
+  @abc.abstractmethod
+  def dp_event(self) -> dp_accounting.DpEvent:
+    """The DpEvent characterizing the privacy cost of this mechanism."""
+
+  @abc.abstractmethod
+  def __call__(self, rng: Any, data: Any) -> Any:
+    """Runs the mechanism on the given data.
+
+    Args:
+      rng: A source of randomness (e.g., ``np.random.Generator``).
+      data: The input data to the mechanism.
+    """
+
+
+_UNCALIBRATED_MSG = (
+    '{param} has not been set. Set it directly or call calibrate().'
+)
+
+
+def _median(
     rng: np.random.Generator,
     data: np.ndarray,
     lower: float,
     upper: float,
-    zcdp_rho: float,
+    epsilon: float,
     jitter_multiple: float = 1e-4,
-    num_examples_per_user: int = 1,
 ) -> float:
   """Computes a differentially private median using the exponential mechanism.
 
@@ -38,29 +100,24 @@ def median(
   the intervals between sorted data points. The utility of an interval is based
   on the distance of its rank from N/2.
 
-  This mechanism is an instance of the exponential mechanism with parameter
-  epsilon = sqrt(8 * zcdp_rho) and sensitivity = num_examples_per_user.
-
   Args:
     rng: A numpy random number generator.
     data: 1D array of numerical data.
     lower: Lower bound for the data.
     upper: Upper bound for the data.
-    zcdp_rho: Total zCDP privacy budget for the median call.
+    epsilon: Exponential mechanism privacy parameter.
     jitter_multiple: Multiplier for the jitter scale, relative to upper-lower.
-    num_examples_per_user: Number of examples per user. If provided, this
-      mechanism satisfies user-level DP.
 
   Returns:
     A differentially private median estimate.
   """
   if lower > upper:
-    raise ValueError(f"{lower=} cannot be greater than {upper=}.")
+    raise ValueError(f'{lower=} cannot be greater than {upper=}.')
 
   clamped_data = np.clip(data, lower, upper)
   n = clamped_data.size
 
-  if zcdp_rho == np.inf:
+  if epsilon == np.inf:
     if n == 0:
       return (lower + upper) / 2
     return float(np.median(clamped_data))
@@ -78,13 +135,8 @@ def median(
   ranks = np.arange(n + 1)
   utilities = -np.abs(ranks - n / 2)
 
-  # Convert zCDP rho to exponential mechanism parameter.
-  epsilon = np.sqrt(8 * zcdp_rho)
-  sensitivity = num_examples_per_user
-  alpha = epsilon / sensitivity
-
   # Compute output probabilities for each interval.
-  probs = scipy.special.softmax(np.log(lengths) + alpha * utilities)
+  probs = scipy.special.softmax(np.log(lengths) + epsilon * utilities)
 
   # Sample an interval index, and a value uniformly from the interval.
   interval_idx = rng.choice(n + 1, p=probs)
@@ -93,62 +145,68 @@ def median(
   return rng.uniform(v_min, v_max)
 
 
-def quantiles(
+def _quantile_epsilon_levels(
+    zcdp_rho: float, num_partitions: int
+) -> np.ndarray:
+  """Computes per-level exponential mechanism epsilons for DP quantiles.
+
+  The budget is split so that each level receives noise proportional to
+  the data size at that level.  Concretely, if there are L levels the
+  per-level zCDP budgets satisfy rho_i = 4 * rho_{i+1} (deeper levels get
+  less budget) and sum to ``zcdp_rho``.  Each rho is then converted to an
+  exponential mechanism epsilon via ``epsilon = sqrt(8 * rho)``.
+
+  Args:
+    zcdp_rho: Total zCDP privacy budget.
+    num_partitions: Number of partitions (must be a power of 2).
+
+  Returns:
+    A length ``log2(num_partitions)`` array of per-level epsilons, ordered
+    from the deepest (finest) level to the shallowest (coarsest).
+  """
+  levels = int(np.log2(num_partitions))
+  if levels == 0:
+    return np.array([])
+  budget_weights = 4 ** np.arange(levels)[::-1]
+  rho_levels = zcdp_rho * budget_weights / budget_weights.sum()
+  return np.sqrt(8 * rho_levels)
+
+
+def _quantiles(
     rng: np.random.Generator,
     data: np.ndarray,
     lower: float,
     upper: float,
-    num_partitions: int,
-    zcdp_rho: float,
-    num_examples_per_user: int = 1,
+    epsilon_levels: np.ndarray,
 ) -> list[float]:
   """Computes uniformly spaced differentially private quantiles.
 
-  This function is a log2(num_partitions) composition of the exponential
-  mechanism where the fraction of the total zCDP budget assigned to each level
-  is proportional to 0.25^level.
+  This function is a ``len(epsilon_levels)``-level composition of the
+  exponential mechanism.  The number of partitions is inferred as
+  ``2 ** len(epsilon_levels)``.
 
   Args:
     rng: A numpy random number generator.
     data: 1D array of numerical data.
     lower: Lower bound for the data.
     upper: Upper bound for the data.
-    num_partitions: Number of partitions (n) to compute (must be a power of 2).
-      This function computes n-1 quantiles for [k, 2*k, ..., (n-1)*k] where  k =
-      1/n, corresponding to the set of n intervals [lower, k), [k, 2k), ...,
-      [k*(n-1), upper).
-    zcdp_rho: Total zCDP privacy budget for the quantiles call.
-    num_examples_per_user: Number of examples per user. If provided, this
-      mechanism satisfies user-level DP.
+    epsilon_levels: Per-level exponential mechanism epsilons, as returned by
+      ``_quantile_epsilon_levels``.
 
   Returns:
-    A length (num_partitions-1) sorted list of private quantile estimates.
+    A list of ``2 ** len(epsilon_levels) - 1`` sorted private quantile
+    estimates.
   """
-  if num_partitions <= 0 or (num_partitions & (num_partitions - 1)) != 0:
-    raise ValueError(f"num_buckets ({num_partitions}) must be a power of 2.")
-
-  if num_examples_per_user != 1:
-    # It is not obvious if the parallel composition logic holds below when users
-    # may contribute a subset of their data to multiple partitions.
-    raise ValueError(f"{num_examples_per_user=} is not currently supported.")
-
-  levels = int(np.log2(num_partitions))
+  levels = len(epsilon_levels)
   if levels == 0:
     return []
-
-  # Split the budget so that each level gets noise proportional to data size.
-  # rho_1 + ... + rho_levels = rho
-  # rho_i = 4 * rho_{i+1}
-
-  budget_weights = 4 ** np.arange(levels)[::-1]
-  rho_levels = zcdp_rho * budget_weights / budget_weights.sum()
 
   def quantiles_rec(current_data, curr_lower, curr_upper, current_depth):
     if current_depth == 0:
       return []
 
-    rho_level = rho_levels[current_depth - 1]
-    med = median(rng, current_data, curr_lower, curr_upper, rho_level)
+    eps = epsilon_levels[current_depth - 1]
+    med = _median(rng, current_data, curr_lower, curr_upper, eps)
 
     left_mask = current_data <= med
     left_data = current_data[left_mask]
@@ -171,7 +229,7 @@ def _contribution_bound(prng, user_ids, max_part):
   diff = np.r_[True, sorted_ids[1:] != sorted_ids[:-1]]
   kernel = np.ones(max_part, dtype=bool)
   # This convolution determines if any of previous max_part elements are True.
-  mask = np.convolve(diff, kernel, mode="full")[: user_ids.size]
+  mask = np.convolve(diff, kernel, mode='full')[: user_ids.size]
   return idx[mask]
 
 
@@ -182,7 +240,7 @@ def _get_threshold(delta, sigma, max_part):
   return thresholds.max()
 
 
-def select_partitions_sips(
+def _select_partitions_sips(
     rng: np.random.Generator,
     data: np.ndarray,
     gdp_budget: float,
@@ -221,9 +279,9 @@ def select_partitions_sips(
   if num_rounds is None:
     num_rounds = 1 if user_ids is None else 3
   if num_rounds <= 0:
-    raise ValueError(f"num_rounds ({num_rounds}) must be greater than 0.")
+    raise ValueError(f'num_rounds ({num_rounds}) must be greater than 0.')
   if gdp_budget <= 0 or delta <= 0:
-    raise ValueError(f"{gdp_budget=} and {delta=} must be positive.")
+    raise ValueError(f'{gdp_budget=} and {delta=} must be positive.')
 
   fractions = allocation_factor ** np.arange(num_rounds)[::-1]
   fractions /= fractions.sum()
@@ -237,7 +295,7 @@ def select_partitions_sips(
   if user_ids is None:
     user_ids = np.arange(data.size)
   if user_ids.size != data.size:
-    raise ValueError("user_ids must have the same size as data.")
+    raise ValueError('user_ids must have the same size as data.')
 
   combined = np.stack((user_ids, data), axis=1)
   unique_combined = np.unique(combined, axis=0)
@@ -282,7 +340,7 @@ def select_partitions_sips(
   return selected_partitions, selected_counts, max_sigma
 
 
-def gaussian_histogram(
+def _gaussian_histogram(
     rng: np.random.Generator,
     data: np.ndarray,
     domain_size: int,
@@ -306,3 +364,84 @@ def gaussian_histogram(
   return np.bincount(data, minlength=domain_size) + rng.normal(
       scale=sigma, size=domain_size
   )
+
+
+# ---------------------------------------------------------------------------
+# DPMechanism subclasses
+# ---------------------------------------------------------------------------
+
+
+@dataclasses.dataclass
+class DPQuantiles(DPMechanism):
+  """Differentially private quantiles via composed exponential mechanisms.
+
+  This is a ``log2(num_partitions)``-level composition of the exponential
+  mechanism. The natural privacy parameter is ``zcdp_rho`` (the total zCDP
+  budget) since the mechanism internally splits it across levels.
+
+  Attributes:
+    lower: Lower bound for the data domain.
+    upper: Upper bound for the data domain.
+    num_partitions: Number of partitions (must be a power of 2).
+    zcdp_rho: Total zCDP budget. Set directly or via ``calibrate``.
+  """
+
+  lower: float
+  upper: float
+  num_partitions: int
+  zcdp_rho: float | None = None
+
+  def calibrate(self, *, zcdp_rho: float) -> DPQuantiles:
+    """Returns a copy calibrated to the given zCDP budget."""
+    return dataclasses.replace(self, zcdp_rho=zcdp_rho)
+
+  @property
+  def dp_event(self) -> dp_accounting.DpEvent:
+    """Returns the composed privacy event for this mechanism."""
+    if self.zcdp_rho is None:
+      raise ValueError(_UNCALIBRATED_MSG.format(param='zcdp_rho'))
+    eps_levels = _quantile_epsilon_levels(self.zcdp_rho, self.num_partitions)
+    return dp_accounting.ComposedDpEvent([
+        dp_accounting.ExponentialMechanismDpEvent(epsilon=float(eps))
+        for eps in eps_levels
+    ])
+
+  def __call__(self, rng: np.random.Generator, data: np.ndarray) -> list[float]:
+    """Computes differentially private quantiles."""
+    if self.zcdp_rho is None:
+      raise ValueError(_UNCALIBRATED_MSG.format(param='zcdp_rho'))
+    eps_levels = _quantile_epsilon_levels(self.zcdp_rho, self.num_partitions)
+    return _quantiles(rng, data, self.lower, self.upper, eps_levels)
+
+
+@dataclasses.dataclass
+class DPGaussianHistogram(DPMechanism):
+  """Differentially private histogram via the Gaussian mechanism.
+
+  The natural privacy parameter is ``sigma``, the noise standard deviation.
+  The conversion from zCDP is ``sigma = sqrt(0.5 / zcdp_rho)``.
+
+  Attributes:
+    domain_size: Number of categories in the histogram domain.
+    sigma: Gaussian noise standard deviation. Set directly or via ``calibrate``.
+  """
+
+  domain_size: int
+  sigma: float | None = None
+
+  def calibrate(self, *, zcdp_rho: float) -> DPGaussianHistogram:
+    """Returns a copy with sigma derived from the zCDP budget."""
+    return dataclasses.replace(self, sigma=math.sqrt(0.5 / zcdp_rho))
+
+  @property
+  def dp_event(self) -> dp_accounting.DpEvent:
+    """Returns the Gaussian privacy event for this mechanism."""
+    if self.sigma is None:
+      raise ValueError(_UNCALIBRATED_MSG.format(param='sigma'))
+    return dp_accounting.GaussianDpEvent(noise_multiplier=self.sigma)
+
+  def __call__(self, rng: np.random.Generator, data: np.ndarray) -> np.ndarray:
+    """Computes a differentially private histogram."""
+    if self.sigma is None:
+      raise ValueError(_UNCALIBRATED_MSG.format(param='sigma'))
+    return _gaussian_histogram(rng, data, self.domain_size, self.sigma)
