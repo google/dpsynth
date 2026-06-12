@@ -47,7 +47,7 @@ import functools
 import math
 import pathlib
 
-from typing import Any, TypeAlias
+from typing import Any, Literal, TypeAlias
 
 import attr
 import pandas as pd
@@ -56,6 +56,8 @@ import yaml
 PathType = pathlib.Path
 
 CategoricalValue: TypeAlias = None | bool | int | str | pd.Interval
+
+IntervalHandling = Literal['midpoint', 'sample', 'interval']
 
 
 @attr.define(frozen=True)
@@ -140,6 +142,11 @@ class NumericalAttribute:
       False, out-of-domain values will be grouped together and treated as a
       single special out-of-domain value.
     dtype: The dtype of the data (either 'int' or 'float').
+    interval_handling: Controls how discretized intervals are converted back to
+      numerical values. 'midpoint' returns the interval midpoint (or the finite
+      endpoint if the other is infinite). 'sample' draws uniformly from the
+      interval (or returns the finite endpoint if the other is infinite).
+      'interval' keeps the pd.Interval in the output unchanged.
     description: An optional semantic description of the attribute.
   """
 
@@ -147,6 +154,7 @@ class NumericalAttribute:
   max_value: float = attr.field(converter=float)
   clip_to_range: bool = attr.field(default=True)
   dtype: str = attr.field(default='float')
+  interval_handling: str = attr.field(default='midpoint')
   description: str | None = attr.field(default=None)
 
   @min_value.validator  # pytype: disable=attribute-error
@@ -162,6 +170,14 @@ class NumericalAttribute:
     if self.dtype not in ['int', 'float']:
       raise ValueError(
           f'dtype must be either "int" or "float", got {self.dtype}.'
+      )
+
+  @interval_handling.validator  # pytype: disable=attribute-error
+  def _validate_interval_handling(self, *_):
+    if self.interval_handling not in ['midpoint', 'sample', 'interval']:
+      raise ValueError(
+          'interval_handling must be "midpoint", "sample", or "interval",'
+          f' got {self.interval_handling}.'
       )
 
   @property

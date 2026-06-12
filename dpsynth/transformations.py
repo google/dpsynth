@@ -177,12 +177,36 @@ def create_discretize_transformation(
       return None
     return intervals[intervals.get_loc(value)]
 
-  def reverse(value: pd.Interval | None) -> float | None:
+  def _resolve_finite(interval: pd.Interval) -> float:
+    """Returns the midpoint, handling infinite endpoints."""
+    left_finite = math.isfinite(interval.left)
+    right_finite = math.isfinite(interval.right)
+    if left_finite and right_finite:
+      return interval.mid
+    elif left_finite:
+      return interval.left
+    else:
+      return interval.right
+
+  def reverse(value: pd.Interval | None) -> float | pd.Interval | None:
     if value is None:
       return None
+    if attribute_domain.interval_handling == 'interval':
+      return value
+    if attribute_domain.interval_handling == 'sample':
+      left_finite = math.isfinite(value.left)
+      right_finite = math.isfinite(value.right)
+      if left_finite and right_finite:
+        result = np.random.uniform(value.left, value.right)
+      elif left_finite:
+        result = value.left
+      else:
+        result = value.right
+    else:
+      result = _resolve_finite(value)
     if attribute_domain.dtype == 'int':
-      return math.ceil(value.mid)
-    return value.mid
+      return math.ceil(result)
+    return result
 
   new_domain = domain.CategoricalAttribute(possible_values)
   transformation = DiscretizeTransformation(transform, reverse)
