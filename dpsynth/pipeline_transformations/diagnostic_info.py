@@ -15,6 +15,10 @@
 """Module for updating diagnostic information."""
 
 import copy
+
+from dpsynth.pipeline_transformations import types  # pylint: disable=g-bad-import-order
+import pipeline_dp  # pylint: disable=g-bad-import-order
+
 from dataclasses import dataclass, field
 from typing import Optional
 

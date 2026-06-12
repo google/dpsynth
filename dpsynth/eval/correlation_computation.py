@@ -15,6 +15,7 @@
 """Computes two-way attribute correlations."""
 
 from collections.abc import Iterable
+import dataclasses
 import itertools
 from typing import Any
 from dpsynth.eval import types
