@@ -182,6 +182,62 @@ def _get_threshold(delta, sigma, max_part):
   return thresholds.max()
 
 
+def select_partitions_gaussian_thresholding(
+    rng: np.random.Generator,
+    data: np.ndarray,
+    gdp_budget: float,
+    delta: float,
+) -> tuple[np.ndarray, np.ndarray, float]:
+  """Selects partitions using Gaussian Thresholding (Weighted Gaussian).
+
+  This implements Algorithm 2 from the DP-SIPS paper (Swanberg et al., 2023)
+  under item-level DP. It is the simplest partition selection mechanism:
+
+    1. Compute the histogram of partition counts.
+    2. Add Gaussian noise calibrated to the privacy budget.
+    3. Return partitions whose noisy count exceeds a threshold chosen to
+       bound the false-positive probability per empty partition at delta.
+
+  Under item-level DP each record is treated as a distinct user contributing
+  to exactly one partition, so the histogram has L2 sensitivity 1.  The
+  threshold is T = 1 + sigma * Phi^{-1}(1 - delta), following the paper's
+  formula with max_part = 1.
+
+  Args:
+    rng: A numpy random number generator.
+    data: 1D array of integers, where each element is a partition ID.
+    gdp_budget: Privacy budget in terms of squared Gaussian DP mu parameter
+      (gdp_budget = mu^2 = 1 / sigma^2).
+    delta: Failure probability (false positive bound per empty partition).
+
+  Returns:
+    A tuple containing:
+      - selected_partitions: 1D array of partition IDs that passed the
+        threshold.
+      - estimated_counts: 1D array of noisy counts for each selected
+        partition.
+      - sigma: The standard deviation of the Gaussian noise added.
+  """
+  if gdp_budget <= 0 or delta <= 0:
+    raise ValueError(f"{gdp_budget=} and {delta=} must be positive.")
+
+  sigma = 1.0 / np.sqrt(gdp_budget)
+
+  if data.size == 0:
+    return np.empty(0, dtype=data.dtype), np.empty(0, dtype=float), sigma
+
+  unique_parts, counts = np.unique(data, return_counts=True)
+  noisy_counts = counts + rng.normal(scale=sigma, size=counts.size)
+
+  # Threshold: ensures that an empty partition (true count 0) passes with
+  # probability at most delta.  For max_part=1 this simplifies to:
+  #   T = 1/sqrt(1) + sigma * Phi^{-1}(1 - delta) = 1 + sigma * ppf(1-delta)
+  threshold = 1.0 + sigma * scipy.stats.norm.ppf(1.0 - delta)
+  passed = noisy_counts >= threshold
+
+  return unique_parts[passed], noisy_counts[passed], sigma
+
+
 def select_partitions_sips(
     rng: np.random.Generator,
     data: np.ndarray,

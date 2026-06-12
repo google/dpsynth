@@ -120,3 +120,80 @@ class CategoricalInitializer:
         noisy_counts, (self.name,), stddev=sigma
     )
     return ColumnMeasurement(self.attribute, transform_fn, measurement)
+
+
+@dataclasses.dataclass
+class OpenSetCategoricalInitializer:
+  """Mechanism that discovers and measures an open-set categorical domain.
+
+  Uses Gaussian Thresholding (Algorithm 2 from the DP-SIPS paper) to privately
+  select significant partitions from the data and simultaneously obtain noisy
+  counts for each discovered partition. The discovered partitions, together
+  with the attribute's default_value (used as a catch-all for undiscovered
+  values), form a CategoricalAttribute used for downstream synthesis.
+
+  Attributes:
+    name: Attribute name used as the clique key in the measurement.
+    attribute: The OpenSetCategoricalAttribute specifying the default value.
+    delta: Failure probability for the partition selection threshold.
+    rng: A numpy random number generator.
+  """
+
+  name: str
+  attribute: domain.OpenSetCategoricalAttribute
+  delta: float
+  rng: np.random.Generator
+
+  def dp_event(self, zcdp_rho: float) -> dp_accounting.DpEvent:
+    """Returns the DpEvent for the Gaussian Thresholding mechanism.
+
+    Args:
+      zcdp_rho: Total zCDP privacy budget.
+
+    Returns:
+      A single GaussianDpEvent.
+    """
+    gdp_budget = accounting.zcdp_to_gdp(zcdp_rho)
+    sigma = 1.0 / np.sqrt(gdp_budget)
+    return dp_accounting.GaussianDpEvent(noise_multiplier=sigma)
+
+  def __call__(self, zcdp_rho: float, data: np.ndarray) -> ColumnMeasurement:
+    """Returns a differentially private measurement of the given data.
+
+    Args:
+      zcdp_rho: Total zCDP privacy budget for partition selection.
+      data: 1D array of raw categorical values.
+
+    Returns:
+      A ColumnMeasurement containing the discovered CategoricalAttribute, the
+      encoding transform, and a LinearMeasurement with the noisy counts from
+      DP-SIPS. The last entry in the domain is the default_value catch-all
+      whose count is not measured (set to zero in the measurement).
+    """
+    # Map raw values to integer partition IDs for thresholding.
+    unique_values, inverse = np.unique(data, return_inverse=True)
+    gdp_budget = accounting.zcdp_to_gdp(zcdp_rho)
+    selected_ids, counts, stddev = (
+        primitives.select_partitions_gaussian_thresholding(
+            self.rng, inverse, gdp_budget, self.delta
+        )
+    )
+    selected_values = list(unique_values[selected_ids])
+
+    # Build the discovered domain: default first, then selected values.
+    possible_values = [self.attribute.default_value] + selected_values
+    cat_attr = domain.CategoricalAttribute(
+        possible_values=possible_values,
+        out_of_domain_index=0,
+    )
+    transform_fn = transformations.discrete_encoder(cat_attr)
+
+    # The measurement covers only the discovered partitions (indices 1:),
+    # not the unmeasured default at index 0.
+    measurement = mbi.LinearMeasurement(
+        counts,
+        (self.name,),
+        stddev=stddev,
+        query=lambda x: x[1:],
+    )
+    return ColumnMeasurement(cat_attr, transform_fn, measurement)
