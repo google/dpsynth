@@ -14,12 +14,14 @@
 
 """Utilities for measuring and integer-encoding single columns."""
 
+from __future__ import annotations
+
 import dataclasses
+import functools
 
 import dp_accounting
 from dpsynth import domain
 from dpsynth import transformations
-from dpsynth.discrete_mechanisms import accounting
 from dpsynth.local_mode import primitives
 import mbi
 import numpy as np
@@ -33,34 +35,47 @@ class ColumnMeasurement:
 
 
 @dataclasses.dataclass
-class NumericalInitializer:
-  """Mechanism that creates the data encoding transform for numerical data."""
+class NumericalInitializer(primitives.DPMechanism):
+  """Mechanism that creates the data encoding transform for numerical data.
+
+  Internally delegates to a ``DPQuantiles`` mechanism for privacy accounting
+  and quantile computation.
+
+  Attributes:
+    name: Attribute name used as the clique key in the measurement.
+    num_partitions: Number of quantile partitions (must be a power of 2).
+    attribute: The NumericalAttribute defining the data domain.
+  """
 
   name: str
   num_partitions: int
   attribute: domain.NumericalAttribute
-  rng: np.random.Generator
+  _zcdp_rho: float | None = dataclasses.field(default=None, repr=False)
 
-  def dp_event(self, zcdp_rho: float) -> dp_accounting.DpEvent:
-    levels = int(np.log2(self.num_partitions))
-    budget_weights = 4 ** np.arange(levels)[::-1]
-    rho_levels = zcdp_rho * budget_weights / budget_weights.sum()
-    epsilons = [accounting.zcdp_exponential_eps(rho) for rho in rho_levels]
+  @functools.cached_property
+  def _mechanism(self) -> primitives.DPQuantiles:
+    if self._zcdp_rho is None:
+      raise ValueError('Must call calibrate() before using the mechanism.')
+    return primitives.DPQuantiles(
+        lower=self.attribute.min_value,
+        upper=self.attribute.max_value,
+        num_partitions=self.num_partitions,
+    ).calibrate(zcdp_rho=self._zcdp_rho)
 
-    return dp_accounting.ComposedDpEvent(
-        [dp_accounting.ExponentialMechanismDpEvent(epsilon=e) for e in epsilons]
-    )
+  def calibrate(self, *, zcdp_rho: float) -> NumericalInitializer:
+    """Returns a copy calibrated to the given zCDP budget."""
+    return dataclasses.replace(self, _zcdp_rho=zcdp_rho)
 
-  def __call__(self, zcdp_rho: float, data: np.ndarray) -> ColumnMeasurement:
-    """Returns a differentially private measurement of the given data."""
-    bucket_edges = primitives.quantiles(
-        self.rng,
-        data,
-        self.attribute.min_value,
-        self.attribute.max_value,
-        self.num_partitions,
-        zcdp_rho,
-    )
+  @property
+  def dp_event(self) -> dp_accounting.DpEvent:
+    """Returns the composed privacy event for the quantile computation."""
+    return self._mechanism.dp_event
+
+  def __call__(
+      self, rng: np.random.Generator, data: np.ndarray
+  ) -> ColumnMeasurement:
+    """Returns a ColumnMeasurement with the discretization transform."""
+    bucket_edges = self._mechanism(rng, data)
     attr, discretize_fn = transformations.create_discretize_transformation(
         self.attribute, bucket_edges
     )
@@ -69,54 +84,46 @@ class NumericalInitializer:
 
 
 @dataclasses.dataclass
-class CategoricalInitializer:
+class CategoricalInitializer(primitives.DPMechanism):
   """Mechanism that measures a noisy histogram for categorical data.
 
-  Computes a closed-domain histogram over the pre-specified categories using
-  the Gaussian mechanism. Values not in the domain are mapped to the
-  attribute's designated out-of-domain value before histogramming.
+  Internally delegates to a ``DPGaussianHistogram`` mechanism for privacy
+  accounting and noise addition.
 
   Attributes:
     name: Attribute name used as the clique key in the measurement.
     attribute: The CategoricalAttribute defining the closed domain.
-    rng: A numpy random number generator.
   """
 
   name: str
   attribute: domain.CategoricalAttribute
-  rng: np.random.Generator
+  _zcdp_rho: float | None = dataclasses.field(default=None, repr=False)
 
-  def dp_event(self, zcdp_rho: float) -> dp_accounting.DpEvent:
-    """Returns the DpEvent for the Gaussian mechanism.
+  @functools.cached_property
+  def _mechanism(self) -> primitives.DPGaussianHistogram:
+    if self._zcdp_rho is None:
+      raise ValueError('Must call calibrate() before using the mechanism.')
+    return primitives.DPGaussianHistogram(
+        domain_size=self.attribute.size,
+    ).calibrate(zcdp_rho=self._zcdp_rho)
 
-    Args:
-      zcdp_rho: Total zCDP privacy budget.
+  def calibrate(self, *, zcdp_rho: float) -> CategoricalInitializer:
+    """Returns a copy calibrated to the given zCDP budget."""
+    return dataclasses.replace(self, _zcdp_rho=zcdp_rho)
 
-    Returns:
-      A GaussianDpEvent describing the privacy cost.
-    """
-    # Gaussian mechanism with L2 sensitivity 1: rho = 1 / (2 * sigma^2).
-    sigma = 1.0 / np.sqrt(2.0 * zcdp_rho)
-    return dp_accounting.GaussianDpEvent(noise_multiplier=sigma)
+  @property
+  def dp_event(self) -> dp_accounting.DpEvent:
+    """Returns the Gaussian privacy event for this mechanism."""
+    return self._mechanism.dp_event
 
-  def __call__(self, zcdp_rho: float, data: np.ndarray) -> ColumnMeasurement:
-    """Returns a differentially private measurement of the given data.
-
-    Args:
-      zcdp_rho: Total zCDP privacy budget for the histogram measurement.
-      data: 1D array of raw categorical values.
-
-    Returns:
-      A ColumnMeasurement containing the categorical attribute, the encoding
-      transform, and a LinearMeasurement with the noisy histogram.
-    """
-    sigma = 1.0 / np.sqrt(2.0 * zcdp_rho)
+  def __call__(
+      self, rng: np.random.Generator, data: np.ndarray
+  ) -> ColumnMeasurement:
+    """Returns a ColumnMeasurement with the noisy histogram."""
     transform_fn = transformations.discrete_encoder(self.attribute)
     encoded = np.array([transform_fn(v) for v in data])
-    noisy_counts = primitives.gaussian_histogram(
-        self.rng, encoded, self.attribute.size, sigma
-    )
+    noisy_counts = self._mechanism(rng, encoded)
     measurement = mbi.LinearMeasurement(
-        noisy_counts, (self.name,), stddev=sigma
+        noisy_counts, (self.name,), stddev=self._mechanism.sigma
     )
     return ColumnMeasurement(self.attribute, transform_fn, measurement)
