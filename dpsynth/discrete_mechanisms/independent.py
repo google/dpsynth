@@ -70,7 +70,13 @@ def run_mechanism(
 
   potentials = initial_potentials
   if potentials is not None:
-    potentials = potentials.expand([m.clique for m in measurements])
+    # `measurements` can contain the same clique more than once (the one-way
+    # marginals passed in via `initial_measurements` plus the one-way marginals
+    # measured in the loop above). `CliqueVector.expand` requires unique cliques
+    # and otherwise raises "Cliques must be unique.", so de-duplicate while
+    # preserving order before expanding.
+    unique_cliques = list(dict.fromkeys(m.clique for m in measurements))
+    potentials = potentials.expand(unique_cliques)
 
   model = mbi.estimation.mirror_descent(
       data.domain,
