@@ -23,3 +23,4 @@ from dpsynth.discrete_mechanisms.api import run_mechanism
 from dpsynth.discrete_mechanisms.direct import DirectConfig
 from dpsynth.discrete_mechanisms.independent import IndependentConfig
 from dpsynth.discrete_mechanisms.mst import MSTConfig
+from dpsynth.discrete_mechanisms.swift import SWIFTConfig
