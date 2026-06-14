@@ -277,6 +277,12 @@ def select_partitions_sips(
       rem_user_ids = rem_user_ids[mask]
       rem_partitions = rem_partitions[mask]
 
+  if not selected_partitions:
+    return (
+        np.empty(0, dtype=data.dtype),
+        np.empty(0, dtype=float),
+        max_sigma,
+    )
   selected_partitions = np.concatenate(selected_partitions)
   selected_counts = np.concatenate(selected_counts)
   return selected_partitions, selected_counts, max_sigma

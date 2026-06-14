@@ -21,7 +21,6 @@ from absl import flags
 from absl import logging
 from dpsynth import domain
 from dpsynth.bin import _read_csv_args
-import fancyflags as ff
 import numpy as np
 import pandas as pd
 
@@ -40,10 +39,20 @@ _OUTPUT_DIR = flags.DEFINE_string(
     'Path to the output directory to write the domain to.',
 )
 
-_CSV_READ_ARGS = ff.DEFINE_auto(
-    'csv_read_args',
-    _read_csv_args.ReadCsvArgs,
-    _read_csv_args.FLAG_HELP,
+_CSV_READ_ARGS_FIELD_SEPARATOR = flags.DEFINE_string(
+    'csv_read_args_field_separator',
+    None,
+    'Field separator for reading CSV files.',
+)
+_CSV_READ_ARGS_COLUMN_NAMES = flags.DEFINE_list(
+    'csv_read_args_column_names',
+    None,
+    'Column names for reading CSV files.',
+)
+_CSV_READ_ARGS_COLUMN_COUNT = flags.DEFINE_integer(
+    'csv_read_args_column_count',
+    None,
+    'Column count for reading CSV files.',
 )
 
 
@@ -120,18 +129,18 @@ def derive_domain_from_data(
   for col in df.columns:
     logging.info('Deriving domain for column: %s', col)
     match df[col].dtype:
-      case 'object':
+      case 'object' | 'str' | 'string' | 'category':
         result[col] = domain.CategoricalAttribute(
             possible_values=sorted(
                 df[col].unique(),
                 key=lambda x: (isinstance(x, str), x),  # sort ints before strs.
             )
         )
-      case 'int':
+      case 'int' | 'int64' | 'int32':
         result[col] = _create_numerical_attribute(
             df[col], 'int', numerical_sentinel_value
         )
-      case 'float':
+      case 'float' | 'float64' | 'float32':
         result[col] = _create_numerical_attribute(
             df[col], 'float', numerical_sentinel_value
         )
@@ -145,7 +154,12 @@ def _get_yaml_filename(dataset_path: PathType) -> str:
 
 
 def main(_) -> None:
-  read_csv_kwargs = _CSV_READ_ARGS.value().to_read_csv_kwargs()
+  csv_read_args = _read_csv_args.ReadCsvArgs(
+      field_separator=_CSV_READ_ARGS_FIELD_SEPARATOR.value,
+      column_names=_CSV_READ_ARGS_COLUMN_NAMES.value,
+      column_count=_CSV_READ_ARGS_COLUMN_COUNT.value,
+  )
+  read_csv_kwargs = csv_read_args.to_read_csv_kwargs()
 
   # If output_dir is not set, use the parent directory of the dataset path.
   output_dir = _OUTPUT_DIR.value

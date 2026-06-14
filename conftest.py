@@ -12,31 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-name: Unittests
+"""Pytest configuration and global fixtures."""
 
-on: [push, workflow_dispatch]
+import sys
+from absl import flags
 
-jobs:
-  pytest-job:
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-
-    concurrency:
-      group: ${{ github.workflow }}-${{ github.ref }}
-      cancel-in-progress: true
-
-    steps:
-    - uses: actions/checkout@v4
-
-    # Install deps
-    - uses: actions/setup-python@v5
-      with:
-        python-version: "3.12"
-        cache: pip
-
-    - run: pip --version
-    - run: pip install -e .[dev]
-    - run: pip freeze
-
-    - name: Run core tests
-      run: pytest -vv -n auto --import-mode=importlib
+# Parse absl flags once before any tests run to avoid UnparsedFlagAccessError
+# when tests use absltest.TestCase.create_tempfile() or create_tempdir().
+try:
+  flags.FLAGS(sys.argv, known_only=True)
+except flags.Error:
+  pass
