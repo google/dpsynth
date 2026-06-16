@@ -47,6 +47,11 @@ dev = [
     "pytest",
     "pytest-xdist",
 ]
+docs = [
+    "sphinx",
+    "sphinx-rtd-theme",
+    "myst-parser",
+]
 
 [tool.setuptools.dynamic]
 version = {attr = "dpsynth.__version__"}
