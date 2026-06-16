@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Differentially private primitives for quantiles and partition selection.
+"""Differentially private primitives for quantiles, histograms, and selection.
 
 These implementations only depened on numpy and scipy and utilize vectorized
 operations for efficiency in single-machine environments.
@@ -446,6 +446,27 @@ def _gaussian_histogram(
   )
 
 
+def _exponential_mechanism(rng, scores, epsilon, sensitivity):
+  """Selects an index via the exponential mechanism."""
+  if epsilon == np.inf:
+    return int(rng.choice(np.flatnonzero(scores == scores.max())))
+  probs = scipy.special.softmax(epsilon * scores / (2 * sensitivity))
+  return int(rng.choice(scores.size, p=probs))
+
+
+def _permute_and_flip(rng, scores, epsilon, sensitivity):
+  """Selects an index via permute-and-flip (McKenna & Sheldon, 2020)."""
+  q_max = scores.max()
+  perm = rng.permutation(scores.size)
+  if epsilon == np.inf:
+    # Only max-scoring items have nonzero flip probability.
+    return int(perm[np.argmax(scores[perm] == q_max)])
+  # Vectorized coin flips: accept the first success in permutation order.
+  log_probs = epsilon * (scores[perm] - q_max) / (2 * sensitivity)
+  flip_probs = np.exp(np.clip(log_probs, -500, 0))
+  return int(perm[np.argmax(rng.random(scores.size) < flip_probs)])
+
+
 # ---------------------------------------------------------------------------
 # DPMechanism subclasses
 # ---------------------------------------------------------------------------
@@ -532,3 +553,93 @@ class DPGaussianHistogram(DPMechanism):
     if self.sigma is None:
       raise ValueError(_UNCALIBRATED_MSG.format(param='sigma'))
     return _gaussian_histogram(rng, data, self.domain_size, self.sigma)
+
+
+@dataclasses.dataclass
+class DPExponentialMechanism(DPMechanism):
+  """Differentially private selection via the exponential mechanism.
+
+  Selects an index from a score vector with probability proportional to
+  ``exp(epsilon * scores[i] / (2 * sensitivity))``. Higher scores indicate
+  better candidates. The score vector must have L1 sensitivity at most
+  ``sensitivity`` with respect to addition or removal of a single record.
+
+  The natural privacy parameter is ``epsilon``. Under zCDP the tight conversion
+  is ``rho = epsilon^2 / 8``, making this the preferred selection mechanism
+  when calibrating to a zCDP budget. For PLD-based accounting, consider
+  ``DPPermuteAndFlip`` instead, which can Pareto-dominate this mechanism.
+
+  Attributes:
+    sensitivity: L1 sensitivity of the score function.
+    epsilon: Privacy parameter. Set directly or via ``calibrate``.
+  """
+
+  sensitivity: float = 1.0
+  epsilon: float | None = None
+
+  def calibrate(self, *, zcdp_rho: float) -> DPExponentialMechanism:
+    """Returns a copy calibrated to the given zCDP budget."""
+    return dataclasses.replace(self, epsilon=math.sqrt(8 * zcdp_rho))
+
+  @property
+  def dp_event(self) -> dp_accounting.DpEvent:
+    """Returns the privacy event for this mechanism."""
+    if self.epsilon is None:
+      raise ValueError(_UNCALIBRATED_MSG.format(param='epsilon'))
+    return dp_accounting.ExponentialMechanismDpEvent(epsilon=self.epsilon)
+
+  def __call__(self, rng: np.random.Generator, scores: np.ndarray) -> int:
+    """Selects a candidate index from the score vector."""
+    if self.epsilon is None:
+      raise ValueError(_UNCALIBRATED_MSG.format(param='epsilon'))
+    return _exponential_mechanism(rng, scores, self.epsilon, self.sensitivity)
+
+
+@dataclasses.dataclass
+class DPPermuteAndFlip(DPMechanism):
+  """Differentially private selection via permute-and-flip.
+
+  Selects an index from a score vector using the permute-and-flip mechanism
+  (McKenna & Sheldon, NeurIPS 2020). Iterates over a random permutation of
+  candidates, flipping a biased coin for each and returning the first success.
+  The coin probability for candidate i is
+  ``exp(epsilon * (scores[i] - max(scores)) / (2 * sensitivity))``.
+
+  Expected utility is always at least as high as the exponential mechanism, with
+  improvements up to a factor of two. The score vector must have L1 sensitivity
+  at most ``sensitivity`` with respect to addition or removal of a single
+  record.
+
+  The natural privacy parameter is ``epsilon``. From a DP accounting
+  perspective,
+  permute-and-flip is identical to the Laplace mechanism with scale
+  ``1 / epsilon``. Under PLD-based accounting this gives tighter composition
+  bounds than the exponential mechanism (which is treated as black-box
+  epsilon-DP). Under zCDP accounting the conversion is the standard
+  ``rho = epsilon^2 / 2``, which is looser than the exponential mechanism's
+  ``rho = epsilon^2 / 8``; prefer ``DPExponentialMechanism`` in that setting.
+
+  Attributes:
+    sensitivity: L1 sensitivity of the score function.
+    epsilon: Privacy parameter. Set directly or via ``calibrate``.
+  """
+
+  sensitivity: float = 1.0
+  epsilon: float | None = None
+
+  def calibrate(self, *, zcdp_rho: float) -> DPPermuteAndFlip:
+    """Returns a copy calibrated to the given zCDP budget."""
+    return dataclasses.replace(self, epsilon=math.sqrt(2 * zcdp_rho))
+
+  @property
+  def dp_event(self) -> dp_accounting.DpEvent:
+    """Returns the privacy event for this mechanism."""
+    if self.epsilon is None:
+      raise ValueError(_UNCALIBRATED_MSG.format(param='epsilon'))
+    return dp_accounting.PermuteAndFlipDpEvent(epsilon=self.epsilon)
+
+  def __call__(self, rng: np.random.Generator, scores: np.ndarray) -> int:
+    """Selects a candidate index from the score vector."""
+    if self.epsilon is None:
+      raise ValueError(_UNCALIBRATED_MSG.format(param='epsilon'))
+    return _permute_and_flip(rng, scores, self.epsilon, self.sensitivity)
