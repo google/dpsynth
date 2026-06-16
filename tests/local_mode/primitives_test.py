@@ -297,6 +297,83 @@ class GaussianHistogramTest(absltest.TestCase):
     self.assertLen(result, 3)
 
 
+class ExponentialMechanismTest(absltest.TestCase):
+
+  def setUp(self):
+    super().setUp()
+    self.rng = np.random.default_rng(42)
+
+  def test_high_epsilon_selects_argmax(self):
+    scores = np.array([1.0, 5.0, 3.0])
+    idx = primitives._exponential_mechanism(
+        self.rng, scores, epsilon=100.0, sensitivity=1.0
+    )
+    self.assertEqual(idx, 1)
+
+  def test_zero_epsilon_returns_valid_index(self):
+    scores = np.array([1.0, 2.0, 3.0])
+    idx = primitives._exponential_mechanism(
+        self.rng, scores, epsilon=0.0, sensitivity=1.0
+    )
+    self.assertIn(idx, [0, 1, 2])
+
+  def test_inf_epsilon_selects_argmax(self):
+    scores = np.array([1.0, 5.0, 3.0])
+    idx = primitives._exponential_mechanism(
+        self.rng, scores, epsilon=np.inf, sensitivity=1.0
+    )
+    self.assertEqual(idx, 1)
+
+  def test_single_candidate(self):
+    scores = np.array([42.0])
+    idx = primitives._exponential_mechanism(
+        self.rng, scores, epsilon=1.0, sensitivity=1.0
+    )
+    self.assertEqual(idx, 0)
+
+
+class PermuteAndFlipTest(absltest.TestCase):
+
+  def setUp(self):
+    super().setUp()
+    self.rng = np.random.default_rng(42)
+
+  def test_high_epsilon_selects_argmax(self):
+    scores = np.array([1.0, 5.0, 3.0])
+    idx = primitives._permute_and_flip(
+        self.rng, scores, epsilon=100.0, sensitivity=1.0
+    )
+    self.assertEqual(idx, 1)
+
+  def test_zero_epsilon_returns_valid_index(self):
+    scores = np.array([1.0, 2.0, 3.0])
+    idx = primitives._permute_and_flip(
+        self.rng, scores, epsilon=0.0, sensitivity=1.0
+    )
+    self.assertIn(idx, [0, 1, 2])
+
+  def test_inf_epsilon_selects_argmax(self):
+    scores = np.array([1.0, 5.0, 3.0])
+    idx = primitives._permute_and_flip(
+        self.rng, scores, epsilon=np.inf, sensitivity=1.0
+    )
+    self.assertEqual(idx, 1)
+
+  def test_single_candidate(self):
+    scores = np.array([42.0])
+    idx = primitives._permute_and_flip(
+        self.rng, scores, epsilon=1.0, sensitivity=1.0
+    )
+    self.assertEqual(idx, 0)
+
+  def test_equal_scores_returns_valid_index(self):
+    scores = np.array([1.0, 1.0, 1.0])
+    idx = primitives._permute_and_flip(
+        self.rng, scores, epsilon=1.0, sensitivity=1.0
+    )
+    self.assertIn(idx, [0, 1, 2])
+
+
 # ---------------------------------------------------------------------------
 # DPMechanism wrapper tests
 # ---------------------------------------------------------------------------
@@ -380,6 +457,80 @@ class DPGaussianHistogramTest(absltest.TestCase):
     event = mech.dp_event
     self.assertIsInstance(event, dp_accounting.GaussianDpEvent)
     self.assertAlmostEqual(event.noise_multiplier, 1.0)
+
+
+class DPExponentialMechanismTest(absltest.TestCase):
+
+  def setUp(self):
+    super().setUp()
+    self.rng = np.random.default_rng(42)
+
+  def test_calibrate_and_call(self):
+    mech = primitives.DPExponentialMechanism(sensitivity=1.0)
+    calibrated = mech.calibrate(zcdp_rho=100.0)
+    scores = np.array([1.0, 5.0, 3.0])
+    self.assertEqual(calibrated(self.rng, scores), 1)
+
+  def test_direct_epsilon(self):
+    mech = primitives.DPExponentialMechanism(sensitivity=1.0, epsilon=100.0)
+    self.assertEqual(mech(self.rng, np.array([1.0, 5.0, 3.0])), 1)
+
+  def test_dp_event_raises_before_calibration(self):
+    mech = primitives.DPExponentialMechanism()
+    with self.assertRaises(ValueError):
+      _ = mech.dp_event
+
+  def test_call_raises_before_calibration(self):
+    mech = primitives.DPExponentialMechanism()
+    with self.assertRaises(ValueError):
+      mech(self.rng, np.array([1.0, 2.0]))
+
+  def test_dp_event_type(self):
+    mech = primitives.DPExponentialMechanism(epsilon=1.0)
+    event = mech.dp_event
+    self.assertIsInstance(event, dp_accounting.ExponentialMechanismDpEvent)
+    self.assertEqual(event.epsilon, 1.0)
+
+  def test_calibrate_epsilon_value(self):
+    mech = primitives.DPExponentialMechanism().calibrate(zcdp_rho=2.0)
+    self.assertAlmostEqual(mech.epsilon, 4.0)  # sqrt(8 * 2)
+
+
+class DPPermuteAndFlipTest(absltest.TestCase):
+
+  def setUp(self):
+    super().setUp()
+    self.rng = np.random.default_rng(42)
+
+  def test_calibrate_and_call(self):
+    mech = primitives.DPPermuteAndFlip(sensitivity=1.0)
+    calibrated = mech.calibrate(zcdp_rho=100.0)
+    scores = np.array([1.0, 5.0, 3.0])
+    self.assertEqual(calibrated(self.rng, scores), 1)
+
+  def test_direct_epsilon(self):
+    mech = primitives.DPPermuteAndFlip(sensitivity=1.0, epsilon=100.0)
+    self.assertEqual(mech(self.rng, np.array([1.0, 5.0, 3.0])), 1)
+
+  def test_dp_event_raises_before_calibration(self):
+    mech = primitives.DPPermuteAndFlip()
+    with self.assertRaises(ValueError):
+      _ = mech.dp_event
+
+  def test_call_raises_before_calibration(self):
+    mech = primitives.DPPermuteAndFlip()
+    with self.assertRaises(ValueError):
+      mech(self.rng, np.array([1.0, 2.0]))
+
+  def test_dp_event_type(self):
+    mech = primitives.DPPermuteAndFlip(epsilon=1.0)
+    event = mech.dp_event
+    self.assertIsInstance(event, dp_accounting.PermuteAndFlipDpEvent)
+    self.assertEqual(event.epsilon, 1.0)
+
+  def test_calibrate_epsilon_value(self):
+    mech = primitives.DPPermuteAndFlip().calibrate(zcdp_rho=2.0)
+    self.assertAlmostEqual(mech.epsilon, 2.0)  # sqrt(2 * 2)
 
 
 if __name__ == "__main__":
