@@ -66,7 +66,7 @@ def run_mechanism(
     run_mechanism_fn = direct.run_mechanism
   elif isinstance(config, independent.IndependentConfig):
     run_mechanism_fn = independent.run_mechanism
-  elif isinstance(config, independent.SWIFTConfig):
+  elif isinstance(config, swift.SWIFTConfig):
     run_mechanism_fn = swift.run_mechanism
   else:
     raise ValueError(f'Unknown mechanism: {type(config)}')
