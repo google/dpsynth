@@ -23,8 +23,8 @@ class IndependentTest(absltest.TestCase):
   def test_fits_one_way_marginals(self):
     data = mbi.Dataset.synthetic(mbi.Domain(["a", "b", "c"], [3, 4, 5]), N=1000)
 
-    config = independent.IndependentConfig(pgm_iters=500)
-    synthetic = independent.run_mechanism(data, config, zcdp_rho=10000)
+    config = independent.IndependentMechanism(pgm_iters=500)
+    synthetic = config.calibrate(zcdp_rho=10000)(np.random.default_rng(0), data)
 
     for col in data.domain:
       expected = data.project([col]).datavector()

@@ -85,12 +85,15 @@ class DPMechanism(abc.ABC):
     """The DpEvent characterizing the privacy cost of this mechanism."""
 
   @abc.abstractmethod
-  def __call__(self, rng: Any, data: Any) -> Any:
+  def __call__(self, *args: Any, **kwargs: Any) -> Any:
     """Runs the mechanism on the given data.
 
+    Subclass signatures vary, but typically accept at least the data to operate
+    on and a source of randomness.
+
     Args:
-      rng: A source of randomness (e.g., ``np.random.Generator``).
-      data: The input data to the mechanism.
+      *args: Positional arguments (subclass-specific).
+      **kwargs: Keyword arguments (subclass-specific).
     """
 
 

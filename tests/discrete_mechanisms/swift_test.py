@@ -15,6 +15,7 @@
 import itertools
 
 from absl.testing import absltest
+import dp_accounting
 from dpsynth.discrete_mechanisms import clique_tree
 from dpsynth.discrete_mechanisms import swift
 from dpsynth.discrete_mechanisms import swift_utils
@@ -121,14 +122,30 @@ class SWIFTTest(absltest.TestCase):
   def test_fits_one_way_marginals(self):
     data = mbi.Dataset.synthetic(mbi.Domain(['a', 'b', 'c'], [3, 4, 5]), N=1000)
 
-    config = swift.SWIFTConfig(pgm_iters=500)
+    config = swift.SWIFTMechanism(pgm_iters=500).calibrate(zcdp_rho=10000)
 
-    synthetic = swift.run_mechanism(data, config, zcdp_rho=10000)
+    synthetic = config(np.random.default_rng(0), data)
 
     for col in data.domain:
       expected = data.project([col]).datavector()
       actual = synthetic.project([col]).datavector()
       np.testing.assert_allclose(actual, expected, atol=1)
+
+  def test_calibrate_required(self):
+    config = swift.SWIFTMechanism()
+    data = mbi.Dataset.synthetic(mbi.Domain(['a', 'b'], [3, 4]), N=100)
+    with self.assertRaises(ValueError):
+      config(np.random.default_rng(0), data)
+
+  def test_dp_event_requires_calibration(self):
+    config = swift.SWIFTMechanism()
+    with self.assertRaises(ValueError):
+      _ = config.dp_event
+
+  def test_dp_event_returns_gaussian(self):
+    config = swift.SWIFTMechanism().calibrate(zcdp_rho=1.0)
+    event = config.dp_event
+    self.assertIsInstance(event, dp_accounting.GaussianDpEvent)
 
 
 if __name__ == '__main__':

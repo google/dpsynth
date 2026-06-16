@@ -223,7 +223,9 @@ def _find_worst_approximated_marginal(
 
   worst_approximated = backend.map(
       errors_singleton,
-      lambda x: _select_worst_approximated(x, exponential_spec),
+      lambda x: _select_worst_approximated(
+          np.random.default_rng(), x, exponential_spec
+      ),
       'Get worst approximated',
   )
   # singleton (Clique,)
@@ -291,6 +293,7 @@ def _compute_error(
 
 
 def _select_worst_approximated(
+    rng: np.random.Generator,
     clique_errors: list[tuple[Clique, float]],
     exponential_spec: pipeline_dp.budget_accounting.MechanismSpec,
 ) -> Clique:
@@ -298,7 +301,7 @@ def _select_worst_approximated(
   errors = np.array([x[1] for x in clique_errors])
   exponential_eps = np.sqrt(2) / exponential_spec.noise_standard_deviation
   idx = common.exponential_mechanism(
-      errors, exponential_eps, sensitivity=1.0, monotonic=True
+      errors, exponential_eps, sensitivity=1.0, rng=rng, monotonic=True
   )
   return clique_errors[idx][0]
 

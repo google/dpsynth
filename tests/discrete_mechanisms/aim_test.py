@@ -24,9 +24,10 @@ class AIMTest(absltest.TestCase):
   def test_fits_one_way_marginals_with_aim(self):
     data = mbi.Dataset.synthetic(mbi.Domain(["a", "b", "c"], [3, 4, 5]), N=1000)
     workload = [("a",), ("b",), ("c",)]
-    config = aim.AIMConfig(workload=workload, max_rounds=4, pgm_iters=500)
+    config = aim.AIMMechanism(workload=workload, max_rounds=4, pgm_iters=500)
 
-    synthetic = aim.run_mechanism(data, config, zcdp_rho=10000)
+    calibrated = config.calibrate(zcdp_rho=10000)
+    synthetic = calibrated(np.random.default_rng(0), data)
 
     for col in data.domain:
       expected = data.project([col]).datavector()
@@ -37,15 +38,32 @@ class AIMTest(absltest.TestCase):
     data = mbi.Dataset.synthetic(mbi.Domain(["a", "b", "c"], [3, 4, 5]), N=1000)
     workload = [("a",), ("b",), ("c",)]
 
-    config = aim_gdp.AIMGDPConfig(
+    config = aim_gdp.AIMGDPMechanism(
         workload=workload, max_rounds=4, pgm_iters=500
     )
-    synthetic = aim_gdp.run_mechanism(data, config, zcdp_rho=10000)
+    calibrated = config.calibrate(zcdp_rho=10000)
+    synthetic = calibrated(np.random.default_rng(0), data)
 
     for col in data.domain:
       expected = data.project([col]).datavector()
       actual = synthetic.project([col]).datavector()
       np.testing.assert_allclose(actual, expected, atol=1)
+
+  def test_uncalibrated_aim_raises(self):
+    config = aim.AIMMechanism()
+    with self.assertRaisesRegex(ValueError, "calibrate"):
+      _ = config.dp_event
+    data = mbi.Dataset.synthetic(mbi.Domain(["a"], [3]), N=10)
+    with self.assertRaisesRegex(ValueError, "calibrate"):
+      config(np.random.default_rng(0), data)
+
+  def test_uncalibrated_aim_gdp_raises(self):
+    config = aim_gdp.AIMGDPMechanism()
+    with self.assertRaisesRegex(ValueError, "calibrate"):
+      _ = config.dp_event
+    data = mbi.Dataset.synthetic(mbi.Domain(["a"], [3]), N=10)
+    with self.assertRaisesRegex(ValueError, "calibrate"):
+      config(np.random.default_rng(0), data)
 
 
 if __name__ == "__main__":

@@ -146,7 +146,7 @@ def dp_synthetic_data_generation(
     epsilon: float,
     delta: float,
     *,
-    mechanism_config: discrete_mechanisms.DiscreteMechanismConfig = discrete_mechanisms.MSTConfig(),
+    mechanism_config: discrete_mechanisms.DiscreteMechanism = discrete_mechanisms.MSTMechanism(),
 ) -> list[RecordT]:
   """Generate synthetic data for a collection of pydantic Models.
 

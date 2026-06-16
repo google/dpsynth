@@ -23,6 +23,7 @@ from absl import logging
 import dp_accounting
 from dpsynth.discrete_mechanisms import accounting
 from dpsynth.discrete_mechanisms import common
+from dpsynth.local_mode import primitives
 import jax.numpy as jnp
 import mbi
 import mbi.estimation
@@ -63,6 +64,7 @@ def _filter_candidates(
 
 
 def _compute_dp_errors(
+    rng: np.random.Generator,
     answers: mbi.CliqueVector,
     estimates: mbi.CliqueVector,
     gdp_budget: float,
@@ -80,12 +82,13 @@ def _compute_dp_errors(
     actual = answers[cl].datavector(flatten=True)
     estimate = estimates[cl].datavector(flatten=True)
     error = jnp.linalg.norm(actual - estimate, ord=1)
-    noise = np.random.normal(loc=0, scale=per_candidate_sigma, size=None)
+    noise = rng.normal(loc=0, scale=per_candidate_sigma)
     result[cl] = error + noise
   return result
 
 
 def _worst_approximated(
+    rng: np.random.Generator,
     candidates: Mapping[MarginalQuery, float],
     errors: dict[MarginalQuery, float],  # will be updated in-place.
     answers: mbi.CliqueVector,  # derived from sensitive data.
@@ -98,7 +101,7 @@ def _worst_approximated(
   current_score_estimates = {}
   for cl in candidates:
     weight = candidates[cl]
-    bias = np.sqrt(2 / jnp.pi) * measure_sigma * model.domain.size(cl)
+    bias = (2 / np.pi) ** 0.5 * measure_sigma * model.domain.size(cl)
     current_score_estimates[cl] = weight * (errors[cl] - bias)
 
   subset = sorted(current_score_estimates, key=current_score_estimates.get)
@@ -108,20 +111,22 @@ def _worst_approximated(
       model.potentials, subset, model.total
   )
   # Only step that uses "answers", satisfies DP.
-  current_errors = _compute_dp_errors(answers, estimates, select_budget, subset)
+  current_errors = _compute_dp_errors(
+      rng, answers, estimates, select_budget, subset
+  )
   errors.update(current_errors)
 
   current_scores = {}
   for cl in subset:
     weight = candidates[cl]
-    bias = np.sqrt(2 / jnp.pi) * measure_sigma * model.domain.size(cl)
+    bias = (2 / np.pi) ** 0.5 * measure_sigma * model.domain.size(cl)
     current_scores[cl] = weight * (errors[cl] - bias)
 
   return max(current_scores, key=current_scores.get)
 
 
 @dataclasses.dataclass
-class AIMGDPConfig:
+class AIMGDPMechanism(primitives.DPMechanism):
   """Configuration for the AIM mechanism with Gaussian DP.
 
   Details are described in the paper:
@@ -143,7 +148,6 @@ class AIMGDPConfig:
       each marginal query. A default value of 1.0 will be assigned if the
       workload is provided as a list.
     max_rounds: The maximum number of rounds to run the mechanism.
-    seed: The seed for the random number generator.
     pgm_iters: The number of iterations for the mirror descent algorithm.
     max_model_size: The maximum size of the graphical model in megabytes.
       Controls the utility/runtime trade-off.
@@ -159,13 +163,14 @@ class AIMGDPConfig:
       one-way marginals.
     select_budget_fraction: The fraction of the privacy budget to use for the
       "Select" step.
+    gdp_sigma: The GDP sigma of the end-to-end mechanism. Privacy budget is
+      split across rounds internally.
   """
 
   workload: Mapping[MarginalQuery, float] | Iterable[MarginalQuery] | None = (
       None
   )
   max_rounds: int | None = None
-  seed: int = 0
   pgm_iters: int = 1000
   max_model_size: int = 80
   max_marginal_size: float = 1e6
@@ -174,155 +179,183 @@ class AIMGDPConfig:
   anneal_factor: float = 4.0
   one_way_budget_fraction: float = 0.1
   select_budget_fraction: float = 0.1
+  gdp_sigma: float | None = None
 
-  def dp_event(self, zcdp_rho: float) -> dp_accounting.DpEvent:
-    """Returns the DP event for the AIM mechanism."""
-    sigma = accounting.zcdp_gaussian_sigma(zcdp_rho)
-    return dp_accounting.GaussianDpEvent(noise_multiplier=sigma)
-
-
-def run_mechanism(
-    data: mbi.Projectable,
-    config: AIMGDPConfig,
-    zcdp_rho: float,
-    *,
-    initial_measurements: list[mbi.LinearMeasurement] | None = None,
-    initial_potentials: mbi.CliqueVector | None = None,
-) -> mbi.MarkovRandomField:
-  """Generate synthetic data via the AIM mechanism."""
-  logging.info('[AIM] Starting Mechanism.')
-  constraints = initial_potentials is not None
-  marginal_oracle = common.default_oracle(config.marginal_oracle, constraints)
-  gdp_budget = accounting.zcdp_to_gdp(zcdp_rho)
-
-  np.random.seed(config.seed)
-
-  #########################################################################
-  # Compile workload into candidate measurements, and precompute answers. #
-  #########################################################################
-  candidates = common.compiled_workload(
-      data.domain, config.workload, config.max_marginal_size
-  )
-  answers = mbi.CliqueVector.from_projectable(data, candidates)
-
-  logging.info('[AIM] Calculated workload-query answers.')
-  terminate = False
-  budget_remaining = gdp_budget
-  domain = data.domain
-  max_rounds = config.max_rounds or 16 * len(domain)
-  budget_per_round = budget_remaining / max_rounds
-
-  if initial_measurements is None:
-    one_way_budget = config.one_way_budget_fraction * gdp_budget
-    one_way_gdp_sigma = accounting.gdp_gaussian_sigma(one_way_budget)
-    budget_remaining -= one_way_budget
-    marginal_queries = [cl for cl in candidates.keys() if len(cl) == 1]
-    measurements = common.measure_marginals_with_noise(
-        data,
-        marginal_queries=marginal_queries,
-        gdp_sigma=one_way_gdp_sigma,
-    )
-  else:
-    measurements = list(initial_measurements)
-
-  potentials = initial_potentials
-  if potentials is not None:
-    potentials = potentials.expand([m.clique for m in measurements])
-
-  model = mbi.estimation.mirror_descent(
-      domain,
-      measurements,
-      iters=config.pgm_iters,
-      potentials=potentials,
-      marginal_oracle=marginal_oracle,
-  )
-  logging.info('[AIM] Estimated initial model.')
-
-  budget_remaining -= 0.5 * budget_per_round
-  estimates = mbi.marginal_oracles.bulk_variable_elimination(
-      model.potentials, list(candidates), model.total
-  )
-  errors = _compute_dp_errors(answers, estimates, 0.5 * budget_per_round)
-  logging.info('[AIM] Computed initial errors.')
-
-  t = 0
-  while not terminate:
-    t += 1
-    if budget_remaining < 2 * budget_per_round:
-      logging.info('[AIM] Final round, Using all remaining privacy budget.')
-      budget_per_round = budget_remaining
-      terminate = True
-
-    ############################################################################
-    # Select a marginal query that is worst approximated by the current model. #
-    ############################################################################
-    t0 = time.time()
-    budget_remaining -= budget_per_round
-    measure_budget = budget_per_round * (1 - config.select_budget_fraction)
-    select_budget = budget_per_round * config.select_budget_fraction
-    measure_sigma = accounting.gdp_gaussian_sigma(measure_budget)
-    percent_used = (gdp_budget - budget_remaining) / gdp_budget
-    size_limit = config.max_model_size * percent_used
-    small_candidates = _filter_candidates(candidates, model, size_limit)
-
-    marginal_query = _worst_approximated(
-        candidates=small_candidates,
-        errors=errors,
-        answers=answers,
-        model=model,
-        select_budget=select_budget,
-        measure_sigma=measure_sigma,
-        max_new_evals=config.max_candidates_per_round,
+  def calibrate(self, *, zcdp_rho: float) -> 'AIMGDPMechanism':
+    """Returns a new instance calibrated to the given zCDP budget."""
+    return dataclasses.replace(
+        self, gdp_sigma=accounting.zcdp_gaussian_sigma(zcdp_rho)
     )
 
-    t1 = time.time()
-    logging.info('[AIM] Found worst-approximated candidate in %.2fs', t1 - t0)
-    logging.info(
-        '[AIM] Round %d, Budget used: %.4f, Measuring: %s, Candidates: %d',
-        t,
-        percent_used,
-        marginal_query,
-        len(small_candidates),
+  @property
+  def dp_event(self) -> dp_accounting.DpEvent:
+    """Returns the DP event for the AIM-GDP mechanism."""
+    if self.gdp_sigma is None:
+      raise ValueError('Must call calibrate() before using the mechanism.')
+    return dp_accounting.GaussianDpEvent(noise_multiplier=self.gdp_sigma)
+
+  def __call__(
+      self,
+      rng: np.random.Generator,
+      data: mbi.Projectable,
+      *,
+      initial_measurements: list[mbi.LinearMeasurement] | None = None,
+      initial_potentials: mbi.CliqueVector | None = None,
+  ) -> mbi.MarkovRandomField:
+    """Runs the AIM-GDP mechanism on the given data.
+
+    Args:
+      rng: A numpy random number generator.
+      data: The input data to the mechanism.
+      initial_measurements: Optional initial measurements to start from.
+      initial_potentials: Optional initial potentials (constraints).
+
+    Returns:
+      A MarkovRandomField representing the estimated data distribution.
+    """
+    if self.gdp_sigma is None:
+      raise ValueError('Must call calibrate() before using the mechanism.')
+
+    logging.info('[AIM] Starting Mechanism.')
+    constraints = initial_potentials is not None
+    marginal_oracle = common.default_oracle(self.marginal_oracle, constraints)
+
+    # Convert end-to-end GDP sigma to budget for internal allocation.
+    gdp_budget = 1.0 / self.gdp_sigma**2
+
+    #########################################################################
+    # Compile workload into candidate measurements, and precompute answers. #
+    #########################################################################
+    candidates = common.compiled_workload(
+        data.domain, self.workload, self.max_marginal_size
     )
+    answers = mbi.CliqueVector.from_projectable(data, candidates)
 
-    ######################################################################
-    # Measure the marginal query privately using the Gaussian mechanism. #
-    ######################################################################
-    measurement = common.measure_marginals_with_noise(
-        data, [marginal_query], measure_sigma
-    )[0]
-    measurements.append(measurement)
-    old_estimate = model.project(marginal_query).datavector()
+    logging.info('[AIM] Calculated workload-query answers.')
+    terminate = False
+    budget_remaining = gdp_budget
+    domain = data.domain
+    max_rounds = self.max_rounds or 16 * len(domain)
+    budget_per_round = budget_remaining / max_rounds
 
-    #####################################################
-    # Estimate the data distribution using Private-PGM. #
-    #####################################################
-    t2 = time.time()
-    callback_fn = mbi.callbacks.default(measurements)
-    measured_cliques = list(set(m.clique for m in measurements))
-    warm_start = model.potentials.expand(measured_cliques)
+    if initial_measurements is None:
+      one_way_budget = self.one_way_budget_fraction * gdp_budget
+      one_way_gdp_sigma = accounting.gdp_gaussian_sigma(one_way_budget)
+      budget_remaining -= one_way_budget
+      marginal_queries = [cl for cl in candidates.keys() if len(cl) == 1]
+      # measure_marginals_with_noise splits one_way_gdp_sigma across queries.
+      measurements = common.measure_marginals_with_noise(
+          rng,
+          data,
+          marginal_queries=marginal_queries,
+          gdp_sigma=one_way_gdp_sigma,
+      )
+    else:
+      measurements = list(initial_measurements)
+
+    potentials = initial_potentials
+    if potentials is not None:
+      potentials = potentials.expand([m.clique for m in measurements])
+
     model = mbi.estimation.mirror_descent(
         domain,
         measurements,
-        potentials=warm_start,
-        iters=config.pgm_iters,
-        callback_fn=callback_fn,
+        iters=self.pgm_iters,
+        potentials=potentials,
         marginal_oracle=marginal_oracle,
     )
-    t3 = time.time()
-    logging.info('[AIM] Mirror descent took %.2fs', t3 - t2)
+    logging.info('[AIM] Estimated initial model.')
 
-    new_estimate = model.project(marginal_query).datavector()
+    budget_remaining -= 0.5 * budget_per_round
+    estimates = mbi.marginal_oracles.bulk_variable_elimination(
+        model.potentials, list(candidates), model.total
+    )
+    errors = _compute_dp_errors(rng, answers, estimates, 0.5 * budget_per_round)
+    logging.info('[AIM] Computed initial errors.')
 
-    ##########################################
-    # Anneal epsilon and sigma if necessary. #
-    ##########################################
-    # See Alg 4 of https://arxiv.org/pdf/2201.12677.
-    # of just the largest error candidate), we can maybe simplify this logic.
-    threshold = measure_sigma * np.sqrt(2 / np.pi) * domain.size(marginal_query)
-    if np.linalg.norm(new_estimate - old_estimate, ord=1) <= threshold:
-      # No useful information at this noise level, so increase budget per round.
-      budget_per_round *= config.anneal_factor
-      logging.info('[AIM] Increasing budget per round: %.5f', budget_per_round)
+    t = 0
+    while not terminate:
+      t += 1
+      if budget_remaining < 2 * budget_per_round:
+        logging.info('[AIM] Final round, Using all remaining privacy budget.')
+        budget_per_round = budget_remaining
+        terminate = True
 
-  return model
+      ########################################################################
+      # Select a marginal query worst approximated by the current model.     #
+      ########################################################################
+      t0 = time.time()
+      budget_remaining -= budget_per_round
+      measure_budget = budget_per_round * (1 - self.select_budget_fraction)
+      select_budget = budget_per_round * self.select_budget_fraction
+      measure_sigma = accounting.gdp_gaussian_sigma(measure_budget)
+      percent_used = (gdp_budget - budget_remaining) / gdp_budget
+      size_limit = self.max_model_size * percent_used
+      small_candidates = _filter_candidates(candidates, model, size_limit)
+
+      marginal_query = _worst_approximated(
+          rng,
+          candidates=small_candidates,
+          errors=errors,
+          answers=answers,
+          model=model,
+          select_budget=select_budget,
+          measure_sigma=measure_sigma,
+          max_new_evals=self.max_candidates_per_round,
+      )
+
+      t1 = time.time()
+      logging.info('[AIM] Found worst candidate in %.2fs', t1 - t0)
+      logging.info(
+          '[AIM] Round %d, Budget used: %.4f, Measuring: %s, Candidates: %d',
+          t,
+          percent_used,
+          marginal_query,
+          len(small_candidates),
+      )
+
+      ######################################################################
+      # Measure the marginal query privately using the Gaussian mechanism. #
+      ######################################################################
+      measurement = common.measure_marginals_with_noise(
+          rng, data, [marginal_query], measure_sigma
+      )[0]
+      measurements.append(measurement)
+      old_estimate = model.project(marginal_query).datavector()
+
+      #####################################################
+      # Estimate the data distribution using Private-PGM. #
+      #####################################################
+      t2 = time.time()
+      callback_fn = mbi.callbacks.default(measurements)
+      measured_cliques = list(set(m.clique for m in measurements))
+      warm_start = model.potentials.expand(measured_cliques)
+      model = mbi.estimation.mirror_descent(
+          domain,
+          measurements,
+          potentials=warm_start,
+          iters=self.pgm_iters,
+          callback_fn=callback_fn,
+          marginal_oracle=marginal_oracle,
+      )
+      t3 = time.time()
+      logging.info('[AIM] Mirror descent took %.2fs', t3 - t2)
+
+      new_estimate = model.project(marginal_query).datavector()
+
+      ##########################################
+      # Anneal epsilon and sigma if necessary. #
+      ##########################################
+      # See Alg 4 of https://arxiv.org/pdf/2201.12677.
+      # of just the largest error candidate), we can maybe simplify this logic.
+      threshold = (
+          measure_sigma * (2 / np.pi) ** 0.5 * domain.size(marginal_query)
+      )
+      if np.linalg.norm(new_estimate - old_estimate, ord=1) <= threshold:
+        # No useful information at this noise level, increase budget per round.
+        budget_per_round *= self.anneal_factor
+        logging.info(
+            '[AIM] Increasing budget per round: %.5f', budget_per_round
+        )
+
+    return model

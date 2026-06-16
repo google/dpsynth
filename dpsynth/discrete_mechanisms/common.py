@@ -31,17 +31,18 @@ def exponential_mechanism(
     quality_scores: np.ndarray,
     epsilon: float,
     sensitivity: float,
-    prng: np.random.RandomState = np.random,
+    rng: np.random.Generator,
     monotonic: bool = False,
 ) -> int:
   """Returns an index chosen by the exponential mechanism."""
   coef = 1.0 if monotonic else 0.5
   scores = coef * epsilon / sensitivity * quality_scores
   probas = scipy.special.softmax(scores)
-  return prng.choice(quality_scores.size, p=probas)
+  return rng.choice(quality_scores.size, p=probas)
 
 
 def measure_marginals_with_noise(
+    rng: np.random.Generator,
     data: mbi.Projectable,
     marginal_queries: list[tuple[str, ...]],
     gdp_sigma: float,
@@ -55,6 +56,7 @@ def measure_marginals_with_noise(
   sigma is divided proportionally to the weights.
 
   Args:
+    rng: A numpy random number generator.
     data: The sensitive dataset whose marginals are to be measured.
     marginal_queries: The list of marginal queries to measure, represented as a
       list of tuples of column names.
@@ -75,7 +77,7 @@ def measure_marginals_with_noise(
   measurements = []
   for proj, wgt in zip(marginal_queries, weights):
     x = data.project(proj).datavector()
-    y = x + np.random.normal(loc=0, scale=gdp_sigma / wgt, size=x.size)
+    y = x + rng.normal(loc=0, scale=gdp_sigma / wgt, size=x.size)
     measurements.append(mbi.LinearMeasurement(y, proj, gdp_sigma / wgt))
   return measurements
 

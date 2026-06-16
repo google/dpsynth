@@ -163,10 +163,11 @@ class MstTest(absltest.TestCase):
     mock_dp_mst.assert_called_once()
     args, kwargs = mock_dp_mst.call_args
 
-    # Check positional arguments (weights)
-    self.assertLen(args, 1)
+    # Check positional arguments (rng, weights)
+    self.assertLen(args, 2)
+    self.assertIsInstance(args[0], np.random.Generator)
     self.assertEqual(
-        args[0], {("0", "1"): 10.0, ("0", "2"): 5.0, ("1", "2"): 0.0}
+        args[1], {("0", "1"): 10.0, ("0", "2"): 5.0, ("1", "2"): 0.0}
     )
 
     # Check keyword arguments (epsilon)

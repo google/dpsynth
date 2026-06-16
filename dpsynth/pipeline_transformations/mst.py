@@ -157,6 +157,7 @@ def _select_dp_maximum_spanning_tree(
 
     epsilon = _get_eps_from_laplace_noise_std(budget.noise_standard_deviation)
     spanning_tree = mst_mechanism.dp_maximum_spanning_tree(
+        np.random.default_rng(),
         weights_str,
         exponential_mechanism_epsilon=epsilon,
     )

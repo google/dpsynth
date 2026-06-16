@@ -23,6 +23,8 @@ at once using the Gaussian mechanism. It then estimates a MarkovRandomField
 that maximizes the likelihood of the noisy marginals measured.
 """
 
+from __future__ import annotations
+
 from collections.abc import Iterable, Mapping, Sequence
 import dataclasses
 import functools
@@ -34,6 +36,7 @@ from dpsynth.discrete_mechanisms import accounting
 from dpsynth.discrete_mechanisms import clique_tree
 from dpsynth.discrete_mechanisms import common
 from dpsynth.discrete_mechanisms import swift_utils
+from dpsynth.local_mode import primitives
 import jax
 import mbi
 import networkx as nx
@@ -41,8 +44,8 @@ import numpy as np
 import tqdm
 
 
-@dataclasses.dataclass(frozen=True)
-class SWIFTConfig:
+@dataclasses.dataclass
+class SWIFTMechanism(primitives.DPMechanism):
   """Configuration for the SWIFT mechanism.
 
   Attributes:
@@ -58,7 +61,8 @@ class SWIFTConfig:
       marginals to measure.
     one_way_budget_frac: Fraction of the total budget used for measuring one-way
       marginals initially.
-    seed: Random seed for reproducibility.
+    gdp_sigma: The GDP sigma of the end-to-end mechanism. Privacy budget is
+      split across measurement steps internally.
   """
 
   workload: Mapping[mbi.Clique, float] | Iterable[mbi.Clique] | None = None
@@ -68,12 +72,132 @@ class SWIFTConfig:
   pgm_iters: int = 25_000
   select_budget_frac: float = 0.1
   one_way_budget_frac: float = 0.1
-  seed: int | None = None
+  gdp_sigma: float | None = None
 
-  def dp_event(self, zcdp_rho: float) -> dp_accounting.DpEvent:
+  def calibrate(self, *, zcdp_rho: float) -> SWIFTMechanism:
+    """Returns a copy calibrated to the given zCDP budget."""
+    return dataclasses.replace(
+        self, gdp_sigma=accounting.zcdp_gaussian_sigma(zcdp_rho)
+    )
+
+  @property
+  def dp_event(self) -> dp_accounting.DpEvent:
     """Returns the DP event for the SWIFT mechanism."""
-    sigma = accounting.zcdp_gaussian_sigma(zcdp_rho)
-    return dp_accounting.GaussianDpEvent(noise_multiplier=sigma)
+    if self.gdp_sigma is None:
+      raise ValueError('Must call calibrate() before using the mechanism.')
+    return dp_accounting.GaussianDpEvent(noise_multiplier=self.gdp_sigma)
+
+  def __call__(
+      self,
+      rng: np.random.Generator,
+      data: mbi.Projectable,
+      *,
+      initial_measurements: Sequence[mbi.LinearMeasurement] | None = None,
+      initial_potentials: mbi.CliqueVector | None = None,
+  ) -> mbi.MarkovRandomField:
+    """Runs the SWIFT mechanism on the given data.
+
+    Args:
+      rng: A numpy random number generator.
+      data: The sensitive dataset.
+      initial_measurements: Optional pre-existing one-way measurements.
+      initial_potentials: Optional initial potentials for constrained
+        estimation.
+
+    Returns:
+      A fitted MarkovRandomField model.
+
+    Raises:
+      ValueError: If calibrate() has not been called.
+    """
+    if self.gdp_sigma is None:
+      raise ValueError('Must call calibrate() before using the mechanism.')
+
+    logging.info('[SWIFT] Starting Mechanism.')
+    constraints = initial_potentials is not None
+    marginal_oracle = common.default_oracle(self.marginal_oracle, constraints)
+
+    #########################################################################
+    # Compile workload into candidate measurements, and precompute answers. #
+    #########################################################################
+    candidates = common.compiled_workload(
+        data.domain, self.workload, self.max_marginal_size
+    )
+    answers = mbi.CliqueVector.from_projectable(data, candidates)
+    logging.info('[SWIFT] Calculated workload-query answers.')
+
+    # Convert end-to-end GDP sigma to budget for internal allocation.
+    gdp_budget = 1.0 / self.gdp_sigma**2
+    budget_remaining = gdp_budget
+    domain = data.domain
+    if initial_measurements is None:
+      budget_oneway = self.one_way_budget_frac * gdp_budget
+      sigma_oneway = accounting.gdp_gaussian_sigma(budget_oneway)
+      budget_remaining -= budget_oneway
+      # measure_marginals_with_noise splits sigma_oneway across queries.
+      measurements = common.measure_marginals_with_noise(
+          rng, data, [(a,) for a in domain], gdp_sigma=sigma_oneway
+      )
+    else:
+      measurements = list(initial_measurements)
+
+    potentials = initial_potentials
+    if potentials is not None:
+      potentials = potentials.expand([m.clique for m in measurements])
+
+    model = mbi.estimation.mirror_descent(
+        domain,
+        measurements,
+        iters=self.pgm_iters,
+        potentials=potentials,
+        marginal_oracle=marginal_oracle,
+    )
+    logging.info('[SWIFT] Estimated initial model.')
+
+    ###########################################
+    # Select subset of candidates to measure. #
+    ###########################################
+    assert 0 < self.select_budget_frac < 1
+    l1_error_budget = self.select_budget_frac * gdp_budget
+    budget_remaining -= l1_error_budget
+
+    errors = _compute_initial_errors(
+        rng, answers, model, list(candidates), l1_error_budget
+    )
+    logging.info('[SWIFT] Computed initial errors.')
+
+    selected, jtree = select_queries(
+        errors, candidates, domain, self.max_clique_size, budget_remaining
+    )
+
+    ##########################################
+    # Measure the selected marginal queries. #
+    ##########################################
+    new_measurements, _ = _measure_selected_marginals(
+        rng, answers, selected, budget_remaining
+    )
+    measurements.extend(new_measurements)
+
+    ########################################################
+    # Estimate the model using all measurements            #
+    ########################################################
+
+    closed_oracle = functools.partial(
+        mbi.marginal_oracles.message_passing_stable, jtree=jtree
+    )
+
+    callback_fn = mbi.callbacks.default(measurements)
+    model = mbi.estimation.mirror_descent(
+        domain,
+        measurements,
+        iters=self.pgm_iters,
+        potentials=potentials,
+        marginal_oracle=closed_oracle,
+        callback_fn=callback_fn,
+    )
+    logging.info('[SWIFT] Estimated final model.')
+
+    return model
 
 
 def _is_supported(clique: mbi.Clique, tree: nx.Graph) -> bool:
@@ -160,6 +284,7 @@ def build_best_clique_tree(
 
 
 def _compute_initial_errors(
+    rng: np.random.Generator,
     data: mbi.Projectable,
     model: mbi.MarkovRandomField,
     cliques: Sequence[mbi.Clique],
@@ -177,7 +302,7 @@ def _compute_initial_errors(
     actual = data.project(cl)
     diff = (total * estimate - actual).datavector()
     error = np.abs(diff).sum()
-    errors[cl] = error + np.random.normal(loc=0.0, scale=sigma_per_clique)
+    errors[cl] = error + rng.normal(loc=0.0, scale=sigma_per_clique)
   return errors
 
 
@@ -231,6 +356,7 @@ def select_queries(
 
 
 def _measure_selected_marginals(
+    rng: np.random.Generator,
     data: mbi.Projectable,
     selected: dict[mbi.Clique, float],
     budget_remaining: float,
@@ -241,7 +367,7 @@ def _measure_selected_marginals(
     budget_remaining -= selected[cl]
     sigma = accounting.gdp_gaussian_sigma(selected[cl])
     x = data.project(cl).datavector()
-    y = x + np.random.normal(loc=0.0, scale=sigma, size=x.size)
+    y = x + rng.normal(loc=0.0, scale=sigma, size=x.size)
     measurements.append(mbi.LinearMeasurement(y, cl, sigma))
     logging.info('[SWIFT] Measured %s with sigma %f', cl, sigma)
 
@@ -250,99 +376,3 @@ def _measure_selected_marginals(
   logging.info('[SWIFT] Selected %d marginals.', len(selected))
 
   return measurements, budget_remaining
-
-
-def run_mechanism(
-    data: mbi.Projectable,
-    config: SWIFTConfig,
-    zcdp_rho: float,
-    *,
-    initial_measurements: Sequence[mbi.LinearMeasurement] | None = None,
-    initial_potentials: mbi.CliqueVector | None = None,
-) -> mbi.MarkovRandomField:
-  """Runs the SWIFT mechanism on the given data."""
-  logging.info('[SWIFT] Starting Mechanism.')
-  constraints = initial_potentials is not None
-  marginal_oracle = common.default_oracle(config.marginal_oracle, constraints)
-  gdp_budget = accounting.zcdp_to_gdp(zcdp_rho)
-
-  np.random.seed(config.seed)
-
-  #########################################################################
-  # Compile workload into candidate measurements, and precompute answers. #
-  #########################################################################
-  candidates = common.compiled_workload(
-      data.domain, config.workload, config.max_marginal_size
-  )
-  answers = mbi.CliqueVector.from_projectable(data, candidates)
-  logging.info('[SWIFT] Calculated workload-query answers.')
-
-  budget_remaining = gdp_budget
-  domain = data.domain
-  if initial_measurements is None:
-    budget_oneway = config.one_way_budget_frac * gdp_budget
-    sigma_oneway = accounting.gdp_gaussian_sigma(budget_oneway)
-    budget_remaining -= budget_oneway
-    measurements = common.measure_marginals_with_noise(
-        data, [(a,) for a in domain], gdp_sigma=sigma_oneway
-    )
-  else:
-    measurements = list(initial_measurements)
-
-  potentials = initial_potentials
-  if potentials is not None:
-    potentials = potentials.expand([m.clique for m in measurements])
-
-  model = mbi.estimation.mirror_descent(
-      domain,
-      measurements,
-      iters=config.pgm_iters,
-      potentials=potentials,
-      marginal_oracle=marginal_oracle,
-  )
-  logging.info('[SWIFT] Estimated initial model.')
-
-  ###########################################
-  # Select subset of candidates to measure. #
-  ###########################################
-  assert 0 < config.select_budget_frac < 1
-  l1_error_budget = config.select_budget_frac * gdp_budget
-  budget_remaining -= l1_error_budget
-
-  errors = _compute_initial_errors(
-      answers, model, list(candidates), l1_error_budget
-  )
-  logging.info('[SWIFT] Computed initial errors.')
-
-  selected, jtree = select_queries(
-      errors, candidates, domain, config.max_clique_size, budget_remaining
-  )
-
-  ##########################################
-  # Measure the selected marginal queries. #
-  ##########################################
-  new_measurements, _ = _measure_selected_marginals(
-      answers, selected, budget_remaining
-  )
-  measurements.extend(new_measurements)
-
-  ########################################################
-  # Estimate the model using all measurements            #
-  ########################################################
-
-  closed_oracle = functools.partial(
-      mbi.marginal_oracles.message_passing_stable, jtree=jtree
-  )
-
-  callback_fn = mbi.callbacks.default(measurements)
-  model = mbi.estimation.mirror_descent(
-      domain,
-      measurements,
-      iters=config.pgm_iters,
-      potentials=potentials,
-      marginal_oracle=closed_oracle,
-      callback_fn=callback_fn,
-  )
-  logging.info('[SWIFT] Estimated final model.')
-
-  return model

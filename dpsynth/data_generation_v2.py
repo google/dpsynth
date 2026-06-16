@@ -65,7 +65,7 @@ def _compute_privacy_parameters(
     epsilon: float,
     delta: float,
     one_way_marginal_budget_fraction: float,
-    discrete_config: discrete_mechanisms.DiscreteMechanismConfig,
+    discrete_config: discrete_mechanisms.DiscreteMechanism,
 ) -> tuple[float, float]:
   """Compute privacy parameters for one-way marginals and discrete mechanism."""
 
@@ -77,10 +77,12 @@ def _compute_privacy_parameters(
 
   def make_event_from_param(zcdp_rho):
     event1 = dp_accounting.GaussianDpEvent(one_way_marginal_sigma)
-    event2 = discrete_config.dp_event(zcdp_rho)
+    event2 = discrete_config.calibrate(zcdp_rho=zcdp_rho).dp_event
     return dp_accounting.ComposedDpEvent([event1, event2])
 
-  if isinstance(discrete_config.dp_event(1.0), dp_accounting.ZCDpEvent):
+  if isinstance(
+      discrete_config.calibrate(zcdp_rho=1.0).dp_event, dp_accounting.ZCDpEvent
+  ):
     make_fresh_accountant = dp_accounting.rdp.RdpAccountant
   else:
     make_fresh_accountant = dp_accounting.pld.PLDAccountant
@@ -102,7 +104,7 @@ def generate(
     epsilon: float,
     delta: float,
     *,
-    discrete_config: discrete_mechanisms.DiscreteMechanismConfig = discrete_mechanisms.MSTConfig(),
+    discrete_config: discrete_mechanisms.DiscreteMechanism = discrete_mechanisms.MSTMechanism(),
     numerical_bins: int = 32,
     one_way_marginal_budget_fraction: float = 0.1,
     cross_attribute_constraints: Sequence[constraints.Constraint] = (),
@@ -245,8 +247,9 @@ def generate(
   #######################################################################
   one_way_marginal_queries = [(col,) for col in discrete.domain]
   gdp_sigma = accounting.gdp_gaussian_sigma(one_way_marginal_gdp_mu)
+  rng = np.random.default_rng()
   one_way_measurements = common.measure_marginals_with_noise(
-      discrete, one_way_marginal_queries, gdp_sigma
+      rng, discrete, one_way_marginal_queries, gdp_sigma
   )
   logging.info('[SynthKit Tabular]: Measured one-way marginals.')
 
@@ -262,10 +265,9 @@ def generate(
       cross_attribute_constraints, discrete.domain
   )
 
-  model = discrete_mechanisms.run_mechanism(
+  model = discrete_config.calibrate(zcdp_rho=discrete_zcdp_rho)(
+      rng,
       data=discrete,
-      zcdp_rho=discrete_zcdp_rho,
-      config=discrete_config,
       initial_measurements=one_way_measurements,
       initial_potentials=initial_potentials,
   )

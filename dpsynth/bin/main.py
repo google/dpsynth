@@ -29,6 +29,7 @@ from absl import flags
 import dpsynth
 from dpsynth.bin import _read_csv_args
 import fancyflags as ff
+import numpy as np
 import pandas as pd
 
 
@@ -87,23 +88,20 @@ _READ_CSV_ARGS = ff.DEFINE_auto(
 
 
 def main(_):
+  np.random.seed(_SEED.value)
   read_csv_kwargs = _READ_CSV_ARGS.value().to_read_csv_kwargs()
   df = pd.read_csv(_DATASET_PATH.value, **read_csv_kwargs)
   attribute_domains = dpsynth.domain.from_yaml_file(_DOMAIN_PATH.value)
 
   match _MECHANISM.value:
     case 'mst':
-      mechanism_config = dpsynth.discrete_mechanisms.MSTConfig(seed=_SEED.value)
+      mechanism_config = dpsynth.discrete_mechanisms.MSTConfig()
     case 'aim':
-      mechanism_config = dpsynth.discrete_mechanisms.AIMConfig(seed=_SEED.value)
+      mechanism_config = dpsynth.discrete_mechanisms.AIMConfig()
     case 'independent':
-      mechanism_config = dpsynth.discrete_mechanisms.IndependentConfig(
-          seed=_SEED.value
-      )
+      mechanism_config = dpsynth.discrete_mechanisms.IndependentConfig()
     case 'aim_gdp':
-      mechanism_config = dpsynth.discrete_mechanisms.AIMGDPConfig(
-          seed=_SEED.value
-      )
+      mechanism_config = dpsynth.discrete_mechanisms.AIMGDPConfig()
     case _:
       raise ValueError(f'Unknown mechanism: {_MECHANISM.value}')
 

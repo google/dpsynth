@@ -19,64 +19,76 @@ import dataclasses
 import dp_accounting
 from dpsynth.discrete_mechanisms import accounting
 from dpsynth.discrete_mechanisms import common
-import jax
+from dpsynth.local_mode import primitives
 import mbi
+import numpy as np
 
 
 @dataclasses.dataclass
-class IndependentConfig:
+class IndependentMechanism(primitives.DPMechanism):
   """Configuration for the independent mechanism.
 
   Attributes:
     pgm_iters: The number of iterations for the mirror descent algorithm.
-    seed: The seed for the random number generator.
     marginal_oracle: The marginal oracle to use for the mirror descent
       algorithm.
+    gdp_sigma: The GDP sigma of the end-to-end mechanism. Privacy budget is
+      split across the one-way marginals internally.
   """
 
   pgm_iters: int = 5000
-  seed: int = 0
   marginal_oracle: mbi.MarginalOracle | None = None
+  gdp_sigma: float | None = None
 
-  def dp_event(self, zcdp_rho: float) -> dp_accounting.DpEvent:
+  def calibrate(self, *, zcdp_rho: float) -> 'IndependentMechanism':
+    """Returns a copy calibrated to the given zCDP budget."""
+    return dataclasses.replace(
+        self, gdp_sigma=accounting.zcdp_gaussian_sigma(zcdp_rho)
+    )
+
+  @property
+  def dp_event(self) -> dp_accounting.DpEvent:
     """Returns the DP event for the independent mechanism."""
-    sigma = accounting.zcdp_gaussian_sigma(zcdp_rho)
-    return dp_accounting.GaussianDpEvent(noise_multiplier=sigma)
+    if self.gdp_sigma is None:
+      raise ValueError('Must call calibrate() before using the mechanism.')
+    return dp_accounting.GaussianDpEvent(noise_multiplier=self.gdp_sigma)
 
+  def __call__(
+      self,
+      rng: np.random.Generator,
+      data: mbi.Projectable,
+      *,
+      initial_measurements: list[mbi.LinearMeasurement] | None = None,
+      initial_potentials: mbi.CliqueVector | None = None,
+  ) -> mbi.MarkovRandomField:
+    """Generate synthetic data via the independent mechanism."""
+    if self.gdp_sigma is None:
+      raise ValueError('Must call calibrate() before using the mechanism.')
+    constraints = initial_potentials is not None
+    marginal_oracle = common.default_oracle(self.marginal_oracle, constraints)
 
-def run_mechanism(
-    data: mbi.Projectable,
-    config: IndependentConfig,
-    zcdp_rho: float,
-    *,
-    initial_measurements: list[mbi.LinearMeasurement] | None = None,
-    initial_potentials: mbi.CliqueVector | None = None,
-) -> mbi.MarkovRandomField:
-  """Generate synthetic data via the independent mechanism."""
-  constraints = initial_potentials is not None
-  marginal_oracle = common.default_oracle(config.marginal_oracle, constraints)
+    # Split end-to-end gdp_sigma across the d one-way marginals:
+    # per-query sigma = gdp_sigma * sqrt(d).
+    attributes = len(data.domain)
+    per_query_sigma = self.gdp_sigma * attributes**0.5
+    measurements = initial_measurements or []
+    for attr in data.domain:
+      clique = (attr,)
+      marginal = data.project(clique).datavector()
+      noisy_marginal = (
+          marginal + rng.normal(size=marginal.shape) * per_query_sigma
+      )
+      measurements.append(mbi.LinearMeasurement(noisy_marginal, clique))
 
-  gdp_budget = accounting.zcdp_to_gdp(zcdp_rho)
+    potentials = initial_potentials
+    if potentials is not None:
+      potentials = potentials.expand([m.clique for m in measurements])
 
-  attributes = len(data.domain)
-  sigma = accounting.gdp_gaussian_sigma(gdp_budget / attributes)
-  measurements = initial_measurements or []
-  keys = jax.random.split(jax.random.key(config.seed), attributes)
-  for attr, key in zip(data.domain, keys):
-    clique = (attr,)
-    marginal = data.project(clique).datavector()
-    noisy_marginal = marginal + jax.random.normal(key, marginal.shape) * sigma
-    measurements.append(mbi.LinearMeasurement(noisy_marginal, clique))
-
-  potentials = initial_potentials
-  if potentials is not None:
-    potentials = potentials.expand([m.clique for m in measurements])
-
-  model = mbi.estimation.mirror_descent(
-      data.domain,
-      measurements,
-      iters=config.pgm_iters,
-      potentials=potentials,
-      marginal_oracle=marginal_oracle,
-  )
-  return model
+    model = mbi.estimation.mirror_descent(
+        data.domain,
+        measurements,
+        iters=self.pgm_iters,
+        potentials=potentials,
+        marginal_oracle=marginal_oracle,
+    )
+    return model
