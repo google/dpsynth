@@ -25,6 +25,7 @@ dependencies = [
     "tensorflow",
     "apache-beam",
     "google-crc32c",
+    "google-genai",
     "dp_accounting @ git+https://github.com/google/differential-privacy.git#subdirectory=python/dp_accounting",
     "jax[cpu]",
     "more-itertools",

@@ -18,6 +18,7 @@ from unittest import mock
 from absl.testing import absltest
 from dpsynth.text import bulk_inference
 from dpsynth.text import prompts
+import pandas as pd
 import pydantic
 
 Topic = Literal['Science', 'Technology', 'Other']
@@ -112,7 +113,7 @@ class GenAIBackendAnnotateTest(absltest.TestCase):
     df = backend.annotate(['a', 'b', 'c'], SimpleFeatures, 'Sys.')
     self.assertLen(df, 3)
     self.assertEqual(df.iloc[0]['topic'], 'Technology')
-    self.assertIsNone(df.iloc[1]['topic'])
+    self.assertTrue(pd.isna(df.iloc[1]['topic']))
     self.assertEqual(df.iloc[2]['topic'], 'Technology')
 
   @mock.patch('google.genai.Client')
