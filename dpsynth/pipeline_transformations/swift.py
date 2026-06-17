@@ -51,6 +51,10 @@ def fit_model(
     additional_output: Any | None = None,
 ) -> types.Collection[mbi.MarkovRandomField]:
   """Fits the model."""
+  if not 0 < parameters.select_budget_frac < 1:
+    raise ValueError(
+        f'{parameters.select_budget_frac=} must be between 0 and 1.'
+    )
 
   # 1. Generate workload.
   domain = backend.map(descriptor, lambda x: x.compressed_domain, 'Get domain')
@@ -84,28 +88,31 @@ def fit_model(
   # errors: singleton collection of dict[mbi.Clique, float]
 
   # 4. Select queries.
-  mechanism_spec = budget_accountant.request_budget(
+  select_mechanism_spec = budget_accountant.request_budget(
       pipeline_dp.budget_accounting.MechanismType.GAUSSIAN,
-      name='Swift Select Queries',
+      name='Swift Error Scores',
       weight=parameters.select_budget_frac,
+  )
+  measure_mechanism_spec = budget_accountant.request_budget(
+      pipeline_dp.budget_accounting.MechanismType.GAUSSIAN,
+      name='Swift Measure Marginals',
+      weight=1 - parameters.select_budget_frac,
   )
 
   def select_queries_fn(
       errors_dict, candidates_dict, domain_obj
-  ) -> tuple[dict[mbi.Clique, float], nx.Graph]:
+  ) -> tuple[dict[mbi.Clique, float], nx.Graph, dict[mbi.Clique, float]]:
     """Selects queries using SWIFT algorithm."""
-    # `mechanism_spec` corresponds to the Gaussian mechanism that should be used
-    # to specify the total (epsilon, delta)-budget for the whole pipeline.
-    # Convert it to GDP budget.
-    gdp_budget = 1.0 / mechanism_spec.noise_standard_deviation**2
-    return swift.select_queries(
-        errors_dict,
+    noised_errors = _add_noise_to_errors(errors_dict, select_mechanism_spec)
+    gdp_budget = 1.0 / measure_mechanism_spec.noise_standard_deviation**2
+    selected, jtree = swift.select_queries(
+        noised_errors,
         candidates_dict,
         domain_obj,
         parameters.max_clique_size,
         gdp_budget,
     )
-    # return selected, jtree
+    return selected, jtree, noised_errors
 
   selected_and_tree = backend.map_with_side_inputs(
       errors,
@@ -121,6 +128,9 @@ def fit_model(
       selected_and_tree, lambda x: list(x[0].keys()), 'Get selected queries'
   )
   jtree = backend.map(selected_and_tree, lambda x: x[1], 'Get junction tree')
+  noised_errors = backend.map(
+      selected_and_tree, lambda x: x[2], 'Get noised Swift errors'
+  )
 
   # 6. Measure selected marginals (add noise).
   def filter_selected_marginals(exact_marginal, selected):
@@ -151,7 +161,9 @@ def fit_model(
       and additional_output.diagnostic_info is not None
   ):
     errors_singleton = backend.map(
-        errors, lambda d: [(k, v) for k, v in d.items()], 'Errors to List'
+        noised_errors,
+        lambda d: [(k, v) for k, v in d.items()],
+        'Noised Errors to List',
     )
     additional_output.diagnostic_info = diagnostic_info.update_diagnostic_info(
         backend,
@@ -180,6 +192,26 @@ def fit_model(
       [jtree, domain],
       'Fit Final Model',
   )
+
+
+def _add_noise_to_errors(
+    errors_dict: dict[mbi.Clique, float],
+    mechanism_spec: pipeline_dp.budget_accounting.MechanismSpec,
+) -> dict[mbi.Clique, float]:
+  """Adds DP noise to SWIFT selection errors as one vector query."""
+  if not errors_dict:
+    return {}
+
+  sorted_cliques = sorted(errors_dict)
+  errors = np.array([errors_dict[clique] for clique in sorted_cliques])
+  sensitivities = pipeline_dp.dp_computations.Sensitivities(
+      l2=np.sqrt(len(sorted_cliques))
+  )
+  mechanism = pipeline_dp.dp_computations.create_additive_mechanism(
+      mechanism_spec, sensitivities
+  )
+  noised_errors = mechanism.add_noise(errors)
+  return dict(zip(sorted_cliques, noised_errors))
 
 
 def _add_noise_fn(
