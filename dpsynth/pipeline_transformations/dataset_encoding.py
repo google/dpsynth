@@ -59,6 +59,16 @@ def encode_dataset(
       numerical_attr_indices_to_derive,
   ) = get_indices_to_discretisize(descriptor)
 
+  public_numerical_attributes = {}
+  for index in numerical_attr_indices_to_derive:
+    numerical_attribute = descriptor.attributes[index].numerical_attribute
+    if numerical_attribute is None:
+      raise ValueError(
+          'Public numerical bounds must be provided for every numerical'
+          f' attribute. Missing bounds for: {descriptor.attributes[index].name}.'
+      )
+    public_numerical_attributes[index] = numerical_attribute
+
   #  Derive categorical values.
   derived_categorical_values = (
       categorical_values_derivation.derive_categorical_values(
@@ -73,6 +83,7 @@ def encode_dataset(
           dp_engine,
           numerical_attr_indices_to_derive,
           num_quantiles,
+          public_numerical_attributes,
       )
   )  # (Collection[key, attribute, quantiles]) i.e.
   # (Collection[str | int, domain.NumericalAttribute, tuple[float,..]])
