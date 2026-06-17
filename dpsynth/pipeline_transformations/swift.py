@@ -89,15 +89,22 @@ def fit_model(
       name='Swift Select Queries',
       weight=parameters.select_budget_frac,
   )
+  measure_spec = budget_accountant.request_budget(
+      pipeline_dp.budget_accounting.MechanismType.GAUSSIAN,
+      name='Swift Measure Marginals',
+      weight=1 - parameters.select_budget_frac,
+  )
+  errors = backend.map(
+      errors,
+      lambda errors_dict: _add_noise_to_errors(errors_dict, mechanism_spec),
+      'Add noise to Swift errors',
+  )
 
   def select_queries_fn(
       errors_dict, candidates_dict, domain_obj
   ) -> tuple[dict[mbi.Clique, float], nx.Graph]:
     """Selects queries using SWIFT algorithm."""
-    # `mechanism_spec` corresponds to the Gaussian mechanism that should be used
-    # to specify the total (epsilon, delta)-budget for the whole pipeline.
-    # Convert it to GDP budget.
-    gdp_budget = 1.0 / mechanism_spec.noise_standard_deviation**2
+    gdp_budget = 1.0 / measure_spec.noise_standard_deviation**2
     return swift.select_queries(
         errors_dict,
         candidates_dict,
@@ -180,6 +187,23 @@ def fit_model(
       [jtree, domain],
       'Fit Final Model',
   )
+
+
+def _add_noise_to_errors(
+    errors_dict: dict[mbi.Clique, float],
+    mechanism_spec: pipeline_dp.budget_accounting.MechanismSpec,
+) -> dict[mbi.Clique, float]:
+  """Adds DP noise to SWIFT selection errors as one vector query."""
+  cliques = list(errors_dict)
+  errors = np.array([errors_dict[clique] for clique in cliques])
+  sensitivities = pipeline_dp.dp_computations.Sensitivities(
+      l2=np.sqrt(len(cliques))
+  )
+  mechanism = pipeline_dp.dp_computations.create_additive_mechanism(
+      mechanism_spec, sensitivities
+  )
+  noised_errors = mechanism.add_noise(errors)
+  return dict(zip(cliques, noised_errors))
 
 
 def _add_noise_fn(
