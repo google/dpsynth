@@ -147,6 +147,38 @@ class DataGenerationV3Test(absltest.TestCase):
     self.assertIsInstance(synthetic_df, pd.DataFrame)
     self.assertListEqual(synthetic_df.columns.tolist(), ['A', 'B'])
 
+  def test_numerical_only_uses_dp_count(self):
+    """Numerical-only domains should allocate a DPGaussianCount for total."""
+    domains = {
+        'A': domain.NumericalAttribute(min_value=0, max_value=10),
+        'B': domain.NumericalAttribute(min_value=-10, max_value=10),
+    }
+    df = pd.DataFrame({'A': [5, 5, 0], 'B': [5, -10, -5]}, dtype=float)
+    rng = np.random.default_rng(0)
+    calibrated = DataGenerationV3(domains=domains).calibrate(zcdp_rho=100.0)
+
+    # total_count_mechanism should be set for numerical-only domains.
+    self.assertIsNotNone(calibrated.total_count_mechanism)
+    synthetic_df = calibrated(rng, df)
+    self.assertListEqual(synthetic_df.columns.tolist(), ['A', 'B'])
+
+  def test_mixed_domain_no_dp_count(self):
+    """Mixed domains estimate total from categorical measurements."""
+    domains = {
+        'A': domain.CategoricalAttribute(
+            possible_values=['a', 'b', 'c'], out_of_domain_index=0
+        ),
+        'B': domain.NumericalAttribute(min_value=0, max_value=10),
+    }
+    df = pd.DataFrame({'A': ['a', 'b', 'c'], 'B': [1.0, 5.0, 10.0]})
+    rng = np.random.default_rng(0)
+    calibrated = DataGenerationV3(domains=domains).calibrate(zcdp_rho=100.0)
+
+    # No DPGaussianCount needed — total comes from categorical measurement.
+    self.assertIsNone(calibrated.total_count_mechanism)
+    synthetic_df = calibrated(rng, df)
+    self.assertListEqual(synthetic_df.columns.tolist(), ['A', 'B'])
+
 
 if __name__ == '__main__':
   absltest.main()

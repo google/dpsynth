@@ -267,62 +267,6 @@ def _get_threshold(delta, sigma, max_part):
   return thresholds.max()
 
 
-def select_partitions_gaussian_thresholding(
-    rng: np.random.Generator,
-    data: np.ndarray,
-    gdp_budget: float,
-    delta: float,
-) -> tuple[np.ndarray, np.ndarray, float]:
-  """Selects partitions using Gaussian Thresholding (Weighted Gaussian).
-
-  This implements Algorithm 2 from the DP-SIPS paper (Swanberg et al., 2023)
-  under item-level DP. It is the simplest partition selection mechanism:
-
-    1. Compute the histogram of partition counts.
-    2. Add Gaussian noise calibrated to the privacy budget.
-    3. Return partitions whose noisy count exceeds a threshold chosen to
-       bound the false-positive probability per empty partition at delta.
-
-  Under item-level DP each record is treated as a distinct user contributing
-  to exactly one partition, so the histogram has L2 sensitivity 1.  The
-  threshold is T = 1 + sigma * Phi^{-1}(1 - delta), following the paper's
-  formula with max_part = 1.
-
-  Args:
-    rng: A numpy random number generator.
-    data: 1D array of integers, where each element is a partition ID.
-    gdp_budget: Privacy budget in terms of squared Gaussian DP mu parameter
-      (gdp_budget = mu^2 = 1 / sigma^2).
-    delta: Failure probability (false positive bound per empty partition).
-
-  Returns:
-    A tuple containing:
-      - selected_partitions: 1D array of partition IDs that passed the
-        threshold.
-      - estimated_counts: 1D array of noisy counts for each selected
-        partition.
-      - sigma: The standard deviation of the Gaussian noise added.
-  """
-  if gdp_budget <= 0 or delta <= 0:
-    raise ValueError(f'{gdp_budget=} and {delta=} must be positive.')
-
-  sigma = 1.0 / np.sqrt(gdp_budget)
-
-  if data.size == 0:
-    return np.empty(0, dtype=data.dtype), np.empty(0, dtype=float), sigma
-
-  unique_parts, counts = np.unique(data, return_counts=True)
-  noisy_counts = counts + rng.normal(scale=sigma, size=counts.size)
-
-  # Threshold: ensures that an empty partition (true count 0) passes with
-  # probability at most delta.  For max_part=1 this simplifies to:
-  #   T = 1/sqrt(1) + sigma * Phi^{-1}(1 - delta) = 1 + sigma * ppf(1-delta)
-  threshold = 1.0 + sigma * scipy.stats.norm.ppf(1.0 - delta)
-  passed = noisy_counts >= threshold
-
-  return unique_parts[passed], noisy_counts[passed], sigma
-
-
 def _select_partitions_sips(
     rng: np.random.Generator,
     data: np.ndarray,
@@ -427,32 +371,6 @@ def _select_partitions_sips(
   selected_partitions = np.concatenate(selected_partitions)
   selected_counts = np.concatenate(selected_counts)
   return selected_partitions, selected_counts, max_sigma
-
-
-def _gaussian_histogram(
-    rng: np.random.Generator,
-    data: np.ndarray,
-    domain_size: int,
-    sigma: float,
-) -> np.ndarray:
-  """Computes a noisy histogram over a closed domain using the Gaussian mechanism.
-
-  The histogram query has L2 sensitivity 1 under item-level DP (each record
-  contributes +1 to exactly one bin). Gaussian noise with the given standard
-  deviation is added independently to each bin count.
-
-  Args:
-    rng: A numpy random number generator.
-    data: 1D array of integer-encoded categorical values in [0, domain_size).
-    domain_size: Number of categories in the closed domain.
-    sigma: Standard deviation of the Gaussian noise added to each bin.
-
-  Returns:
-    A length-`domain_size` array of noisy counts.
-  """
-  return np.bincount(data, minlength=domain_size) + rng.normal(
-      scale=sigma, size=domain_size
-  )
 
 
 # ---------------------------------------------------------------------------
@@ -561,7 +479,48 @@ class DPGaussianHistogram(DPMechanism):
     """Computes a differentially private histogram."""
     if self.sigma is None:
       raise ValueError(_UNCALIBRATED_MSG.format(param='sigma'))
-    return _gaussian_histogram(rng, data, self.domain_size, self.sigma)
+    return np.bincount(data, minlength=self.domain_size) + rng.normal(
+        scale=self.sigma, size=self.domain_size
+    )
+
+
+@dataclasses.dataclass
+class DPGaussianCount(DPMechanism):
+  """Differentially private count via the Gaussian mechanism.
+
+  Returns a noisy count of the number of records in the input data. The
+  conversion from zCDP is ``sigma = sqrt(0.5 / zcdp_rho)``.
+
+  Attributes:
+    sigma: Gaussian noise standard deviation. Set directly or via ``calibrate``.
+  """
+
+  sigma: float | None = None
+
+  def calibrate(self, *, zcdp_rho: float) -> DPGaussianCount:
+    """Returns a copy with sigma derived from the zCDP budget."""
+    return dataclasses.replace(self, sigma=math.sqrt(0.5 / zcdp_rho))
+
+  @property
+  def dp_event(self) -> dp_accounting.DpEvent:
+    """Returns the Gaussian privacy event for this mechanism."""
+    if self.sigma is None:
+      raise ValueError(_UNCALIBRATED_MSG.format(param='sigma'))
+    return dp_accounting.GaussianDpEvent(noise_multiplier=self.sigma)
+
+  def __call__(self, rng: np.random.Generator, data: np.ndarray) -> float:
+    """Returns a differentially private count of records.
+
+    Args:
+      rng: A numpy random number generator.
+      data: 1D array of data records.
+
+    Returns:
+      The noisy count (true count + Gaussian noise).
+    """
+    if self.sigma is None:
+      raise ValueError(_UNCALIBRATED_MSG.format(param='sigma'))
+    return float(len(data) + rng.normal(scale=self.sigma))
 
 
 @dataclasses.dataclass
@@ -607,7 +566,11 @@ class DPPartitionSelection(DPMechanism):
     """
     if self.sigma is None:
       raise ValueError(_UNCALIBRATED_MSG.format(param='sigma'))
-    gdp_budget = np.inf if self.sigma == 0.0 else 1.0 / (self.sigma**2)
-    return select_partitions_gaussian_thresholding(
-        rng, data, gdp_budget, self.delta
-    )
+    if data.size == 0:
+      return np.empty(0, dtype=data.dtype), np.empty(0, dtype=float), self.sigma
+    unique_parts, counts = np.unique(data, return_counts=True)
+    noisy_counts = counts + rng.normal(scale=self.sigma, size=counts.size)
+    # Threshold ensures an empty partition passes with probability <= delta.
+    threshold = 1.0 + self.sigma * scipy.stats.norm.ppf(1.0 - self.delta)
+    passed = noisy_counts >= threshold
+    return unique_parts[passed], noisy_counts[passed], self.sigma

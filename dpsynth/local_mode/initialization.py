@@ -26,7 +26,6 @@ from dpsynth.local_mode import vectorized_transformations as vtx
 import mbi
 import numpy as np
 
-
 _M = TypeVar('_M')
 
 
@@ -85,19 +84,78 @@ class NumericalInitializer(primitives.DPMechanism):
     return dataclasses.replace(self, mechanism=mechanism)
 
   @property
+  def zcdp_rho(self) -> float:
+    """Total zCDP rho consumed, derived from the composed dp_event.
+
+    The dp_event is a ComposedDpEvent of ExponentialMechanismDpEvents.
+    Each exponential mechanism with parameter epsilon satisfies
+    (epsilon^2 / 8)-zCDP, so the total is sum(eps_i^2 / 8).
+    """
+    event = self.dp_event  # raises if not calibrated
+    assert isinstance(event, dp_accounting.ComposedDpEvent)
+    return sum(e.epsilon**2 / 8.0 for e in event.events)
+
+  @property
   def dp_event(self) -> dp_accounting.DpEvent:
     """Returns the composed privacy event for the quantile computation."""
     return _validate_mechanism(self.mechanism).dp_event
 
   def __call__(
-      self, rng: np.random.Generator, data: np.ndarray
+      self,
+      rng: np.random.Generator,
+      data: np.ndarray,
+      *,
+      estimated_total: float | None = None,
   ) -> ColumnMeasurement:
-    """Returns a ColumnMeasurement with the discretization transform."""
+    """Returns a ColumnMeasurement with the discretization transform.
+
+    Args:
+      rng: A numpy random number generator.
+      data: 1D array of numerical data.
+      estimated_total: If provided, a heuristic one-way measurement is included
+        assuming a uniform distribution over the original bins, with stddev =
+        1/sqrt(rho).  When bin edges are deduplicated (e.g. for concentrated
+        integer data), merged bins receive proportionally more mass.
+
+    Returns:
+      A ColumnMeasurement with the categorical attribute, bin edges, and
+      optionally a heuristic measurement.
+    """
     # Dedup: concentrated data can make quantiles return duplicate edges.
-    edges = _validate_mechanism(self.mechanism)(rng, data)
-    bin_edges = np.unique(np.asarray(edges, dtype=float))
+    raw_edges = _validate_mechanism(self.mechanism)(rng, data)
+    raw_edges = np.asarray(raw_edges, dtype=float)
+    if self.attribute.dtype == 'int':
+      # For integer data, snap edges to the integer lattice.  Since bins
+      # are right-closed (left, right] and discretize uses searchsorted
+      # with side='left', floor preserves the partition: an edge at 4.7
+      # splits integers as {≤4} | {≥5}, and floor(4.7) = 4 gives the
+      # same split via (…, 4] | (4, …].
+      # Clamp to [min_value, max_value - 1] so the last bin (edge, max]
+      # contains at least one integer.
+      raw_edges = np.clip(
+          np.floor(raw_edges),
+          self.attribute.min_value,
+          self.attribute.max_value - 1,
+      )
+    bin_edges, edge_counts = np.unique(raw_edges, return_counts=True)
     cat_attr = vtx.categorical_attribute_from_edges(bin_edges, self.attribute)
-    return ColumnMeasurement(cat_attr, bin_edges)
+
+    measurement = None
+    if estimated_total is not None:
+      rho = self.zcdp_rho
+      # Each unique edge with count k means k original bins end at that
+      # boundary; append 1 for the rightmost bin (beyond the last edge).
+      bin_weights = np.append(edge_counts, 1)
+      uniform_counts = bin_weights * (estimated_total / self.num_partitions)
+      # Heuristic: empirically, the std dev of per-bin count noise from
+      # DPQuantiles is approximately 1/sqrt(rho), independent of N and
+      # roughly uniform across bins. See go/dpsynth-quantile-noise.
+      stddev = 1.0 / np.sqrt(rho)
+      measurement = mbi.LinearMeasurement(
+          uniform_counts, (self.name,), stddev=stddev
+      )
+
+    return ColumnMeasurement(cat_attr, bin_edges, measurement=measurement)
 
 
 @dataclasses.dataclass
