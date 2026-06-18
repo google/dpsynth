@@ -96,6 +96,72 @@ class InitializationTest(absltest.TestCase):
     # Domain size may be < 8 due to dedup, but must be >= 2.
     self.assertGreaterEqual(result.categorical_attribute.size, 2)
 
+  def test_numerical_initializer_integer_edges_are_floored(self):
+    """Integer attributes should produce integer-valued bin edges."""
+    attr = domain.NumericalAttribute(min_value=0, max_value=100, dtype='int')
+    rng = np.random.default_rng(42)
+    initializer = initialization.NumericalInitializer(
+        name='test', num_partitions=4, attribute=attr
+    )
+    data = np.arange(100)
+    result = initializer.calibrate(zcdp_rho=100.0)(rng, data)
+    # All edges should be integers (floor was applied).
+    np.testing.assert_array_equal(result.bin_edges, np.floor(result.bin_edges))
+    # Edges must be within [min_value, max_value - 1].
+    self.assertGreaterEqual(result.bin_edges[0], 0)
+    self.assertLess(result.bin_edges[-1], 100)
+
+  def test_numerical_initializer_measurement_with_merged_bins(self):
+    """When integer edges collapse, merged bins get proportionally more mass."""
+    attr = domain.NumericalAttribute(min_value=0, max_value=100, dtype='int')
+    rng = np.random.default_rng(0)
+    initializer = initialization.NumericalInitializer(
+        name='test', num_partitions=8, attribute=attr
+    )
+    # Concentrated data will cause edge collisions after floor.
+    data = np.array([50] * 100 + [1, 99])
+    result = initializer.calibrate(zcdp_rho=1.0)(
+        rng, data, estimated_total=100.0
+    )
+    self.assertIsNotNone(result.measurement)
+    # Measurement counts should sum to estimated_total.
+    np.testing.assert_allclose(
+        result.measurement.noisy_measurement.sum(), 100.0
+    )
+
+  def test_numerical_initializer_measurement_with_estimated_total(self):
+    attr = domain.NumericalAttribute(min_value=0, max_value=10)
+    rng = np.random.default_rng(0)
+    initializer = initialization.NumericalInitializer(
+        name='num_col', num_partitions=4, attribute=attr
+    )
+    data = np.array([1, 2, 3, 4, 5, 6, 7, 8, 9])
+    result = initializer.calibrate(zcdp_rho=1.0)(
+        rng, data, estimated_total=100.0
+    )
+
+    self.assertIsNotNone(result.measurement)
+    # Measurement should be uniform: 100.0 / num_bins for each bin.
+    num_bins = result.categorical_attribute.size
+    expected_count = 100.0 / num_bins
+    np.testing.assert_allclose(
+        result.measurement.noisy_measurement,
+        np.full(num_bins, expected_count),
+    )
+    self.assertEqual(result.measurement.clique, ('num_col',))
+    # stddev should be 1/sqrt(rho) = 1/sqrt(1.0) = 1.0
+    self.assertAlmostEqual(result.measurement.stddev, 1.0)
+
+  def test_numerical_initializer_no_measurement_without_estimated_total(self):
+    attr = domain.NumericalAttribute(min_value=0, max_value=10)
+    rng = np.random.default_rng(0)
+    initializer = initialization.NumericalInitializer(
+        name='test', num_partitions=4, attribute=attr
+    )
+    data = np.array([1, 2, 3, 4, 5, 6, 7, 8, 9])
+    result = initializer.calibrate(zcdp_rho=1.0)(rng, data)
+    self.assertIsNone(result.measurement)
+
 
 class CategoricalInitializerTest(absltest.TestCase):
 

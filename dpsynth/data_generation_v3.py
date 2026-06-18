@@ -28,6 +28,7 @@ from dpsynth.local_mode import initialization
 from dpsynth.local_mode import primitives
 from dpsynth.local_mode import vectorized_transformations as vtx
 import mbi
+from mbi import estimation as mbi_estimation
 import numpy as np
 import pandas as pd
 
@@ -36,7 +37,10 @@ def _create_initializers(
     domains: Mapping[str, domain.AttributeType],
     numerical_bins: int,
     init_delta: float,
-) -> dict[str, primitives.DPMechanism]:
+) -> tuple[
+    dict[str, primitives.DPMechanism],
+    dict[str, primitives.DPMechanism],
+]:
   """Creates per-column initializers from the domain specification.
 
   Args:
@@ -45,30 +49,31 @@ def _create_initializers(
     init_delta: Delta for open-set categorical partition selection.
 
   Returns:
-    A dictionary mapping column names to uncalibrated initializer instances.
+    A (closed_domain_initializers, numerical_initializers) tuple.
 
   Raises:
     ValueError: If a column has an unsupported attribute type.
   """
-  initializers = {}
+  closed_inits = {}
+  numerical_inits = {}
   for col, attr in domains.items():
     if isinstance(attr, domain.NumericalAttribute):
-      initializers[col] = initialization.NumericalInitializer(
+      numerical_inits[col] = initialization.NumericalInitializer(
           name=col, num_partitions=numerical_bins, attribute=attr
       )
     elif isinstance(attr, domain.CategoricalAttribute):
-      initializers[col] = initialization.CategoricalInitializer(
+      closed_inits[col] = initialization.CategoricalInitializer(
           name=col, attribute=attr
       )
     elif isinstance(attr, domain.OpenSetCategoricalAttribute):
-      initializers[col] = initialization.OpenSetCategoricalInitializer(
+      closed_inits[col] = initialization.OpenSetCategoricalInitializer(
           name=col, attribute=attr, delta=init_delta
       )
     else:
       raise ValueError(
           f'Unsupported attribute type for column {col!r}: {type(attr)}'
       )
-  return initializers
+  return closed_inits, numerical_inits
 
 
 @dataclasses.dataclass
@@ -100,6 +105,7 @@ class DataGenerationV3(primitives.DPMechanism):
       default_factory=discrete_mechanisms.MSTMechanism
   )
   initializers: dict[str, primitives.DPMechanism] | None = None
+  total_count_mechanism: primitives.DPGaussianCount | None = None
   cross_attribute_constraints: Sequence[constraints.Constraint] = ()
 
   def calibrate(
@@ -178,15 +184,41 @@ class DataGenerationV3(primitives.DPMechanism):
       self, zcdp_rho, numerical_bins, init_delta, init_budget_fraction
   ):
     """Simple additive zCDP budget split."""
-    inits = self.initializers or _create_initializers(
-        self.domains, numerical_bins, init_delta
+    if self.initializers is not None:
+      all_inits = dict(self.initializers)
+      has_closed_domain = any(
+          not isinstance(init, initialization.NumericalInitializer)
+          for init in all_inits.values()
+      )
+    else:
+      closed_inits, numerical_inits = _create_initializers(
+          self.domains, numerical_bins, init_delta
+      )
+      all_inits = {**closed_inits, **numerical_inits}
+      has_closed_domain = bool(closed_inits)
+
+    has_numerical = any(
+        isinstance(init, initialization.NumericalInitializer)
+        for init in all_inits.values()
     )
+    needs_total_count = has_numerical and not has_closed_domain
+
     init_rho = init_budget_fraction * zcdp_rho
-    per_col_rho = init_rho / len(inits)
+    # If we need a separate total count and have no closed-domain columns to
+    # estimate it from, allocate one extra share of init budget for it.
+    num_shares = len(all_inits) + (1 if needs_total_count else 0)
+    per_col_rho = init_rho / num_shares
     discrete_rho = zcdp_rho - init_rho
+
     calibrated_inits = {
-        col: init.calibrate(zcdp_rho=per_col_rho) for col, init in inits.items()
+        col: init.calibrate(zcdp_rho=per_col_rho)
+        for col, init in all_inits.items()
     }
+    calibrated_total = (
+        primitives.DPGaussianCount().calibrate(zcdp_rho=per_col_rho)
+        if needs_total_count
+        else None
+    )
     calibrated_discrete = self.discrete_mechanism.calibrate(
         zcdp_rho=discrete_rho
     )
@@ -194,6 +226,7 @@ class DataGenerationV3(primitives.DPMechanism):
         self,
         initializers=calibrated_inits,
         discrete_mechanism=calibrated_discrete,
+        total_count_mechanism=calibrated_total,
     )
 
   def _calibrate_approx_dp(
@@ -226,10 +259,24 @@ class DataGenerationV3(primitives.DPMechanism):
     Returns:
       A new DataGenerationV3 instance with calibrated sub-mechanisms.
     """
-    inits = self.initializers or _create_initializers(
-        self.domains, numerical_bins, init_delta
+    if self.initializers is not None:
+      inits = dict(self.initializers)
+      has_closed_domain = any(
+          not isinstance(init, initialization.NumericalInitializer)
+          for init in inits.values()
+      )
+    else:
+      closed_inits, numerical_inits = _create_initializers(
+          self.domains, numerical_bins, init_delta
+      )
+      inits = {**closed_inits, **numerical_inits}
+      has_closed_domain = bool(closed_inits)
+    has_numerical = any(
+        isinstance(init, initialization.NumericalInitializer)
+        for init in inits.values()
     )
-    num_columns = len(inits)
+    needs_total_count = has_numerical and not has_closed_domain
+    num_columns = len(inits) + (1 if needs_total_count else 0)
 
     # Stage 1: Convert (epsilon, remaining_delta) to zCDP and calibrate
     # initializers with init_budget_fraction of that budget.
@@ -244,11 +291,17 @@ class DataGenerationV3(primitives.DPMechanism):
     calibrated_inits = {
         col: init.calibrate(zcdp_rho=per_col_rho) for col, init in inits.items()
     }
-
+    calibrated_total = (
+        primitives.DPGaussianCount().calibrate(zcdp_rho=per_col_rho)
+        if needs_total_count
+        else None
+    )
     # Stage 2: With init dp_events fixed, find the tightest discrete budget.
     # The accountant handles ApproximateDpEvent deltas from open-set
     # initializers automatically.
     init_events = [init.dp_event for init in calibrated_inits.values()]
+    if calibrated_total is not None:
+      init_events.append(calibrated_total.dp_event)
 
     # Determine accountant type based on discrete mechanism's dp_event.
     probe_event = self.discrete_mechanism.calibrate(zcdp_rho=1.0).dp_event
@@ -277,6 +330,7 @@ class DataGenerationV3(primitives.DPMechanism):
         self,
         initializers=calibrated_inits,
         discrete_mechanism=calibrated_discrete,
+        total_count_mechanism=calibrated_total,
     )
 
   @property
@@ -292,6 +346,8 @@ class DataGenerationV3(primitives.DPMechanism):
     if self.initializers is None:
       raise ValueError('Must call calibrate() before accessing dp_event.')
     events = [init.dp_event for init in self.initializers.values()]
+    if self.total_count_mechanism is not None:
+      events.append(self.total_count_mechanism.dp_event)
     events.append(self.discrete_mechanism.dp_event)
     return dp_accounting.ComposedDpEvent(events)
 
@@ -321,9 +377,34 @@ class DataGenerationV3(primitives.DPMechanism):
         )
 
     # Phase 1: Per-column initialization.
+    # Initialize closed-domain columns first to estimate the total count,
+    # then pass it to numerical initializers for heuristic measurements.
     col_results: dict[str, initialization.ColumnMeasurement] = {}
+    closed_domain_measurements = []
     for col, init in self.initializers.items():
-      col_results[col] = init(rng, data[col].values)
+      if not isinstance(init, initialization.NumericalInitializer):
+        col_results[col] = init(rng, data[col].values)
+        if col_results[col].measurement is not None:
+          closed_domain_measurements.append(col_results[col].measurement)
+
+    # Estimate total from closed-domain measurements or DPGaussianCount.
+    estimated_total = None
+    if closed_domain_measurements:
+      estimated_total = mbi_estimation.minimum_variance_unbiased_total(
+          closed_domain_measurements
+      )
+    elif self.total_count_mechanism is not None:
+      # Pick an arbitrary column to count records.
+      any_col = next(iter(self.domains))
+      estimated_total = max(
+          1.0, self.total_count_mechanism(rng, data[any_col].values)
+      )
+
+    for col, init in self.initializers.items():
+      if isinstance(init, initialization.NumericalInitializer):
+        col_results[col] = init(
+            rng, data[col].values, estimated_total=estimated_total
+        )
 
     # Phase 2: Encode data to discrete domain.
     discrete_domains = {}
