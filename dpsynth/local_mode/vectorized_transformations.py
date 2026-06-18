@@ -87,6 +87,27 @@ def _validate_bin_edges(bin_edges, attribute_domain):
     raise ValueError(f'{bin_edges=} must be monotonically increasing.')
 
 
+def categorical_attribute_from_edges(
+    bin_edges: np.ndarray,
+    attribute_domain: domain.NumericalAttribute,
+) -> domain.CategoricalAttribute:
+  """Builds a CategoricalAttribute with interval-string possible_values.
+
+  Args:
+    bin_edges: Sorted inner bin edges.
+    attribute_domain: The NumericalAttribute describing the data domain.
+
+  Returns:
+    A CategoricalAttribute whose possible_values are interval strings.
+  """
+  min_, max_ = attribute_domain.exclusive_min_value, attribute_domain.max_value
+  full_edges = np.r_[min_, bin_edges, max_]
+  intervals = [f'({l}, {r}]' for l, r in zip(full_edges[:-1], full_edges[1:])]
+  if not attribute_domain.clip_to_range:
+    intervals = ['OUT_OF_DOMAIN'] + intervals
+  return domain.CategoricalAttribute(intervals)
+
+
 def discretize(
     data: np.ndarray,
     bin_edges: np.ndarray,

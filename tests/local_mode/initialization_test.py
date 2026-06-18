@@ -16,6 +16,7 @@ from absl.testing import absltest
 import dp_accounting
 from dpsynth import domain
 from dpsynth.local_mode import initialization
+from dpsynth.local_mode import vectorized_transformations as vtx
 import numpy as np
 
 
@@ -47,12 +48,53 @@ class InitializationTest(absltest.TestCase):
     self.assertIsInstance(measurement, initialization.ColumnMeasurement)
     self.assertEqual(measurement.categorical_attribute.size, 4)
     self.assertIsNone(measurement.measurement)
+    self.assertIsNotNone(measurement.bin_edges)
 
-    encoded_data = [measurement.transform_fn(x) for x in data]
+    encoded_data = vtx.discretize(data, measurement.bin_edges, attr)
     counts = np.bincount(encoded_data)
 
     # Expected Partitioning: 1 2 3 | 4 5 | 6 7 | 8 9
     np.testing.assert_array_equal(counts, [3, 2, 2, 2])
+
+  def test_numerical_initializer_deduplicates_bin_edges(self):
+    """Concentrated data can make quantiles return duplicate edges."""
+    attr = domain.NumericalAttribute(min_value=0, max_value=100)
+    rng = np.random.default_rng(42)
+    initializer = initialization.NumericalInitializer(
+        name='test', num_partitions=8, attribute=attr
+    )
+    # Data is heavily concentrated at 50.
+    data = np.array([50] * 100 + [1, 99])
+    result = initializer.calibrate(zcdp_rho=1.0)(rng, data)
+
+    # After dedup, bin_edges should be strictly increasing.
+    edges = result.bin_edges
+    self.assertTrue(
+        np.all(np.diff(edges) > 0),
+        f'bin_edges not strictly increasing: {edges}',
+    )
+    # And downstream discretize should not crash.
+    encoded = vtx.discretize(data, edges, attr)
+    self.assertEqual(encoded.shape, data.shape)
+
+  def test_numerical_initializer_integer_data(self):
+    """Integer data within a narrow range can collapse quantile edges."""
+    attr = domain.NumericalAttribute(min_value=0, max_value=10, dtype='int')
+    rng = np.random.default_rng(0)
+    initializer = initialization.NumericalInitializer(
+        name='test', num_partitions=8, attribute=attr
+    )
+    # Only 3 distinct values but 8 partitions requested.
+    data = np.array([3, 3, 3, 3, 5, 5, 5, 7])
+    result = initializer.calibrate(zcdp_rho=1.0)(rng, data)
+
+    edges = result.bin_edges
+    self.assertTrue(
+        np.all(np.diff(edges) > 0),
+        f'bin_edges not strictly increasing: {edges}',
+    )
+    # Domain size may be < 8 due to dedup, but must be >= 2.
+    self.assertGreaterEqual(result.categorical_attribute.size, 2)
 
 
 class CategoricalInitializerTest(absltest.TestCase):
@@ -110,7 +152,13 @@ class OpenSetCategoricalInitializerTest(absltest.TestCase):
         name='test', attribute=attr, delta=1e-5
     )
     event = initializer.calibrate(zcdp_rho=0.5).dp_event
-    self.assertIsInstance(event, dp_accounting.GaussianDpEvent)
+    self.assertIsInstance(event, dp_accounting.ComposedDpEvent)
+    self.assertLen(event.events, 2)
+    self.assertIsInstance(event.events[0], dp_accounting.GaussianDpEvent)
+    self.assertIsInstance(
+        event.events[1], dp_accounting.dp_event.EpsilonDeltaDpEvent
+    )
+    self.assertEqual(event.events[1].delta, 1e-5)
 
   def test_call_noiseless(self):
     attr = domain.OpenSetCategoricalAttribute(default_value=None)
@@ -142,13 +190,14 @@ class OpenSetCategoricalInitializerTest(absltest.TestCase):
     data = np.array(['A'] * 100 + ['B'] * 50)
     result = initializer.calibrate(zcdp_rho=np.inf)(rng, data)
 
-    transform_fn = result.transform_fn
+    cat_attr = result.categorical_attribute
     # Discovered values map to valid indices.
-    idx_a = transform_fn('A')
-    self.assertIsInstance(idx_a, int)
+    encoded = vtx.discrete_encode(np.array(['A']), cat_attr)
+    self.assertGreater(encoded[0], 0)
     # Unknown value maps to the out-of-domain (default) index at 0.
-    self.assertEqual(result.categorical_attribute.out_of_domain_index, 0)
-    self.assertEqual(transform_fn('Z'), 0)
+    self.assertEqual(cat_attr.out_of_domain_index, 0)
+    encoded_z = vtx.discrete_encode(np.array(['Z']), cat_attr)
+    self.assertEqual(encoded_z[0], 0)
 
   def test_empty_data(self):
     attr = domain.OpenSetCategoricalAttribute(default_value=None)

@@ -21,19 +21,31 @@ from typing import TypeVar
 
 import dp_accounting
 from dpsynth import domain
-from dpsynth import transformations
 from dpsynth.local_mode import primitives
+from dpsynth.local_mode import vectorized_transformations as vtx
 import mbi
 import numpy as np
+
 
 _M = TypeVar('_M')
 
 
 @dataclasses.dataclass
 class ColumnMeasurement:
+  """Result of running a column initializer on raw data.
+
+  Attributes:
+    categorical_attribute: The discovered or constructed CategoricalAttribute
+      defining the discrete domain for this column.
+    bin_edges: Inner bin edges for numerical columns (used for
+      discretize/undiscretize). None for categorical columns.
+    measurement: A noisy one-way marginal measurement, or None if the
+      initializer does not produce one (e.g. NumericalInitializer).
+  """
+
   categorical_attribute: domain.CategoricalAttribute
-  transform_fn: transformations.DataTransformation
-  measurement: mbi.LinearMeasurement | None
+  bin_edges: np.ndarray | None = None
+  measurement: mbi.LinearMeasurement | None = None
 
 
 def _validate_mechanism(mechanism: _M | None) -> _M:
@@ -81,12 +93,11 @@ class NumericalInitializer(primitives.DPMechanism):
       self, rng: np.random.Generator, data: np.ndarray
   ) -> ColumnMeasurement:
     """Returns a ColumnMeasurement with the discretization transform."""
-    bucket_edges = _validate_mechanism(self.mechanism)(rng, data)
-    attr, discretize_fn = transformations.create_discretize_transformation(
-        self.attribute, bucket_edges
-    )
-    transform_fn = transformations.discrete_encoder(attr) @ discretize_fn
-    return ColumnMeasurement(attr, transform_fn, None)
+    # Dedup: concentrated data can make quantiles return duplicate edges.
+    edges = _validate_mechanism(self.mechanism)(rng, data)
+    bin_edges = np.unique(np.asarray(edges, dtype=float))
+    cat_attr = vtx.categorical_attribute_from_edges(bin_edges, self.attribute)
+    return ColumnMeasurement(cat_attr, bin_edges)
 
 
 @dataclasses.dataclass
@@ -124,13 +135,12 @@ class CategoricalInitializer(primitives.DPMechanism):
   ) -> ColumnMeasurement:
     """Returns a ColumnMeasurement with the noisy histogram."""
     mechanism = _validate_mechanism(self.mechanism)
-    transform_fn = transformations.discrete_encoder(self.attribute)
-    encoded = np.array([transform_fn(v) for v in data])
+    encoded = vtx.discrete_encode(data, self.attribute)
     noisy_counts = mechanism(rng, encoded)
     measurement = mbi.LinearMeasurement(
         noisy_counts, (self.name,), stddev=mechanism.sigma
     )
-    return ColumnMeasurement(self.attribute, transform_fn, measurement)
+    return ColumnMeasurement(self.attribute, measurement=measurement)
 
 
 @dataclasses.dataclass
@@ -143,52 +153,39 @@ class OpenSetCategoricalInitializer(primitives.DPMechanism):
   with the attribute's default_value (used as a catch-all for undiscovered
   values), form a CategoricalAttribute used for downstream synthesis.
 
-  Privacy note: Gaussian Thresholding is an approximate (delta > 0) mechanism,
-  but ``dp_accounting`` does not currently support approximate DpEvents. As a
-  workaround, ``dp_event`` returns a pure GaussianDpEvent (GDP), and ``delta``
-  is stored in the dataclass so that callers can subtract it from the overall
-  delta budget separately.
-
   Attributes:
     name: Attribute name used as the clique key in the measurement.
     attribute: The OpenSetCategoricalAttribute specifying the default value.
-    delta: Failure probability for the partition selection threshold. Must be
-      subtracted from the overall delta budget by the caller, since it is not
-      captured in the DpEvent returned by ``dp_event``.
+    delta: Failure probability for the partition selection threshold.
   """
 
   name: str
   attribute: domain.OpenSetCategoricalAttribute
   delta: float
-  mechanism: primitives.DPGaussianHistogram | None = dataclasses.field(
+  mechanism: primitives.DPPartitionSelection | None = dataclasses.field(
       default=None, repr=False
   )
 
   def calibrate(self, *, zcdp_rho: float) -> OpenSetCategoricalInitializer:
     """Returns a copy calibrated to the given zCDP budget."""
-    mechanism = primitives.DPGaussianHistogram(
-        domain_size=0,
+    mechanism = primitives.DPPartitionSelection(
+        delta=self.delta,
     ).calibrate(zcdp_rho=zcdp_rho)
     return dataclasses.replace(self, mechanism=mechanism)
 
   @property
   def dp_event(self) -> dp_accounting.DpEvent:
-    """Returns the Gaussian privacy event for the thresholding mechanism."""
+    """Returns the privacy event including thresholding delta."""
     return _validate_mechanism(self.mechanism).dp_event
 
   def __call__(
       self, rng: np.random.Generator, data: np.ndarray
   ) -> ColumnMeasurement:
     """Returns a differentially private measurement of the given data."""
-    sigma = _validate_mechanism(self.mechanism).sigma
-    gdp_budget = np.inf if sigma == 0.0 else 1.0 / (sigma**2)
+    mechanism = _validate_mechanism(self.mechanism)
     # Map raw values to integer partition IDs for thresholding.
     unique_values, inverse = np.unique(data, return_inverse=True)
-    selected_ids, counts, stddev = (
-        primitives.select_partitions_gaussian_thresholding(
-            rng, inverse, gdp_budget, self.delta
-        )
-    )
+    selected_ids, counts, _ = mechanism(rng, inverse)
     selected_values = list(unique_values[selected_ids])
 
     # Build the discovered domain: default first, then selected values.
@@ -197,14 +194,13 @@ class OpenSetCategoricalInitializer(primitives.DPMechanism):
         possible_values=possible_values,
         out_of_domain_index=0,
     )
-    transform_fn = transformations.discrete_encoder(cat_attr)
 
     # The measurement covers only the discovered partitions (indices 1:),
     # not the unmeasured default at index 0.
     measurement = mbi.LinearMeasurement(
         counts,
         (self.name,),
-        stddev=stddev,
-        query=lambda x: x[1:],
+        stddev=mechanism.sigma,
+        query=lambda x: x.datavector()[1:],
     )
-    return ColumnMeasurement(cat_attr, transform_fn, measurement)
+    return ColumnMeasurement(cat_attr, measurement=measurement)
