@@ -16,6 +16,13 @@ You generally only need to submit a CLA once, so if you've already submitted one
 (even if it was for a different project), you probably don't need to do it
 again.
 
+## Bug Reports & Feature Requests
+
+Before opening a pull request, consider
+[filing an issue](https://github.com/google/dpsynth/issues) to discuss the
+change. This helps us coordinate efforts and provide guidance on the best
+approach.
+
 ## Code Reviews
 
 All submissions, including submissions by project members, require review. We
