@@ -313,7 +313,7 @@ class DPQuantilesTest(parameterized.TestCase):
     calibrated = mech.calibrate(zcdp_rho=100.0)
     data = np.array([1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0])
     result = calibrated(self.rng, data)
-    self.assertLen(result, 3)
+    self.assertLen(result.quantiles, 3)
 
   @parameterized.parameters([0.3, 1.0, 2.718])
   def test_calibrate_default_ratio(self, zcdp_rho):
@@ -366,13 +366,13 @@ class DPGaussianHistogramTest(absltest.TestCase):
     calibrated = mech.calibrate(zcdp_rho=0.5)
     data = np.array([0, 0, 1, 1, 1, 2])
     result = calibrated(self.rng, data)
-    self.assertLen(result, 4)
-    np.testing.assert_allclose(result, [2, 3, 1, 0], atol=5.0)
+    self.assertLen(result.counts, 4)
+    np.testing.assert_allclose(result.counts, [2, 3, 1, 0], atol=5.0)
 
   def test_direct_sigma(self):
     mech = primitives.DPGaussianHistogram(domain_size=3, sigma=0.0)
     data = np.array([0, 0, 1, 2, 2, 2])
-    np.testing.assert_array_equal(mech(self.rng, data), [2, 1, 3])
+    np.testing.assert_array_equal(mech(self.rng, data).counts, [2, 1, 3])
 
   def test_dp_event_raises_before_calibration(self):
     mech = primitives.DPGaussianHistogram(domain_size=4)

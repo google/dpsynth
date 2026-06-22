@@ -31,7 +31,9 @@ class DirectTest(absltest.TestCase):
         ],
         pgm_iters=500,
     )
-    synthetic = config.calibrate(zcdp_rho=10000)(np.random.default_rng(0), data)
+    synthetic = config.calibrate(zcdp_rho=10000)(
+        np.random.default_rng(0), data
+    ).model
 
     for col in data.domain:
       expected = data.project([col]).datavector()

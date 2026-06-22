@@ -72,6 +72,13 @@ def _create_initializers(
 
 
 @dataclasses.dataclass
+class DataGenerationResult:
+  """Result of end-to-end DP synthetic data generation."""
+
+  synthetic_data: pd.DataFrame
+
+
+@dataclasses.dataclass
 class DataGenerationV3(primitives.DPMechanism):
   """End-to-end DP synthetic data generation mechanism.
 
@@ -297,7 +304,7 @@ class DataGenerationV3(primitives.DPMechanism):
 
   def __call__(
       self, rng: np.random.Generator, data: pd.DataFrame
-  ) -> pd.DataFrame:
+  ) -> DataGenerationResult:
     """Generates differentially private synthetic data.
 
     Args:
@@ -306,7 +313,7 @@ class DataGenerationV3(primitives.DPMechanism):
         specified in ``domains``.
 
     Returns:
-      A synthetic DataFrame with the same domain columns as the input.
+      A DataGenerationResult containing the synthetic DataFrame.
 
     Raises:
       ValueError: If calibrate() has not been called or if required columns are
@@ -349,13 +356,13 @@ class DataGenerationV3(primitives.DPMechanism):
     initial_potentials = constraints.get_initial_parameters(
         self.cross_attribute_constraints, discrete.domain
     )
-    model = self.discrete_mechanism(
+    mechanism_result = self.discrete_mechanism(
         rng,
         data=discrete,
         initial_measurements=one_way_measurements,
         initial_potentials=initial_potentials,
     )
-    synthetic_data = model.synthetic_data()
+    synthetic_data = mechanism_result.model.synthetic_data()
     logging.info('[DPSynth]: Generated discrete synthetic data.')
 
     # Phase 4: Decode synthetic data back to original domain.
@@ -373,4 +380,6 @@ class DataGenerationV3(primitives.DPMechanism):
     logging.info('[DPSynth]: Converted data back to original domain.')
 
     column_order = [col for col in data.columns if col in self.domains]
-    return pd.DataFrame(synthetic_columns)[column_order]
+    return DataGenerationResult(
+        synthetic_data=pd.DataFrame(synthetic_columns)[column_order]
+    )

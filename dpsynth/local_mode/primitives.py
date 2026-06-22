@@ -32,6 +32,28 @@ import scipy.special
 import scipy.stats
 
 
+@dataclasses.dataclass
+class QuantileResult:
+  """Result of a differentially private quantile computation."""
+
+  quantiles: list[float]
+
+
+@dataclasses.dataclass
+class HistogramResult:
+  """Result of a differentially private histogram computation."""
+
+  counts: np.ndarray
+
+
+@dataclasses.dataclass
+class PartitionSelectionResult:
+  """Result of differentially private partition selection."""
+
+  selected_partitions: np.ndarray
+  estimated_counts: np.ndarray
+
+
 class DPMechanism(abc.ABC):
   """Abstract base class for differentially private mechanisms.
 
@@ -522,12 +544,16 @@ class DPQuantiles(DPMechanism):
         for eps in self._epsilon_levels
     ])
 
-  def __call__(self, rng: np.random.Generator, data: np.ndarray) -> list[float]:
+  def __call__(
+      self, rng: np.random.Generator, data: np.ndarray
+  ) -> QuantileResult:
     """Computes differentially private quantiles."""
     if self._epsilon_levels is None:
       raise ValueError(_UNCALIBRATED_MSG.format(param='_epsilon_levels'))
-    return _quantiles(
-        rng, data, self.lower, self.upper, np.asarray(self._epsilon_levels)
+    return QuantileResult(
+        quantiles=_quantiles(
+            rng, data, self.lower, self.upper, np.asarray(self._epsilon_levels)
+        )
     )
 
 
@@ -557,11 +583,15 @@ class DPGaussianHistogram(DPMechanism):
       raise ValueError(_UNCALIBRATED_MSG.format(param='sigma'))
     return dp_accounting.GaussianDpEvent(noise_multiplier=self.sigma)
 
-  def __call__(self, rng: np.random.Generator, data: np.ndarray) -> np.ndarray:
+  def __call__(
+      self, rng: np.random.Generator, data: np.ndarray
+  ) -> HistogramResult:
     """Computes a differentially private histogram."""
     if self.sigma is None:
       raise ValueError(_UNCALIBRATED_MSG.format(param='sigma'))
-    return _gaussian_histogram(rng, data, self.domain_size, self.sigma)
+    return HistogramResult(
+        counts=_gaussian_histogram(rng, data, self.domain_size, self.sigma)
+    )
 
 
 @dataclasses.dataclass
@@ -595,7 +625,7 @@ class DPPartitionSelection(DPMechanism):
 
   def __call__(
       self, rng: np.random.Generator, data: np.ndarray
-  ) -> tuple[np.ndarray, np.ndarray, float]:
+  ) -> PartitionSelectionResult:
     """Runs partition selection on integer-encoded partition IDs.
 
     Args:
@@ -603,11 +633,14 @@ class DPPartitionSelection(DPMechanism):
       data: 1D array of integer partition IDs.
 
     Returns:
-      A tuple of (selected_partitions, noisy_counts, sigma).
+      A ``PartitionSelectionResult`` with selected partitions and noisy counts.
     """
     if self.sigma is None:
       raise ValueError(_UNCALIBRATED_MSG.format(param='sigma'))
     gdp_budget = np.inf if self.sigma == 0.0 else 1.0 / (self.sigma**2)
-    return select_partitions_gaussian_thresholding(
+    parts, counts, _ = select_partitions_gaussian_thresholding(
         rng, data, gdp_budget, self.delta
+    )
+    return PartitionSelectionResult(
+        selected_partitions=parts, estimated_counts=counts
     )

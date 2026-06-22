@@ -17,11 +17,17 @@
 # pylint: disable=g-importing-member
 
 from dpsynth.discrete_mechanisms.aim import AIMMechanism
+from dpsynth.discrete_mechanisms.aim import AIMMechanismResult
 from dpsynth.discrete_mechanisms.aim_gdp import AIMGDPMechanism
+from dpsynth.discrete_mechanisms.aim_gdp import AIMGDPMechanismResult
 from dpsynth.discrete_mechanisms.direct import DirectMechanism
+from dpsynth.discrete_mechanisms.direct import DirectMechanismResult
 from dpsynth.discrete_mechanisms.independent import IndependentMechanism
+from dpsynth.discrete_mechanisms.independent import IndependentMechanismResult
 from dpsynth.discrete_mechanisms.mst import MSTMechanism
+from dpsynth.discrete_mechanisms.mst import MSTMechanismResult
 from dpsynth.discrete_mechanisms.swift import SWIFTMechanism
+from dpsynth.discrete_mechanisms.swift import SWIFTMechanismResult
 from dpsynth.local_mode.primitives import DPMechanism as DiscreteMechanism
 
 # Backwards-compatible aliases.

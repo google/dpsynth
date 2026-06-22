@@ -265,14 +265,14 @@ def generate(
       cross_attribute_constraints, discrete.domain
   )
 
-  model = discrete_config.calibrate(zcdp_rho=discrete_zcdp_rho)(
+  result = discrete_config.calibrate(zcdp_rho=discrete_zcdp_rho)(
       rng,
       data=discrete,
       initial_measurements=one_way_measurements,
       initial_potentials=initial_potentials,
   )
 
-  synthetic_data = model.synthetic_data()
+  synthetic_data = result.model.synthetic_data()
   logging.info('[SynthKit Tabular]: Generated discrete synthetic data.')
 
   # Convert synthetic data back to the original domain.

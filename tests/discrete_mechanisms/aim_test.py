@@ -27,7 +27,7 @@ class AIMTest(absltest.TestCase):
     config = aim.AIMMechanism(workload=workload, max_rounds=4, pgm_iters=500)
 
     calibrated = config.calibrate(zcdp_rho=10000)
-    synthetic = calibrated(np.random.default_rng(0), data)
+    synthetic = calibrated(np.random.default_rng(0), data).model
 
     for col in data.domain:
       expected = data.project([col]).datavector()
@@ -42,7 +42,7 @@ class AIMTest(absltest.TestCase):
         workload=workload, max_rounds=4, pgm_iters=500
     )
     calibrated = config.calibrate(zcdp_rho=10000)
-    synthetic = calibrated(np.random.default_rng(0), data)
+    synthetic = calibrated(np.random.default_rng(0), data).model
 
     for col in data.domain:
       expected = data.project([col]).datavector()

@@ -38,7 +38,8 @@ class DataGenerationV3Test(absltest.TestCase):
     df = pd.DataFrame({'A': ['a', 'b', 'c'], 'B': ['x', 'y', 'z']})
     rng = np.random.default_rng(0)
     calibrated = DataGenerationV3(domains=domains).calibrate(zcdp_rho=100.0)
-    synthetic_df = calibrated(rng, df)
+    result = calibrated(rng, df)
+    synthetic_df = result.synthetic_data
     self.assertIsInstance(synthetic_df, pd.DataFrame)
     self.assertListEqual(synthetic_df.columns.tolist(), ['A', 'B'])
 
@@ -50,7 +51,8 @@ class DataGenerationV3Test(absltest.TestCase):
     df = pd.DataFrame({'A': [5, 5, 0], 'B': [5, -10, -5]}, dtype=float)
     rng = np.random.default_rng(0)
     calibrated = DataGenerationV3(domains=domains).calibrate(zcdp_rho=100.0)
-    synthetic_df = calibrated(rng, df)
+    result = calibrated(rng, df)
+    synthetic_df = result.synthetic_data
     self.assertListEqual(synthetic_df.columns.tolist(), ['A', 'B'])
     for col, attr in domains.items():
       self.assertTrue(
@@ -67,7 +69,8 @@ class DataGenerationV3Test(absltest.TestCase):
     calibrated = DataGenerationV3(domains=domains).calibrate(
         zcdp_rho=100.0, delta=1e-5
     )
-    synthetic_df = calibrated(rng, df)
+    result = calibrated(rng, df)
+    synthetic_df = result.synthetic_data
     self.assertIsInstance(synthetic_df, pd.DataFrame)
     self.assertListEqual(synthetic_df.columns.tolist(), ['A', 'B'])
 
@@ -85,7 +88,8 @@ class DataGenerationV3Test(absltest.TestCase):
     calibrated = DataGenerationV3(domains=domains).calibrate(
         epsilon=100, delta=0.1
     )
-    synthetic_df = calibrated(rng, df)
+    result = calibrated(rng, df)
+    synthetic_df = result.synthetic_data
     self.assertIsInstance(synthetic_df, pd.DataFrame)
     self.assertListEqual(synthetic_df.columns.tolist(), ['A', 'B'])
 
@@ -143,7 +147,8 @@ class DataGenerationV3Test(absltest.TestCase):
     calibrated = DataGenerationV3(domains=domains).calibrate(
         epsilon=0.2, delta=1e-5
     )
-    synthetic_df = calibrated(rng, df)
+    result = calibrated(rng, df)
+    synthetic_df = result.synthetic_data
     self.assertIsInstance(synthetic_df, pd.DataFrame)
     self.assertListEqual(synthetic_df.columns.tolist(), ['A', 'B'])
 

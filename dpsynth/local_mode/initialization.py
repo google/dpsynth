@@ -94,7 +94,7 @@ class NumericalInitializer(primitives.DPMechanism):
   ) -> ColumnMeasurement:
     """Returns a ColumnMeasurement with the discretization transform."""
     # Dedup: concentrated data can make quantiles return duplicate edges.
-    edges = _validate_mechanism(self.mechanism)(rng, data)
+    edges = _validate_mechanism(self.mechanism)(rng, data).quantiles
     bin_edges = np.unique(np.asarray(edges, dtype=float))
     cat_attr = vtx.categorical_attribute_from_edges(bin_edges, self.attribute)
     return ColumnMeasurement(cat_attr, bin_edges)
@@ -136,7 +136,7 @@ class CategoricalInitializer(primitives.DPMechanism):
     """Returns a ColumnMeasurement with the noisy histogram."""
     mechanism = _validate_mechanism(self.mechanism)
     encoded = vtx.discrete_encode(data, self.attribute)
-    noisy_counts = mechanism(rng, encoded)
+    noisy_counts = mechanism(rng, encoded).counts
     measurement = mbi.LinearMeasurement(
         noisy_counts, (self.name,), stddev=mechanism.sigma
     )
@@ -185,7 +185,8 @@ class OpenSetCategoricalInitializer(primitives.DPMechanism):
     mechanism = _validate_mechanism(self.mechanism)
     # Map raw values to integer partition IDs for thresholding.
     unique_values, inverse = np.unique(data, return_inverse=True)
-    selected_ids, counts, _ = mechanism(rng, inverse)
+    result = mechanism(rng, inverse)
+    selected_ids, counts = result.selected_partitions, result.estimated_counts
     selected_values = list(unique_values[selected_ids])
 
     # Build the discovered domain: default first, then selected values.

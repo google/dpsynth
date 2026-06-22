@@ -74,7 +74,7 @@ class MSTTest(absltest.TestCase):
 
     config = mst.MSTMechanism(pgm_iters=500).calibrate(zcdp_rho=10000)
 
-    synthetic = config(np.random.default_rng(0), data)
+    synthetic = config(np.random.default_rng(0), data).model
 
     for col in data.domain:
       expected = data.project([col]).datavector()
