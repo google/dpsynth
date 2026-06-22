@@ -80,7 +80,7 @@ def _validate_bin_edges(bin_edges, attribute_domain):
   """Validates bin_edges against the attribute domain."""
   min_, max_ = attribute_domain.min_value, attribute_domain.max_value
   if bin_edges.size == 0:
-    raise ValueError(f'bin_edges must not be empty, got {bin_edges}.')
+    return  # 1-bin: entire domain is a single bucket; nothing to validate.
   if bin_edges[0] < min_ or bin_edges[-1] >= max_:
     raise ValueError(f'{bin_edges=} must be within the range [{min_}, {max_}].')
   if np.any(np.diff(bin_edges) <= 0):
@@ -102,7 +102,11 @@ def categorical_attribute_from_edges(
   """
   min_, max_ = attribute_domain.exclusive_min_value, attribute_domain.max_value
   full_edges = np.r_[min_, bin_edges, max_]
-  intervals = [f'({l}, {r}]' for l, r in zip(full_edges[:-1], full_edges[1:])]
+  if attribute_domain.dtype == 'int':
+    e = full_edges.astype(int)
+    intervals = [f'[{l+1}, {r}]' for l, r in zip(e[:-1], e[1:])]
+  else:
+    intervals = [f'({l}, {r}]' for l, r in zip(full_edges[:-1], full_edges[1:])]
   if not attribute_domain.clip_to_range:
     intervals = ['OUT_OF_DOMAIN'] + intervals
   return domain.CategoricalAttribute(intervals)
@@ -131,6 +135,10 @@ def discretize(
   """
   min_, max_ = attribute_domain.min_value, attribute_domain.max_value
   _validate_bin_edges(bin_edges, attribute_domain)
+
+  if bin_edges.size == 0:
+    # Single bin covers the entire domain.
+    return np.zeros(len(data), dtype=int)
 
   if attribute_domain.clip_to_range:
     # Out-of-domain values are clipped to the public range (including nan).
@@ -168,6 +176,14 @@ def undiscretize(
   rng = np.random.default_rng(rng)
   min_, max_ = attribute_domain.exclusive_min_value, attribute_domain.max_value
   _validate_bin_edges(bin_edges, attribute_domain)
+
+  if bin_edges.size == 0:
+    # Single bin: return domain midpoint for all indices.
+    mid = (min_ + max_) / 2.0
+    result = np.full(len(bin_indices), mid)
+    if attribute_domain.dtype == 'int' and attribute_domain.clip_to_range:
+      result = np.ceil(result).astype(int)
+    return result
   full_edges = np.r_[min_, bin_edges, max_]
   lefts, rights = full_edges[:-1], full_edges[1:]
   handling = attribute_domain.interval_handling

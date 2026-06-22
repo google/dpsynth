@@ -86,11 +86,16 @@ def derive_numerical_attributes(
       backend, key_val_pairs, 'Compute min and max per key.'
   )  # (key, (min, max))
 
+  def _make_numerical_attr(min_max):
+    lo, hi = min_max
+    if lo >= hi:
+      # Constant column: pad range so the attribute is valid.
+      hi = lo + 1.0
+    return domain.NumericalAttribute(min_value=lo, max_value=hi)
+
   key_to_attr = backend.map_values(
       min_max,
-      lambda min_max: domain.NumericalAttribute(
-          min_value=min_max[0], max_value=min_max[1]
-      ),
+      _make_numerical_attr,
       'Create numerical attribute from min/max',
   )  # (key, domain.NumericalAttribute)
 

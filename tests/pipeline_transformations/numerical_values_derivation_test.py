@@ -254,7 +254,8 @@ class DeriveNumericalValuesTest(absltest.TestCase):
     output = derived_attrs_list[0]
     self.assertEqual(output.key, "field")
     self.assertEqual(output.attribute.min_value, 10)
-    self.assertEqual(output.attribute.max_value, 10)
+    # Constant column: derivation pads max_value to min_value + 1.
+    self.assertEqual(output.attribute.max_value, 11.0)
     self.assertLen(output.quantiles, 3)
     self.assertSequenceAlmostEqual(
         output.quantiles, [10.0, 10.0, 10.0], delta=1.0

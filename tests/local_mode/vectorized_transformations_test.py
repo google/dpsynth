@@ -121,8 +121,11 @@ class DiscretizeTest(parameterized.TestCase):
 
   def test_invalid_bin_edges_raises(self):
     attr = domain.NumericalAttribute(min_value=0, max_value=10)
-    with self.assertRaises(ValueError):
-      vectorized_transformations.discretize(np.array([1.0]), np.array([]), attr)
+    # Empty edges = 1-bin case: all data maps to bin 0.
+    result = vectorized_transformations.discretize(
+        np.array([1.0, 5.0]), np.array([]), attr
+    )
+    np.testing.assert_array_equal(result, [0, 0])
     with self.assertRaises(ValueError):
       vectorized_transformations.discretize(
           np.array([1.0]), np.array([-1.0, 5.0]), attr
@@ -256,8 +259,11 @@ class UndiscretizeTest(parameterized.TestCase):
     attr = domain.NumericalAttribute(
         min_value=0, max_value=10, interval_handling='midpoint'
     )
-    with self.assertRaises(ValueError):
-      vectorized_transformations.undiscretize(np.array([1]), np.array([]), attr)
+    # Empty edges = 1-bin case: undiscretize returns domain midpoint.
+    result = vectorized_transformations.undiscretize(
+        np.array([0, 0]), np.array([]), attr
+    )
+    np.testing.assert_array_equal(result, [5.0, 5.0])
     with self.assertRaises(ValueError):
       vectorized_transformations.undiscretize(
           np.array([1]), np.array([-1.0, 5.0]), attr

@@ -168,10 +168,10 @@ class NumericalAttribute:
 
   @min_value.validator  # pytype: disable=attribute-error
   def _validate_min_max(self, *_):
-    if self.min_value > self.max_value:
+    if self.min_value >= self.max_value:
       raise ValueError(
-          f'min_value ({self.min_value}) must be less than or equal to'
-          f' max_value ({self.max_value})'
+          f'min_value ({self.min_value}) must be strictly less than'
+          f' max_value ({self.max_value}).'
       )
 
   @dtype.validator  # pytype: disable=attribute-error
@@ -218,6 +218,13 @@ class NumericalAttribute:
     if self.dtype == 'int':
       return self.min_value - 1
     return math.nextafter(self.min_value, -math.inf)
+
+  @property
+  def exclusive_max_value(self) -> float:
+    """Returns the exclusive maximum value for this attribute."""
+    if self.dtype == 'int':
+      return self.max_value + 1
+    return math.nextafter(self.max_value, math.inf)
 
   def standardize(self, value: Any) -> int | float | None:
     """Standardizes a value to one of the possible values."""

@@ -132,6 +132,7 @@ def _median(
     upper: float,
     epsilon: float,
     jitter_multiple: float = 1e-4,
+    integer_jitter: bool = False,
 ) -> float:
   """Computes a differentially private median using the exponential mechanism.
 
@@ -146,6 +147,8 @@ def _median(
     upper: Upper bound for the data.
     epsilon: Exponential mechanism privacy parameter.
     jitter_multiple: Multiplier for the jitter scale, relative to upper-lower.
+    integer_jitter: If True, use positive jitter U(0, 0.5) so that integer data
+      points are never pushed across an integer boundary before floor.
 
   Returns:
     A differentially private median estimate.
@@ -163,10 +166,13 @@ def _median(
       return (lower + upper) / 2
     return float(np.median(clamped_data))
 
-  # Jitter size proportional to range. A small jitter makes duplicates unique
-  # and gives them non-zero length intervals, allowing them to be sampled.
-  jitter_scale = (upper - lower) * jitter_multiple
-  jitter = rng.uniform(-jitter_scale, jitter_scale, size=clamped_data.size)
+  # Jitter breaks ties, giving duplicate data points non-zero length intervals.
+  if integer_jitter:
+    # Positive jitter keeps floor() from shifting integers to a neighbor.
+    jitter = rng.uniform(0, 0.5, size=clamped_data.size)
+  else:
+    jitter_scale = (upper - lower) * jitter_multiple
+    jitter = rng.uniform(-jitter_scale, jitter_scale, size=clamped_data.size)
   jittered_data = np.clip(clamped_data + jitter, lower, upper)
 
   sorted_data = np.sort(jittered_data)
@@ -227,6 +233,7 @@ def _quantiles(
     lower: float,
     upper: float,
     epsilon_levels: np.ndarray,
+    integer_jitter: bool = False,
 ) -> list[float]:
   """Computes uniformly spaced differentially private quantiles.
 
@@ -241,6 +248,7 @@ def _quantiles(
     upper: Upper bound for the data.
     epsilon_levels: Per-level exponential mechanism epsilons, as returned by
       ``_quantile_epsilon_levels``.
+    integer_jitter: If True, use positive jitter U(0, 0.5) for integer data.
 
   Returns:
     A list of ``2 ** len(epsilon_levels) - 1`` sorted private quantile
@@ -255,7 +263,14 @@ def _quantiles(
       return []
 
     eps = epsilon_levels[current_depth - 1]
-    med = _median(rng, current_data, curr_lower, curr_upper, eps)
+    med = _median(
+        rng,
+        current_data,
+        curr_lower,
+        curr_upper,
+        eps,
+        integer_jitter=integer_jitter,
+    )
 
     left_mask = current_data <= med
     left_data = current_data[left_mask]
@@ -495,11 +510,13 @@ class DPQuantiles(DPMechanism):
     lower: Lower bound for the data domain.
     upper: Upper bound for the data domain.
     num_partitions: Number of partitions (must be a power of 2).
+    integer_jitter: If True, use positive jitter U(0, 0.5) for integer data.
   """
 
   lower: float
   upper: float
   num_partitions: int
+  integer_jitter: bool = False
   _epsilon_levels: Sequence[float] | None = dataclasses.field(
       default=None, repr=False
   )
@@ -561,6 +578,7 @@ class DPQuantiles(DPMechanism):
         self.lower,
         self.upper,
         np.asarray(self._epsilon_levels),
+        integer_jitter=self.integer_jitter,
     )
     return QuantileResult(quantiles=result)
 
