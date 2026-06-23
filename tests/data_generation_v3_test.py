@@ -21,7 +21,7 @@ from dpsynth import domain
 import numpy as np
 import pandas as pd
 
-TabularSynthesizer = data_generation_v3.TabularSynthesizer
+DataGenerationV3 = data_generation_v3.DataGenerationV3
 
 
 class DataGenerationV3Test(absltest.TestCase):
@@ -37,8 +37,9 @@ class DataGenerationV3Test(absltest.TestCase):
     }
     df = pd.DataFrame({'A': ['a', 'b', 'c'], 'B': ['x', 'y', 'z']})
     rng = np.random.default_rng(0)
-    calibrated = TabularSynthesizer(domains=domains).calibrate(zcdp_rho=100.0)
-    synthetic_df = calibrated(rng, df).synthetic_data
+    calibrated = DataGenerationV3(domains=domains).calibrate(zcdp_rho=100.0)
+    result = calibrated(rng, df)
+    synthetic_df = result.synthetic_data
     self.assertIsInstance(synthetic_df, pd.DataFrame)
     self.assertListEqual(synthetic_df.columns.tolist(), ['A', 'B'])
 
@@ -49,8 +50,9 @@ class DataGenerationV3Test(absltest.TestCase):
     }
     df = pd.DataFrame({'A': [5, 5, 0], 'B': [5, -10, -5]}, dtype=float)
     rng = np.random.default_rng(0)
-    calibrated = TabularSynthesizer(domains=domains).calibrate(zcdp_rho=100.0)
-    synthetic_df = calibrated(rng, df).synthetic_data
+    calibrated = DataGenerationV3(domains=domains).calibrate(zcdp_rho=100.0)
+    result = calibrated(rng, df)
+    synthetic_df = result.synthetic_data
     self.assertListEqual(synthetic_df.columns.tolist(), ['A', 'B'])
     for col, attr in domains.items():
       self.assertTrue(
@@ -64,10 +66,11 @@ class DataGenerationV3Test(absltest.TestCase):
     }
     df = pd.DataFrame({'A': ['a', 'b', 'c'], 'B': [1.0, 5.0, 10.0]})
     rng = np.random.default_rng(0)
-    calibrated = TabularSynthesizer(domains=domains).calibrate(
+    calibrated = DataGenerationV3(domains=domains).calibrate(
         zcdp_rho=100.0, delta=1e-5
     )
-    synthetic_df = calibrated(rng, df).synthetic_data
+    result = calibrated(rng, df)
+    synthetic_df = result.synthetic_data
     self.assertIsInstance(synthetic_df, pd.DataFrame)
     self.assertListEqual(synthetic_df.columns.tolist(), ['A', 'B'])
 
@@ -82,7 +85,7 @@ class DataGenerationV3Test(absltest.TestCase):
     }
     df = pd.DataFrame({'A': ['a', 'b', 'c'], 'B': ['x', 'y', 'z']})
     rng = np.random.default_rng(0)
-    calibrated = TabularSynthesizer(domains=domains).calibrate(
+    calibrated = DataGenerationV3(domains=domains).calibrate(
         epsilon=100, delta=0.1
     )
     result = calibrated(rng, df)
@@ -95,7 +98,7 @@ class DataGenerationV3Test(absltest.TestCase):
         'A': domain.CategoricalAttribute(possible_values=['a', 'b']),
         'text': domain.FreeFormTextAttribute(max_tokens=128),
     }
-    v3 = TabularSynthesizer(domains=domains)
+    v3 = DataGenerationV3(domains=domains)
     with self.assertRaises(ValueError):
       v3.calibrate(zcdp_rho=1.0)
 
@@ -107,7 +110,7 @@ class DataGenerationV3Test(absltest.TestCase):
     }
     df = pd.DataFrame({'A': ['a', 'b', 'c']})
     rng = np.random.default_rng(0)
-    v3 = TabularSynthesizer(domains=domains)
+    v3 = DataGenerationV3(domains=domains)
     with self.assertRaises(ValueError):
       v3(rng, df)
 
@@ -117,7 +120,7 @@ class DataGenerationV3Test(absltest.TestCase):
             possible_values=['a', 'b', 'c'], out_of_domain_index=0
         ),
     }
-    calibrated = TabularSynthesizer(domains=domains).calibrate(zcdp_rho=100.0)
+    calibrated = DataGenerationV3(domains=domains).calibrate(zcdp_rho=100.0)
     self.assertIsInstance(calibrated.dp_event, dp_accounting.ComposedDpEvent)
 
   def test_calibrate_raises_on_conflicting_params(self):
@@ -126,7 +129,7 @@ class DataGenerationV3Test(absltest.TestCase):
             possible_values=['a', 'b', 'c'], out_of_domain_index=0
         ),
     }
-    v3 = TabularSynthesizer(domains=domains)
+    v3 = DataGenerationV3(domains=domains)
     with self.assertRaises(ValueError):
       v3.calibrate(zcdp_rho=1.0, epsilon=1.0, delta=1e-5)
 
@@ -141,7 +144,7 @@ class DataGenerationV3Test(absltest.TestCase):
     }
     df = pd.DataFrame({'A': ['a', 'b', 'c'], 'B': ['x', 'y', 'z']})
     rng = np.random.default_rng(0)
-    calibrated = TabularSynthesizer(domains=domains).calibrate(
+    calibrated = DataGenerationV3(domains=domains).calibrate(
         epsilon=0.2, delta=1e-5
     )
     result = calibrated(rng, df)

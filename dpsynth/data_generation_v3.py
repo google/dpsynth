@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""End-to-end DP synthetic tabular data generation using local mode primitives."""
+"""End-to-end DP synthetic data generation using local mode primitives."""
 
 from __future__ import annotations
 
@@ -79,7 +79,7 @@ class DataGenerationResult:
 
 
 @dataclasses.dataclass
-class TabularSynthesizer(primitives.DPMechanism):
+class DataGenerationV3(primitives.DPMechanism):
   """End-to-end DP synthetic data generation mechanism.
 
   This mechanism encodes input categorical and numerical data into a discrete
@@ -89,10 +89,9 @@ class TabularSynthesizer(primitives.DPMechanism):
 
   Usage::
 
-      synth = TabularSynthesizer(domains=domains)
-      calibrated = synth.calibrate(zcdp_rho=1.0)
-      result = calibrated(rng, df)
-      synthetic_df = result.synthetic_data
+      v3 = DataGenerationV3(domains=domains)
+      calibrated = v3.calibrate(zcdp_rho=1.0)
+      synthetic_df = calibrated(rng, df)
 
   Attributes:
     domains: Mapping from column names to attribute domain specifications.
@@ -118,7 +117,7 @@ class TabularSynthesizer(primitives.DPMechanism):
       delta: float | None = None,
       numerical_bins: int = 32,
       init_budget_fraction: float = 0.1,
-  ) -> TabularSynthesizer:
+  ) -> DataGenerationV3:
     """Returns a calibrated copy of this mechanism.
 
     Supports two calibration modes:
@@ -141,7 +140,7 @@ class TabularSynthesizer(primitives.DPMechanism):
       init_budget_fraction: Fraction of total budget for initialization.
 
     Returns:
-      A new TabularSynthesizer instance with calibrated sub-mechanisms.
+      A new DataGenerationV3 instance with calibrated sub-mechanisms.
 
     Raises:
       ValueError: If arguments are invalid or delta is missing when required.
@@ -232,7 +231,7 @@ class TabularSynthesizer(primitives.DPMechanism):
       init_budget_fraction: Fraction of zCDP budget for initialization.
 
     Returns:
-      A new TabularSynthesizer instance with calibrated sub-mechanisms.
+      A new DataGenerationV3 instance with calibrated sub-mechanisms.
     """
     inits = self.initializers or _create_initializers(
         self.domains, numerical_bins, init_delta

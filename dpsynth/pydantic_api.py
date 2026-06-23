@@ -12,8 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Pydantic <--> DataFrame conversion utilities for TabularSynthesizer."""
+"""Synthetic Tabular Data API for synthesizing collections of pydantic Models."""
 
+from collections.abc import Iterable
 import enum
 import inspect
 import math
@@ -21,7 +22,8 @@ import types
 import typing  # for typing.get_origin and typing.get_args
 from typing import Any, Literal, TypeVar
 
-from dpsynth import data_generation_v3
+from dpsynth import data_generation_v2
+from dpsynth import discrete_mechanisms
 from dpsynth import domain
 import pandas as pd
 import pydantic
@@ -99,16 +101,16 @@ def _categorical_attribute_from_field_info(
   """Infers a CategoricalAttribute from a pydantic FieldInfo."""
   optional, base_type = _get_base_type(field_info.annotation)
   if inspect.isclass(base_type) and issubclass(base_type, enum.Enum):
-    possible_values = [str(e.value) for e in base_type]
+    possible_values = list(base_type)
   elif typing.get_origin(base_type) is Literal:
-    possible_values = [str(v) for v in typing.get_args(base_type)]
+    possible_values = list(typing.get_args(base_type))
   elif base_type is bool:
-    possible_values = [str(False), str(True)]
+    possible_values = [False, True]
   else:
     raise ValueError(f"Unexpected type annotation: {base_type}.")
 
   if optional:
-    possible_values = [str(None)] + possible_values
+    possible_values = [None] + possible_values
 
   return domain.CategoricalAttribute(
       possible_values=possible_values, out_of_domain_index=0
@@ -139,61 +141,41 @@ def infer_domain_from_model(
 RecordT = TypeVar("RecordT", bound=pydantic.BaseModel)
 
 
-def models_to_dataframe(
-    records: list[RecordT],
-    domains_dict: dict[str, domain.AttributeType],
-) -> pd.DataFrame:
-  """Converts a list of pydantic models to a TabularSynthesizer-compatible DataFrame.
-
-  Args:
-    records: List of pydantic model instances.
-    domains_dict: Attribute domain spec (e.g. from ``infer_domain_from_model``).
-
-  Returns:
-    A DataFrame ready to pass to ``TabularSynthesizer.__call__``.
-  """
-  df = pd.DataFrame([r.model_dump() for r in records])
-  for col, attr in domains_dict.items():
-    if isinstance(attr, domain.CategoricalAttribute):
-      df[col] = df[col].astype(str)
-    elif isinstance(attr, domain.NumericalAttribute):
-      # the NumericalAttribute contract, but currently doesn't.
-      df[col] = df[col].fillna(attr.min_value)
-      df[col] = pd.to_numeric(df[col])
-  return df
-
-
-def dataframe_to_models(
-    df: pd.DataFrame | data_generation_v3.DataGenerationResult,
-    model_cls: type[RecordT],
-    domains_dict: dict[str, domain.AttributeType],
+def dp_synthetic_data_generation(
+    data: Iterable[RecordT],
+    epsilon: float,
+    delta: float,
+    *,
+    mechanism_config: discrete_mechanisms.DiscreteMechanism = discrete_mechanisms.MSTMechanism(),
 ) -> list[RecordT]:
-  """Converts a synthetic DataFrame back to pydantic model instances.
+  """Generate synthetic data for a collection of pydantic Models.
 
   Args:
-    df: DataFrame or ``DataGenerationResult`` produced by
-      ``TabularSynthesizer``.
-    model_cls: The pydantic model class to instantiate.
-    domains_dict: Attribute domain spec (e.g. from ``infer_domain_from_model``).
+    data: The collection of pydantic Models to generate synthetic data for.
+    epsilon: Privacy parameter.
+    delta: Privacy parameter.
+    mechanism_config: The algorithm configuration to use for synthetic data
+      generation. Defaults to MST.
 
   Returns:
-    List of pydantic model instances.
+    A synthetic collection of records of the same type as the input, with
+    synthetic values for each field that match the original data in aggregate.
   """
-  if isinstance(df, data_generation_v3.DataGenerationResult):
-    df = df.synthetic_data
-  for col, attr in domains_dict.items():
-    if isinstance(attr, domain.NumericalAttribute) and attr.dtype == "int":
-      df[col] = pd.to_numeric(df[col], errors="coerce").round()
+  data = list(data)
+  cls = data[0].__class__
 
-  def _coerce(v):
-    if isinstance(v, str) and v == str(None):
-      return None
-    try:
-      return None if pd.isna(v) else v
-    except (ValueError, TypeError):
-      return v
+  synthetic = data_generation_v2.generate(
+      data=pd.DataFrame([user.model_dump() for user in data], dtype="object"),
+      domains=infer_domain_from_model(cls),
+      epsilon=epsilon,
+      delta=delta,
+      discrete_config=mechanism_config,
+  )
 
   return [
-      model_cls(**{k: _coerce(v) for k, v in row.items()})
-      for _, row in df.iterrows()
+      cls(**{
+          k: None if isinstance(v, float) and math.isnan(v) else v
+          for k, v in user.items()
+      })
+      for _, user in synthetic.iterrows()
   ]

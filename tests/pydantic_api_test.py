@@ -17,10 +17,8 @@ import math
 from typing import Literal
 
 from absl.testing import absltest
-from dpsynth import data_generation_v3
 from dpsynth import domain
 from dpsynth import pydantic_api
-import numpy as np
 import pydantic
 
 
@@ -142,7 +140,7 @@ class PydanticTest(absltest.TestCase):
     self.assertEqual(
         attr_bool,
         domain.CategoricalAttribute(
-            possible_values=["False", "True"], out_of_domain_index=0
+            possible_values=[False, True], out_of_domain_index=0
         ),
     )
 
@@ -153,7 +151,7 @@ class PydanticTest(absltest.TestCase):
     self.assertEqual(
         attr_enum_opt,
         domain.CategoricalAttribute(
-            possible_values=["None", "red", "green", "blue"],
+            possible_values=[None, Color.RED, Color.GREEN, Color.BLUE],
             out_of_domain_index=0,
         ),
     )
@@ -182,10 +180,10 @@ class PydanticTest(absltest.TestCase):
             dtype="float",
         ),
         "is_member": domain.CategoricalAttribute(
-            possible_values=["False", "True"], out_of_domain_index=0
+            possible_values=[False, True], out_of_domain_index=0
         ),
         "favorite_color": domain.CategoricalAttribute(
-            possible_values=["red", "green", "blue"],
+            possible_values=[Color.RED, Color.GREEN, Color.BLUE],
             out_of_domain_index=0,
         ),
         "optional_code": domain.NumericalAttribute(
@@ -195,14 +193,14 @@ class PydanticTest(absltest.TestCase):
             possible_values=["active", "inactive"], out_of_domain_index=0
         ),
         "optional_bool": domain.CategoricalAttribute(
-            possible_values=["None", "False", "True"], out_of_domain_index=0
+            possible_values=[None, False, True], out_of_domain_index=0
         ),
         "optional_enum": domain.CategoricalAttribute(
-            possible_values=["None", "red", "green", "blue"],
+            possible_values=[None, Color.RED, Color.GREEN, Color.BLUE],
             out_of_domain_index=0,
         ),
         "optional_literal": domain.CategoricalAttribute(
-            possible_values=["None", "a", "b"], out_of_domain_index=0
+            possible_values=[None, "a", "b"], out_of_domain_index=0
         ),
     }
     self.assertEqual(domain_spec, expected_domain_spec)
@@ -254,14 +252,10 @@ class PydanticTest(absltest.TestCase):
         :num_records
     ]
 
-    domains = pydantic_api.infer_domain_from_model(SupportedModel)
-    df = pydantic_api.models_to_dataframe(real_data, domains)
-    synth = data_generation_v3.TabularSynthesizer(
-        domains=domains,
-    ).calibrate(epsilon=epsilon, delta=delta)
-    synthetic_df = synth(np.random.default_rng(), df)
-    synthetic_records = pydantic_api.dataframe_to_models(
-        synthetic_df, SupportedModel, domains
+    synthetic_records = pydantic_api.dp_synthetic_data_generation(
+        data=real_data,
+        epsilon=epsilon,
+        delta=delta,
     )
 
     self.assertIsInstance(synthetic_records, list)
@@ -292,14 +286,10 @@ class PydanticTest(absltest.TestCase):
         :num_records
     ]
 
-    domains = pydantic_api.infer_domain_from_model(ModelForNumericalDefaults)
-    df = pydantic_api.models_to_dataframe(real_data, domains)
-    synth = data_generation_v3.TabularSynthesizer(
-        domains=domains,
-    ).calibrate(epsilon=epsilon, delta=delta)
-    synthetic_df = synth(np.random.default_rng(), df)
-    synthetic_records = pydantic_api.dataframe_to_models(
-        synthetic_df, ModelForNumericalDefaults, domains
+    synthetic_records = pydantic_api.dp_synthetic_data_generation(
+        data=real_data,
+        epsilon=epsilon,
+        delta=delta,
     )
 
     self.assertIsInstance(synthetic_records, list)
@@ -332,14 +322,10 @@ class PydanticTest(absltest.TestCase):
         :num_records
     ]
 
-    domains = pydantic_api.infer_domain_from_model(ModelForCategorical)
-    df = pydantic_api.models_to_dataframe(real_data, domains)
-    synth = data_generation_v3.TabularSynthesizer(
-        domains=domains,
-    ).calibrate(epsilon=epsilon, delta=delta)
-    synthetic_df = synth(np.random.default_rng(), df)
-    synthetic_records = pydantic_api.dataframe_to_models(
-        synthetic_df, ModelForCategorical, domains
+    synthetic_records = pydantic_api.dp_synthetic_data_generation(
+        data=real_data,
+        epsilon=epsilon,
+        delta=delta,
     )
 
     self.assertIsInstance(synthetic_records, list)

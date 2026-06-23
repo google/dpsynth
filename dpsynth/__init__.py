@@ -15,9 +15,9 @@
 """Public API for DPSynth."""
 
 # pylint: disable=g-importing-member
-__version__ = '0.2.0'
+__version__ = '0.1.0'
 from dpsynth import discrete_mechanisms
 from dpsynth import domain
-from dpsynth.data_generation_v3 import TabularSynthesizer
+from dpsynth.data_generation_v2 import generate
 from dpsynth.domain import CategoricalAttribute
 from dpsynth.domain import NumericalAttribute
