@@ -13,6 +13,7 @@
 # limitations under the License.
 
 from absl.testing import absltest
+from dpsynth.discrete_mechanisms import common
 from dpsynth.discrete_mechanisms import direct
 import mbi
 import numpy as np
@@ -23,21 +24,18 @@ class DirectTest(absltest.TestCase):
   def test_fits_one_way_marginals(self):
     data = mbi.Dataset.synthetic(mbi.Domain(['a', 'b', 'c'], [3, 4, 5]), N=1000)
 
+    prespecified_queries = [('a', 'b'), ('a', 'c'), ('b', 'c')]
     config = direct.DirectMechanism(
-        prespecified_marginal_queries=[
-            ('a', 'b'),
-            ('a', 'c'),
-            ('b', 'c'),
-        ],
+        prespecified_marginal_queries=prespecified_queries,
         pgm_iters=500,
     )
-    synthetic = config.calibrate(zcdp_rho=10000)(
-        np.random.default_rng(0), data
-    ).model
+    result = config.calibrate(zcdp_rho=10000)(np.random.default_rng(0), data)
 
+    self.assertIsInstance(result, common.DiscreteMechanismResult)
+    self.assertLen(result.measurements, len(prespecified_queries))
     for col in data.domain:
       expected = data.project([col]).datavector()
-      actual = synthetic.project([col]).datavector()
+      actual = result.model.project([col]).datavector()
       np.testing.assert_allclose(actual, expected, atol=1)
 
 

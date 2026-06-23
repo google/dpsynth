@@ -15,6 +15,7 @@
 from absl.testing import absltest
 from dpsynth.discrete_mechanisms import aim
 from dpsynth.discrete_mechanisms import aim_gdp
+from dpsynth.discrete_mechanisms import common
 import mbi
 import numpy as np
 
@@ -27,11 +28,13 @@ class AIMTest(absltest.TestCase):
     config = aim.AIMMechanism(workload=workload, max_rounds=4, pgm_iters=500)
 
     calibrated = config.calibrate(zcdp_rho=10000)
-    synthetic = calibrated(np.random.default_rng(0), data).model
+    result = calibrated(np.random.default_rng(0), data)
 
+    self.assertIsInstance(result, common.DiscreteMechanismResult)
+    self.assertNotEmpty(result.measurements)
     for col in data.domain:
       expected = data.project([col]).datavector()
-      actual = synthetic.project([col]).datavector()
+      actual = result.model.project([col]).datavector()
       np.testing.assert_allclose(actual, expected, atol=1)
 
   def test_fits_one_way_marginals_with_aim_gdp(self):
@@ -42,11 +45,13 @@ class AIMTest(absltest.TestCase):
         workload=workload, max_rounds=4, pgm_iters=500
     )
     calibrated = config.calibrate(zcdp_rho=10000)
-    synthetic = calibrated(np.random.default_rng(0), data).model
+    result = calibrated(np.random.default_rng(0), data)
 
+    self.assertIsInstance(result, common.DiscreteMechanismResult)
+    self.assertNotEmpty(result.measurements)
     for col in data.domain:
       expected = data.project([col]).datavector()
-      actual = synthetic.project([col]).datavector()
+      actual = result.model.project([col]).datavector()
       np.testing.assert_allclose(actual, expected, atol=1)
 
   def test_uncalibrated_aim_raises(self):

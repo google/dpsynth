@@ -25,13 +25,6 @@ import numpy as np
 
 
 @dataclasses.dataclass
-class IndependentMechanismResult:
-  """Result of running the independent mechanism."""
-
-  model: mbi.MarkovRandomField
-
-
-@dataclasses.dataclass
 class IndependentMechanism(primitives.DPMechanism):
   """Configuration for the independent mechanism.
 
@@ -67,7 +60,7 @@ class IndependentMechanism(primitives.DPMechanism):
       *,
       initial_measurements: list[mbi.LinearMeasurement] | None = None,
       initial_potentials: mbi.CliqueVector | None = None,
-  ) -> IndependentMechanismResult:
+  ) -> common.DiscreteMechanismResult:
     """Generate synthetic data via the independent mechanism."""
     if self.gdp_sigma is None:
       raise ValueError('Must call calibrate() before using the mechanism.')
@@ -101,4 +94,6 @@ class IndependentMechanism(primitives.DPMechanism):
         potentials=potentials,
         marginal_oracle=marginal_oracle,
     )
-    return IndependentMechanismResult(model=model)
+    return common.DiscreteMechanismResult(
+        model=model, measurements=measurements
+    )

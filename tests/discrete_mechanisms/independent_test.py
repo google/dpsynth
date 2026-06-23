@@ -13,6 +13,7 @@
 # limitations under the License.
 
 from absl.testing import absltest
+from dpsynth.discrete_mechanisms import common
 from dpsynth.discrete_mechanisms import independent
 import mbi
 import numpy as np
@@ -24,13 +25,13 @@ class IndependentTest(absltest.TestCase):
     data = mbi.Dataset.synthetic(mbi.Domain(['a', 'b', 'c'], [3, 4, 5]), N=1000)
 
     config = independent.IndependentMechanism(pgm_iters=500)
-    synthetic = config.calibrate(zcdp_rho=10000)(
-        np.random.default_rng(0), data
-    ).model
+    result = config.calibrate(zcdp_rho=10000)(np.random.default_rng(0), data)
 
+    self.assertIsInstance(result, common.DiscreteMechanismResult)
+    self.assertLen(result.measurements, len(data.domain))
     for col in data.domain:
       expected = data.project([col]).datavector()
-      actual = synthetic.project([col]).datavector()
+      actual = result.model.project([col]).datavector()
       np.testing.assert_allclose(actual, expected, atol=0.1)
 
   def test_skips_duplicate_cliques_from_initial_measurements(self):

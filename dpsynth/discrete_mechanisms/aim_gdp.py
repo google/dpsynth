@@ -126,13 +126,6 @@ def _worst_approximated(
 
 
 @dataclasses.dataclass
-class AIMGDPMechanismResult:
-  """Result of running the AIM-GDP mechanism."""
-
-  model: mbi.MarkovRandomField
-
-
-@dataclasses.dataclass
 class AIMGDPMechanism(primitives.DPMechanism):
   """Configuration for the AIM mechanism with Gaussian DP.
 
@@ -208,7 +201,7 @@ class AIMGDPMechanism(primitives.DPMechanism):
       *,
       initial_measurements: list[mbi.LinearMeasurement] | None = None,
       initial_potentials: mbi.CliqueVector | None = None,
-  ) -> AIMGDPMechanismResult:
+  ) -> common.DiscreteMechanismResult:
     """Runs the AIM-GDP mechanism on the given data.
 
     Args:
@@ -218,7 +211,7 @@ class AIMGDPMechanism(primitives.DPMechanism):
       initial_potentials: Optional initial potentials (constraints).
 
     Returns:
-      An AIMGDPMechanismResult containing the estimated data distribution.
+      A DiscreteMechanismResult containing the estimated data distribution.
     """
     if self.gdp_sigma is None:
       raise ValueError('Must call calibrate() before using the mechanism.')
@@ -365,4 +358,6 @@ class AIMGDPMechanism(primitives.DPMechanism):
             '[AIM] Increasing budget per round: %.5f', budget_per_round
         )
 
-    return AIMGDPMechanismResult(model=model)
+    return common.DiscreteMechanismResult(
+        model=model, measurements=measurements
+    )

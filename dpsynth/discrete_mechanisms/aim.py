@@ -91,13 +91,6 @@ def _worst_approximated(
 
 
 @dataclasses.dataclass
-class AIMMechanismResult:
-  """Result of running the AIM mechanism."""
-
-  model: mbi.MarkovRandomField
-
-
-@dataclasses.dataclass
 class AIMMechanism(primitives.DPMechanism):
   """Configuration for the AIM mechanism.
 
@@ -162,7 +155,7 @@ class AIMMechanism(primitives.DPMechanism):
       *,
       initial_measurements: list[mbi.LinearMeasurement] | None = None,
       initial_potentials: mbi.CliqueVector | None = None,
-  ) -> AIMMechanismResult:
+  ) -> common.DiscreteMechanismResult:
     """Runs the AIM mechanism on the given data.
 
     Args:
@@ -172,7 +165,7 @@ class AIMMechanism(primitives.DPMechanism):
       initial_potentials: Optional initial potentials (constraints).
 
     Returns:
-      An AIMMechanismResult containing the estimated data distribution.
+      A DiscreteMechanismResult containing the estimated data distribution.
     """
     if self.zcdp_rho is None:
       raise ValueError('Must call calibrate() before using the mechanism.')
@@ -295,4 +288,6 @@ class AIMMechanism(primitives.DPMechanism):
         sigma = accounting.zcdp_gaussian_sigma((1 - fraction) * rho_per_round)
         logging.info('[AIM] Reducing sigma: %.1f', sigma)
 
-    return AIMMechanismResult(model=model)
+    return common.DiscreteMechanismResult(
+        model=model, measurements=measurements
+    )

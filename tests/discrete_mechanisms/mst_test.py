@@ -14,6 +14,7 @@
 
 from absl.testing import absltest
 import dp_accounting
+from dpsynth.discrete_mechanisms import common
 from dpsynth.discrete_mechanisms import mst
 import mbi
 import numpy as np
@@ -74,11 +75,13 @@ class MSTTest(absltest.TestCase):
 
     config = mst.MSTMechanism(pgm_iters=500).calibrate(zcdp_rho=10000)
 
-    synthetic = config(np.random.default_rng(0), data).model
+    result = config(np.random.default_rng(0), data)
 
+    self.assertIsInstance(result, common.DiscreteMechanismResult)
+    self.assertLen(result.measurements, 2 * len(data.domain) - 1)
     for col in data.domain:
       expected = data.project([col]).datavector()
-      actual = synthetic.project([col]).datavector()
+      actual = result.model.project([col]).datavector()
       np.testing.assert_allclose(actual, expected, atol=1)
 
   def test_calibrate_required(self):

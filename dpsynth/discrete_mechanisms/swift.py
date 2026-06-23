@@ -45,13 +45,6 @@ import tqdm
 
 
 @dataclasses.dataclass
-class SWIFTMechanismResult:
-  """Result of running the SWIFT mechanism."""
-
-  model: mbi.MarkovRandomField
-
-
-@dataclasses.dataclass
 class SWIFTMechanism(primitives.DPMechanism):
   """Configuration for the SWIFT mechanism.
 
@@ -101,7 +94,7 @@ class SWIFTMechanism(primitives.DPMechanism):
       *,
       initial_measurements: Sequence[mbi.LinearMeasurement] | None = None,
       initial_potentials: mbi.CliqueVector | None = None,
-  ) -> SWIFTMechanismResult:
+  ) -> common.DiscreteMechanismResult:
     """Runs the SWIFT mechanism on the given data.
 
     Args:
@@ -112,7 +105,7 @@ class SWIFTMechanism(primitives.DPMechanism):
         estimation.
 
     Returns:
-      A SWIFTMechanismResult containing the estimated data distribution.
+      A DiscreteMechanismResult containing the estimated data distribution.
 
     Raises:
       ValueError: If calibrate() has not been called.
@@ -204,7 +197,9 @@ class SWIFTMechanism(primitives.DPMechanism):
     )
     logging.info('[SWIFT] Estimated final model.')
 
-    return SWIFTMechanismResult(model=model)
+    return common.DiscreteMechanismResult(
+        model=model, measurements=measurements
+    )
 
 
 def _is_supported(clique: mbi.Clique, tree: nx.Graph) -> bool:

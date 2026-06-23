@@ -15,9 +15,10 @@
 """Common utility functions for synthetic data mechanisms."""
 
 from collections.abc import Iterable, Mapping
+import dataclasses
 import functools
 import itertools
-from typing import TypeAlias
+from typing import Any, TypeAlias
 
 from dpsynth import transformations
 import mbi
@@ -25,6 +26,23 @@ import more_itertools
 import numpy as np
 import scipy
 import scipy.special
+
+
+@dataclasses.dataclass
+class DiscreteMechanismResult:
+  """Result of running a discrete mechanism.
+
+  Attributes:
+    model: The estimated graphical model (Markov random field).
+    measurements: The noisy marginal measurements made by the mechanism.
+    diagnostics: Optional mechanism-specific diagnostic information.
+  """
+
+  model: mbi.MarkovRandomField
+  measurements: list[mbi.LinearMeasurement] = dataclasses.field(
+      default_factory=list
+  )
+  diagnostics: Any | None = None
 
 
 def exponential_mechanism(

@@ -157,13 +157,6 @@ def _select_two_way_marginal_queries(
 
 
 @dataclasses.dataclass
-class MSTMechanismResult:
-  """Result of running the MST mechanism."""
-
-  model: mbi.MarkovRandomField
-
-
-@dataclasses.dataclass
 class MSTMechanism(primitives.DPMechanism):
   """Configuration for the maximum spanning tree mechanism.
 
@@ -208,7 +201,7 @@ class MSTMechanism(primitives.DPMechanism):
       *,
       initial_measurements: list[mbi.LinearMeasurement] | None = None,
       initial_potentials: mbi.CliqueVector | None = None,
-  ) -> MSTMechanismResult:
+  ) -> common.DiscreteMechanismResult:
     """Runs the MST mechanism on the given data.
 
     Args:
@@ -219,7 +212,7 @@ class MSTMechanism(primitives.DPMechanism):
         estimation.
 
     Returns:
-      An MSTMechanismResult containing the estimated data distribution.
+      A DiscreteMechanismResult containing the estimated data distribution.
 
     Raises:
       ValueError: If calibrate() has not been called.
@@ -280,4 +273,6 @@ class MSTMechanism(primitives.DPMechanism):
         marginal_oracle=marginal_oracle,
     )
     logging.info('[MST]: Fit distribution to the noisy measurements.')
-    return MSTMechanismResult(model=model)
+    return common.DiscreteMechanismResult(
+        model=model, measurements=all_measurements
+    )

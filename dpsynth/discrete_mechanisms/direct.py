@@ -25,13 +25,6 @@ import numpy as np
 
 
 @dataclasses.dataclass
-class DirectMechanismResult:
-  """Result of running the direct mechanism."""
-
-  model: mbi.MarkovRandomField
-
-
-@dataclasses.dataclass
 class DirectMechanism(primitives.DPMechanism):
   """Configuration for the direct mechanism.
 
@@ -70,7 +63,7 @@ class DirectMechanism(primitives.DPMechanism):
       *,
       initial_measurements: list[mbi.LinearMeasurement] | None = None,
       initial_potentials: mbi.CliqueVector | None = None,
-  ) -> DirectMechanismResult:
+  ) -> common.DiscreteMechanismResult:
     """Generate synthetic data using user specified two way marginals."""
     if self.gdp_sigma is None:
       raise ValueError('Must call calibrate() before using the mechanism.')
@@ -95,4 +88,6 @@ class DirectMechanism(primitives.DPMechanism):
         potentials=initial_potentials,
         marginal_oracle=marginal_oracle,
     )
-    return DirectMechanismResult(model=model)
+    return common.DiscreteMechanismResult(
+        model=model, measurements=all_measurements
+    )
