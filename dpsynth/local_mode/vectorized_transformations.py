@@ -50,10 +50,12 @@ def discrete_encode(
   Returns:
     A 1-D integer array of indices into ``attribute_domain.possible_values``.
   """
-  lookup = {v: i for i, v in enumerate(attribute_domain.possible_values)}
+  lookup = {str(v): i for i, v in enumerate(attribute_domain.possible_values)}
   default = attribute_domain.out_of_domain_index
   # Loop over unique values only (typically ≪ len(data) for categoricals),
-  # then remap via pure numpy fancy indexing.
+  # then remap via pure numpy fancy indexing.  Normalizing to str avoids
+  # mixed-type comparison errors in np.unique on numpy 2.x (e.g. NaN + str).
+  data = np.asarray(data, dtype=str)
   uniq, inv = np.unique(data, return_inverse=True)
   uniq_encoded = np.array([lookup.get(v, default) for v in uniq], dtype=int)
   return uniq_encoded[inv]
