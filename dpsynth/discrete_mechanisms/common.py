@@ -14,7 +14,7 @@
 
 """Common utility functions for synthetic data mechanisms."""
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 import dataclasses
 import functools
 import itertools
@@ -26,6 +26,7 @@ import more_itertools
 import numpy as np
 import scipy
 import scipy.special
+import tqdm
 
 
 @dataclasses.dataclass
@@ -261,3 +262,27 @@ def compiled_workload(
       for cl in downward_closure(workload.keys())
       if domain.size(cl) <= max_marginal_size
   }
+
+
+def compute_independence_errors(
+    data: mbi.Projectable,
+    model: mbi.MarkovRandomField,
+    cliques: Sequence[mbi.Clique],
+) -> dict[mbi.Clique, float]:
+  """Computes L1 errors between actual marginals and the independence model."""
+  total = float(model.total)
+
+  # Pure numpy to avoid XLA recompilation: each distinct clique shape triggers
+  # a separate compilation, which dominates runtime for large candidate sets.
+  oneway = {
+      a: np.asarray(model.project((a,)).datavector()) / total
+      for a in data.domain
+  }
+
+  errors = {}
+  for cl in tqdm.tqdm(cliques, desc='Computing independence errors'):
+    estimate = functools.reduce(np.multiply.outer, (oneway[a] for a in cl))
+    actual = np.asarray(data.project(cl).datavector(flatten=False))
+    error = np.abs(total * estimate - actual).sum()
+    errors[cl] = error
+  return errors

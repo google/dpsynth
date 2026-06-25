@@ -17,7 +17,7 @@
 from collections.abc import Iterable, Mapping
 import dataclasses
 import time
-from typing import TypeAlias
+import typing
 
 from absl import logging
 import dp_accounting
@@ -29,7 +29,7 @@ import mbi
 import mbi.junction_tree
 import numpy as np
 
-MarginalQuery: TypeAlias = tuple[str, ...]
+MarginalQuery: typing.TypeAlias = tuple[str, ...]
 
 
 def _filter_candidates(
@@ -265,11 +265,16 @@ class AIMGDPMechanism(primitives.DPMechanism):
     assert isinstance(model, mbi.MarkovRandomField)
     logging.info('[AIM] Estimated initial model.')
 
+    # The initial model is fitted from 1-way measurements only, so it IS the
+    # independence model. compute_independence_errors is much faster than
+    # bulk_variable_elimination for this case (pure numpy, no XLA compilation).
     budget_remaining -= 0.5 * budget_per_round
-    estimates = mbi.marginal_oracles.bulk_variable_elimination(
-        model.potentials, list(candidates), model.total
+    per_candidate_sigma = accounting.gdp_gaussian_sigma(
+        0.5 * budget_per_round / len(candidates)
     )
-    errors = _compute_dp_errors(rng, answers, estimates, 0.5 * budget_per_round)
+    errors = common.compute_independence_errors(data, model, list(candidates))
+    for cl in errors:
+      errors[cl] += rng.normal(loc=0.0, scale=per_candidate_sigma)
     logging.info('[AIM] Computed initial errors.')
 
     t = 0
@@ -338,7 +343,7 @@ class AIMGDPMechanism(primitives.DPMechanism):
           iters=self.pgm_iters,
           callback_fn=callback_fn,
       )
-      assert isinstance(model, mbi.MarkovRandomField)
+      model = typing.cast(mbi.MarkovRandomField, model)
       t3 = time.time()
       logging.info('[AIM] Mirror descent took %.2fs', t3 - t2)
 

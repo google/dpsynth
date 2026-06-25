@@ -29,6 +29,7 @@ from collections.abc import Iterable, Mapping, Sequence
 import dataclasses
 import functools
 import math
+import typing
 
 from absl import logging
 import dp_accounting
@@ -37,11 +38,9 @@ from dpsynth.discrete_mechanisms import clique_tree
 from dpsynth.discrete_mechanisms import common
 from dpsynth.discrete_mechanisms import swift_utils
 from dpsynth.local_mode import primitives
-import jax
 import mbi
 import networkx as nx
 import numpy as np
-import tqdm
 
 
 @dataclasses.dataclass
@@ -151,7 +150,7 @@ class SWIFTMechanism(primitives.DPMechanism):
         iters=self.pgm_iters,
         potentials=potentials,
     )
-    assert isinstance(model, mbi.MarkovRandomField)
+    model = typing.cast(mbi.MarkovRandomField, model)
     logging.info('[SWIFT] Estimated initial model.')
 
     ###########################################
@@ -293,21 +292,14 @@ def _compute_initial_errors(
     data: mbi.Projectable,
     model: mbi.MarkovRandomField,
     cliques: Sequence[mbi.Clique],
-    gdp_mu: float,
+    gdp_budget: float,
 ) -> dict[mbi.Clique, float]:
-  """Computes the initial errors for the SWIFT mechanism."""
-  gdp_per_clique = gdp_mu / len(cliques)
-  sigma_per_clique = accounting.gdp_gaussian_sigma(gdp_per_clique)
-  errors = {}
-  total = float(model.total)
-  oneway = {a: model.project((a,)) / total for a in data.domain}
-  oneway = jax.tree.map(np.asarray, oneway)
-  for cl in tqdm.tqdm(cliques, desc='Computing initial errors'):
-    estimate = functools.reduce(mbi.Factor.__mul__, (oneway[a] for a in cl))
-    actual = data.project(cl)
-    diff = (total * estimate - actual).datavector()
-    error = np.abs(diff).sum()
-    errors[cl] = error + rng.normal(loc=0.0, scale=sigma_per_clique)
+  """Computes DP initial errors for the SWIFT mechanism."""
+  budget_per_clique = gdp_budget / len(cliques)
+  sigma_per_clique = accounting.gdp_gaussian_sigma(budget_per_clique)
+  errors = common.compute_independence_errors(data, model, cliques)
+  for cl in errors:
+    errors[cl] += rng.normal(loc=0.0, scale=sigma_per_clique)
   return errors
 
 

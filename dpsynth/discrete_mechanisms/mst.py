@@ -19,6 +19,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 import dataclasses
 import itertools
+import typing
 
 from absl import logging
 import dp_accounting
@@ -29,7 +30,6 @@ import mbi
 import networkx as nx
 import numpy as np
 from scipy.cluster.hierarchy import DisjointSet  # pylint: disable=g-importing-member
-import tqdm
 
 
 def dp_maximum_spanning_tree(
@@ -127,26 +127,19 @@ def _select_two_way_marginal_queries(
   independent_model = mbi.estimation.MirrorDescent().estimate(
       data.domain, one_way_measurements, iters=2500
   )
-
-  oneway_marginals = {
-      attr: np.array(independent_model.project(attr).datavector())
-      for attr in data.domain.attributes
-  }
+  independent_model = typing.cast(mbi.MarkovRandomField, independent_model)
 
   # Construct a complete graph where nodes=attributes and weight of edge
   # (a, b) is a sensitivity 1 measure of correlation between a and b.
-  weights = {}
   candidates = [
       cl
       for cl in itertools.combinations(data.domain.attributes, 2)
       if data.domain.size(cl) <= maximum_marginal_size
   ]
   logging.info('[MST]: Computing Quality Scores')
-  for a, b in tqdm.tqdm(candidates):
-    # For efficiency, we compute the outer product of one-way marginals.
-    xhat = np.outer(oneway_marginals[a], oneway_marginals[b]).flatten()
-    x = data.project((a, b)).datavector()
-    weights[a, b] = np.linalg.norm(x - xhat, 1)
+  weights = common.compute_independence_errors(
+      data, independent_model, candidates
+  )
 
   return dp_maximum_spanning_tree(
       rng,
