@@ -214,7 +214,7 @@ class SWIFTMechanism(primitives.DPMechanism):
           logging.warning('[SWIFT] PGM precompile failed (non-fatal): %s', e)
         logging.info('[SWIFT] PGM precompile wait: %.2fs', time.time() - t0)
 
-      callback_fn = mbi.callbacks.default(measurements, domain=domain)
+      callback_fn = mbi.callbacks.default(measurements, domain)
       final_model = estimator.estimate(
           domain,
           measurements,

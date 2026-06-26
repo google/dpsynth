@@ -238,7 +238,7 @@ def generate_synthetic_data_from_marginals(
 
   if log:
     callback_fn = mbi.callbacks.default(
-        measurements, duck_typed_exact_data, domain=mbi_domain
+        measurements, mbi_domain, data=duck_typed_exact_data
     )
   else:
     callback_fn = lambda _: None

@@ -267,9 +267,7 @@ class MSTMechanism(primitives.DPMechanism):
           all_measurements,
           iters=self.pgm_iters,
           potentials=potentials,
-          callback_fn=mbi.callbacks.default(
-              all_measurements, domain=data.domain
-          ),
+          callback_fn=mbi.callbacks.default(all_measurements, data.domain),
       )
       logging.info('[MST]: Fit distribution to the noisy measurements.')
     diagnostics = common.clique_stats(model)

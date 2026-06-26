@@ -330,7 +330,7 @@ class AIMGDPMechanism(primitives.DPMechanism):
       # Estimate the data distribution using Private-PGM. #
       #####################################################
       with common.timed(phase_times, 'estimation'):
-        callback_fn = mbi.callbacks.default(measurements, domain=domain)
+        callback_fn = mbi.callbacks.default(measurements, domain)
         measured_cliques = list(set(m.clique for m in measurements))
         warm_start = model.potentials.expand(measured_cliques)
         model = mbi.estimation.MirrorDescent(
