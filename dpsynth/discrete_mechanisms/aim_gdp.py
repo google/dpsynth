@@ -16,7 +16,6 @@
 
 from collections.abc import Iterable, Mapping
 import dataclasses
-import time
 import typing
 
 from absl import logging
@@ -216,6 +215,7 @@ class AIMGDPMechanism(primitives.DPMechanism):
       raise ValueError('Must call calibrate() before using the mechanism.')
 
     logging.info('[AIM] Starting Mechanism.')
+    phase_times = {}
 
     # Convert end-to-end GDP sigma to budget for internal allocation.
     gdp_budget = 1.0 / self.gdp_sigma**2
@@ -288,28 +288,26 @@ class AIMGDPMechanism(primitives.DPMechanism):
       ########################################################################
       # Select a marginal query worst approximated by the current model.     #
       ########################################################################
-      t0 = time.time()
-      budget_remaining -= budget_per_round
-      measure_budget = budget_per_round * (1 - self.select_budget_fraction)
-      select_budget = budget_per_round * self.select_budget_fraction
-      measure_sigma = accounting.gdp_gaussian_sigma(measure_budget)
-      percent_used = (gdp_budget - budget_remaining) / gdp_budget
-      size_limit = self.max_model_size * percent_used
-      small_candidates = _filter_candidates(candidates, model, size_limit)
+      with common.timed(phase_times, 'selection'):
+        budget_remaining -= budget_per_round
+        measure_budget = budget_per_round * (1 - self.select_budget_fraction)
+        select_budget = budget_per_round * self.select_budget_fraction
+        measure_sigma = accounting.gdp_gaussian_sigma(measure_budget)
+        percent_used = (gdp_budget - budget_remaining) / gdp_budget
+        size_limit = self.max_model_size * percent_used
+        small_candidates = _filter_candidates(candidates, model, size_limit)
 
-      marginal_query = _worst_approximated(
-          rng,
-          candidates=small_candidates,
-          errors=errors,
-          answers=answers,
-          model=model,
-          select_budget=select_budget,
-          measure_sigma=measure_sigma,
-          max_new_evals=self.max_candidates_per_round,
-      )
+        marginal_query = _worst_approximated(
+            rng,
+            candidates=small_candidates,
+            errors=errors,
+            answers=answers,
+            model=model,
+            select_budget=select_budget,
+            measure_sigma=measure_sigma,
+            max_new_evals=self.max_candidates_per_round,
+        )
 
-      t1 = time.time()
-      logging.info('[AIM] Found worst candidate in %.2fs', t1 - t0)
       logging.info(
           '[AIM] Round %d, Budget used: %.4f, Measuring: %s, Candidates: %d',
           t,
@@ -321,31 +319,30 @@ class AIMGDPMechanism(primitives.DPMechanism):
       ######################################################################
       # Measure the marginal query privately using the Gaussian mechanism. #
       ######################################################################
-      measurement = common.measure_marginals_with_noise(
-          rng, data, [marginal_query], measure_sigma
-      )[0]
-      measurements.append(measurement)
-      old_estimate = model.project(marginal_query).datavector()
+      with common.timed(phase_times, 'measurement'):
+        measurement = common.measure_marginals_with_noise(
+            rng, data, [marginal_query], measure_sigma
+        )[0]
+        measurements.append(measurement)
+        old_estimate = model.project(marginal_query).datavector()
 
       #####################################################
       # Estimate the data distribution using Private-PGM. #
       #####################################################
-      t2 = time.time()
-      callback_fn = mbi.callbacks.default(measurements, domain=domain)
-      measured_cliques = list(set(m.clique for m in measurements))
-      warm_start = model.potentials.expand(measured_cliques)
-      model = mbi.estimation.MirrorDescent(
-          marginal_oracle=self.marginal_oracle,
-      ).estimate(
-          domain,
-          measurements,
-          potentials=warm_start,
-          iters=self.pgm_iters,
-          callback_fn=callback_fn,
-      )
-      model = typing.cast(mbi.MarkovRandomField, model)
-      t3 = time.time()
-      logging.info('[AIM] Mirror descent took %.2fs', t3 - t2)
+      with common.timed(phase_times, 'estimation'):
+        callback_fn = mbi.callbacks.default(measurements, domain=domain)
+        measured_cliques = list(set(m.clique for m in measurements))
+        warm_start = model.potentials.expand(measured_cliques)
+        model = mbi.estimation.MirrorDescent(
+            marginal_oracle=self.marginal_oracle,
+        ).estimate(
+            domain,
+            measurements,
+            potentials=warm_start,
+            iters=self.pgm_iters,
+            callback_fn=callback_fn,
+        )
+        model = typing.cast(mbi.MarkovRandomField, model)
 
       new_estimate = model.project(marginal_query).datavector()
 
@@ -364,8 +361,12 @@ class AIMGDPMechanism(primitives.DPMechanism):
             '[AIM] Increasing budget per round: %.5f', budget_per_round
         )
 
+    diagnostics = common.clique_stats(model)
+    diagnostics.phase_times = phase_times
+    diagnostics.num_rounds = t
     return common.DiscreteMechanismResult(
         model=model,
         synthetic_data=model.synthetic_data(),
         measurements=measurements,
+        diagnostics=diagnostics,
     )

@@ -68,27 +68,34 @@ class DirectMechanism(primitives.DPMechanism):
     if self.gdp_sigma is None:
       raise ValueError('Must call calibrate() before using the mechanism.')
 
+    phase_times = {}
+
     # measure_marginals_with_noise splits gdp_sigma across the queries
     # internally via weight normalization.
-    new_measurements = common.measure_marginals_with_noise(
-        rng, data, self.prespecified_marginal_queries, self.gdp_sigma
-    )
-    if initial_measurements:
-      all_measurements = initial_measurements + new_measurements
-    else:
-      all_measurements = new_measurements
+    with common.timed(phase_times, 'measurement'):
+      new_measurements = common.measure_marginals_with_noise(
+          rng, data, self.prespecified_marginal_queries, self.gdp_sigma
+      )
+      if initial_measurements:
+        all_measurements = initial_measurements + new_measurements
+      else:
+        all_measurements = new_measurements
 
     # fit a distribution to the noisy measurements
-    model = mbi.estimation.MirrorDescent(
-        marginal_oracle=self.marginal_oracle,
-    ).estimate(
-        data.domain,
-        all_measurements,
-        iters=self.pgm_iters,
-        potentials=initial_potentials,
-    )
+    with common.timed(phase_times, 'estimation'):
+      model = mbi.estimation.MirrorDescent(
+          marginal_oracle=self.marginal_oracle,
+      ).estimate(
+          data.domain,
+          all_measurements,
+          iters=self.pgm_iters,
+          potentials=initial_potentials,
+      )
+    diagnostics = common.clique_stats(model)
+    diagnostics.phase_times = phase_times
     return common.DiscreteMechanismResult(
         model=model,
         synthetic_data=model.synthetic_data(),
         measurements=all_measurements,
+        diagnostics=diagnostics,
     )
