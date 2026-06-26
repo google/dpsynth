@@ -69,32 +69,38 @@ class IndependentMechanism(primitives.DPMechanism):
     # per-query sigma = gdp_sigma * sqrt(d).
     attributes = len(data.domain)
     per_query_sigma = self.gdp_sigma * attributes**0.5
+    phase_times = {}
     measurements = initial_measurements or []
     existing_cliques = {m.clique for m in measurements}
-    for attr in data.domain:
-      clique = (attr,)
-      if clique in existing_cliques:
-        continue
-      marginal = data.project(clique).datavector()
-      noisy_marginal = (
-          marginal + rng.normal(size=marginal.shape) * per_query_sigma
+    with common.timed(phase_times, 'measurement'):
+      for attr in data.domain:
+        clique = (attr,)
+        if clique in existing_cliques:
+          continue
+        marginal = data.project(clique).datavector()
+        noisy_marginal = (
+            marginal + rng.normal(size=marginal.shape) * per_query_sigma
+        )
+        measurements.append(mbi.LinearMeasurement(noisy_marginal, clique))
+
+    with common.timed(phase_times, 'estimation'):
+      potentials = initial_potentials
+      if potentials is not None:
+        potentials = potentials.expand([m.clique for m in measurements])
+
+      model = mbi.estimation.MirrorDescent(
+          marginal_oracle=self.marginal_oracle,
+      ).estimate(
+          data.domain,
+          measurements,
+          iters=self.pgm_iters,
+          potentials=potentials,
       )
-      measurements.append(mbi.LinearMeasurement(noisy_marginal, clique))
-
-    potentials = initial_potentials
-    if potentials is not None:
-      potentials = potentials.expand([m.clique for m in measurements])
-
-    model = mbi.estimation.MirrorDescent(
-        marginal_oracle=self.marginal_oracle,
-    ).estimate(
-        data.domain,
-        measurements,
-        iters=self.pgm_iters,
-        potentials=potentials,
-    )
+    diagnostics = common.clique_stats(model)
+    diagnostics.phase_times = phase_times
     return common.DiscreteMechanismResult(
         model=model,
         synthetic_data=model.synthetic_data(),
         measurements=measurements,
+        diagnostics=diagnostics,
     )

@@ -114,6 +114,7 @@ class SWIFTMechanism(primitives.DPMechanism):
       raise ValueError('Must call calibrate() before using the mechanism.')
 
     logging.info('[SWIFT] Starting Mechanism.')
+    phase_times = {}
 
     #########################################################################
     # Compile workload into candidate measurements, and precompute answers. #
@@ -157,18 +158,19 @@ class SWIFTMechanism(primitives.DPMechanism):
     ###########################################
     # Select subset of candidates to measure. #
     ###########################################
-    assert 0 < self.select_budget_frac < 1
-    l1_error_budget = self.select_budget_frac * gdp_budget
-    budget_remaining -= l1_error_budget
+    with common.timed(phase_times, 'selection'):
+      assert 0 < self.select_budget_frac < 1
+      l1_error_budget = self.select_budget_frac * gdp_budget
+      budget_remaining -= l1_error_budget
 
-    errors = _compute_initial_errors(
-        rng, answers, model, list(candidates), l1_error_budget
-    )
-    logging.info('[SWIFT] Computed initial errors.')
+      errors = _compute_initial_errors(
+          rng, answers, model, list(candidates), l1_error_budget
+      )
+      logging.info('[SWIFT] Computed initial errors.')
 
-    selected, jtree = select_queries(
-        errors, candidates, domain, self.max_clique_size, budget_remaining
-    )
+      selected, jtree = select_queries(
+          errors, candidates, domain, self.max_clique_size, budget_remaining
+      )
 
     ########################################################
     # Precompile MirrorDescent + synth while measuring.    #
@@ -192,34 +194,36 @@ class SWIFTMechanism(primitives.DPMechanism):
     ##########################################
     # Measure the selected marginal queries. #
     ##########################################
-    logging.info('[SWIFT] Starting measurements.')
-    new_measurements, _ = _measure_selected_marginals(
-        rng, answers, selected, budget_remaining
-    )
-    measurements.extend(new_measurements)
-    logging.info('[SWIFT] Finished measurements.')
+    with common.timed(phase_times, 'measurement'):
+      logging.info('[SWIFT] Starting measurements.')
+      new_measurements, _ = _measure_selected_marginals(
+          rng, answers, selected, budget_remaining
+      )
+      measurements.extend(new_measurements)
+      logging.info('[SWIFT] Finished measurements.')
 
     ########################################################
     # Estimate the model using all measurements            #
     ########################################################
-    if pgm_future is not None:
-      t0 = time.time()
-      try:
-        pgm_future.result()
-      except Exception as e:  # pylint: disable=broad-exception-caught
-        logging.warning('[SWIFT] PGM precompile failed (non-fatal): %s', e)
-      logging.info('[SWIFT] PGM precompile wait: %.2fs', time.time() - t0)
+    with common.timed(phase_times, 'estimation'):
+      if pgm_future is not None:
+        t0 = time.time()
+        try:
+          pgm_future.result()
+        except Exception as e:  # pylint: disable=broad-exception-caught
+          logging.warning('[SWIFT] PGM precompile failed (non-fatal): %s', e)
+        logging.info('[SWIFT] PGM precompile wait: %.2fs', time.time() - t0)
 
-    callback_fn = mbi.callbacks.default(measurements, domain=domain)
-    final_model = estimator.estimate(
-        domain,
-        measurements,
-        iters=self.pgm_iters,
-        potentials=potentials,
-        callback_fn=callback_fn,
-    )
-    assert isinstance(final_model, mbi.MarkovRandomField)
-    logging.info('[SWIFT] Estimated final model.')
+      callback_fn = mbi.callbacks.default(measurements, domain=domain)
+      final_model = estimator.estimate(
+          domain,
+          measurements,
+          iters=self.pgm_iters,
+          potentials=potentials,
+          callback_fn=callback_fn,
+      )
+      assert isinstance(final_model, mbi.MarkovRandomField)
+      logging.info('[SWIFT] Estimated final model.')
 
     if synth_future is not None:
       t0 = time.time()
@@ -232,10 +236,13 @@ class SWIFTMechanism(primitives.DPMechanism):
     syn = mbi.extensions.synthetic_data(final_model, rows)
     logging.info('[SWIFT] Generated %d synthetic records.', rows)
 
+    diagnostics = common.clique_stats(final_model)
+    diagnostics.phase_times = phase_times
     return common.DiscreteMechanismResult(
         model=final_model,
         synthetic_data=syn,
         measurements=measurements,
+        diagnostics=diagnostics,
     )
 
 

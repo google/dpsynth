@@ -213,38 +213,42 @@ class MSTMechanism(primitives.DPMechanism):
     if self.zcdp_rho is None:
       raise ValueError('Must call calibrate() before using the mechanism.')
     logging.info('[MST]: Starting MST mechanism.')
+    phase_times = {}
     budget_remaining = self.zcdp_rho
 
-    if initial_measurements is None:
-      budget_remaining -= self.one_way_budget_fraction * self.zcdp_rho
-      one_way_rho = self.zcdp_rho * self.one_way_budget_fraction
-      one_way_sigma = accounting.zcdp_gaussian_sigma(one_way_rho)
-      one_way_measurements = common.measure_marginals_with_noise(
-          rng,
-          data,
-          marginal_queries=[(a,) for a in data.domain],
-          gdp_sigma=one_way_sigma,
-      )
-    else:
-      one_way_measurements = initial_measurements
+    with common.timed(phase_times, 'measurement'):
+      if initial_measurements is None:
+        budget_remaining -= self.one_way_budget_fraction * self.zcdp_rho
+        one_way_rho = self.zcdp_rho * self.one_way_budget_fraction
+        one_way_sigma = accounting.zcdp_gaussian_sigma(one_way_rho)
+        one_way_measurements = common.measure_marginals_with_noise(
+            rng,
+            data,
+            marginal_queries=[(a,) for a in data.domain],
+            gdp_sigma=one_way_sigma,
+        )
+      else:
+        one_way_measurements = initial_measurements
 
     exponential_rho = self.select_budget_fraction * self.zcdp_rho
     budget_remaining -= exponential_rho
     # Select and measure 2-way marginals using rho/3 budget for each step.
-    two_way_marginal_queries = _select_two_way_marginal_queries(
-        rng,
-        data,
-        exponential_rho,
-        one_way_measurements,
-        maximum_marginal_size=self.maximum_marginal_size,
-    )
-    logging.info('[MST]: Selected two-way marginal queries.')
-    gaussian_rho = budget_remaining
-    sigma = accounting.zcdp_gaussian_sigma(gaussian_rho)
-    two_way_measurements = common.measure_marginals_with_noise(
-        rng, data, two_way_marginal_queries, sigma
-    )
-    logging.info('[MST]: Measured two-way marginals.')
+    with common.timed(phase_times, 'selection'):
+      two_way_marginal_queries = _select_two_way_marginal_queries(
+          rng,
+          data,
+          exponential_rho,
+          one_way_measurements,
+          maximum_marginal_size=self.maximum_marginal_size,
+      )
+      logging.info('[MST]: Selected two-way marginal queries.')
+    with common.timed(phase_times, 'measurement'):
+      gaussian_rho = budget_remaining
+      sigma = accounting.zcdp_gaussian_sigma(gaussian_rho)
+      two_way_measurements = common.measure_marginals_with_noise(
+          rng, data, two_way_marginal_queries, sigma
+      )
+      logging.info('[MST]: Measured two-way marginals.')
     all_measurements = one_way_measurements + two_way_measurements
     # Fit a distribution to the noisy measurements using Private-PGM.
     potentials = initial_potentials
@@ -255,18 +259,24 @@ class MSTMechanism(primitives.DPMechanism):
         data.domain, [m.clique for m in all_measurements]
     )
     logging.info('[MST]: Model size: %d MB', model_size)
-    model = mbi.estimation.MirrorDescent(
-        marginal_oracle=self.marginal_oracle,
-    ).estimate(
-        data.domain,
-        all_measurements,
-        iters=self.pgm_iters,
-        potentials=potentials,
-        callback_fn=mbi.callbacks.default(all_measurements, domain=data.domain),
-    )
-    logging.info('[MST]: Fit distribution to the noisy measurements.')
+    with common.timed(phase_times, 'estimation'):
+      model = mbi.estimation.MirrorDescent(
+          marginal_oracle=self.marginal_oracle,
+      ).estimate(
+          data.domain,
+          all_measurements,
+          iters=self.pgm_iters,
+          potentials=potentials,
+          callback_fn=mbi.callbacks.default(
+              all_measurements, domain=data.domain
+          ),
+      )
+      logging.info('[MST]: Fit distribution to the noisy measurements.')
+    diagnostics = common.clique_stats(model)
+    diagnostics.phase_times = phase_times
     return common.DiscreteMechanismResult(
         model=model,
         synthetic_data=model.synthetic_data(),
         measurements=all_measurements,
+        diagnostics=diagnostics,
     )
