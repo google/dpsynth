@@ -51,12 +51,11 @@ from typing import Any, Literal, TypeAlias
 
 import attr
 import numpy as np
-import pandas as pd
 import yaml
 
 PathType = pathlib.Path
 
-CategoricalValue: TypeAlias = None | bool | int | str | pd.Interval
+CategoricalValue: TypeAlias = None | bool | int | str
 
 IntervalHandling = Literal['midpoint', 'sample', 'interval']
 
@@ -154,7 +153,7 @@ class NumericalAttribute:
       numerical values. 'midpoint' returns the interval midpoint (or the finite
       endpoint if the other is infinite). 'sample' draws uniformly from the
       interval (or returns the finite endpoint if the other is infinite).
-      'interval' keeps the pd.Interval in the output unchanged.
+      'interval' keeps the interval (string) in the output unchanged.
     description: An optional semantic description of the attribute.
   """
 
