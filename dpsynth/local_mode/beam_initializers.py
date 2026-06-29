@@ -32,6 +32,7 @@ from typing import Any
 
 import apache_beam as beam
 from dpsynth.local_mode import initialization
+import mbi
 import numpy as np
 
 # A single row of tabular data: column name -> raw value.
@@ -63,10 +64,10 @@ class _EncodeColumns(beam.DoFn):
         self._specs.append((column, 'numerical', meta))
 
       elif isinstance(init, initialization.CategoricalInitializer):
-        lookup = {
-            str(v): i for i, v in enumerate(init.attribute.possible_values)
+        meta = {
+            'lookup': init.attribute.lookup,
+            'default': init.attribute.out_of_domain_index,
         }
-        meta = {'lookup': lookup, 'default': init.attribute.out_of_domain_index}
         self._specs.append((column, 'categorical', meta))
       elif isinstance(init, initialization.OpenSetCategoricalInitializer):
         self._specs.append((column, 'openset', {}))
@@ -239,4 +240,136 @@ class BeamInitialize(beam.PTransform):
             initializers=self._initializers,
             rng=self._rng,
         )
+    )
+
+
+class _EncodeAndProject(beam.DoFn):
+  """Integer-encodes each row and emits (clique_index, linear_index) pairs."""
+
+  def __init__(
+      self,
+      column_measurements: dict[str, initialization.ColumnMeasurement],
+      domains: dict[str, Any],
+      workload: list[mbi.Clique],
+  ):
+    super().__init__()
+    self._cms = column_measurements
+    self._domains = domains
+    self._clique_meta: list[tuple[int, tuple[str, ...], tuple[int, ...]]] = []
+    for idx, clique in enumerate(workload):
+      shape = tuple(
+          column_measurements[c].categorical_attribute.size for c in clique
+      )
+      self._clique_meta.append((idx, clique, shape))
+
+  def _encode_value(self, col: str, raw_value: Any) -> int:
+    """Encodes a single raw value to an integer index."""
+    cm = self._cms[col]
+    if cm.bin_edges is not None:
+      attr = self._domains[col]
+      value = attr.standardize(raw_value)
+      if math.isnan(value):
+        return 0  # OOD bucket (clip_to_range=False).
+      offset = 0 if attr.clip_to_range else 1
+      return int(np.searchsorted(cm.bin_edges, value, side='left')) + offset
+    else:
+      cat = cm.categorical_attribute
+      return cat.lookup.get(str(raw_value), cat.out_of_domain_index)
+
+  def process(self, row: Row):
+    encoded = {col: self._encode_value(col, row.get(col)) for col in self._cms}
+    for clique_idx, clique_cols, shape in self._clique_meta:
+      multi_index = tuple(encoded[c] for c in clique_cols)
+      linear = int(np.ravel_multi_index(multi_index, shape))
+      yield clique_idx, linear
+
+
+def _unpack_marginal_count(element):
+  """Restructures ((clique_idx, linear_idx), count) for GroupByKey."""
+  (clique_idx, linear_idx), count = element
+  return clique_idx, (linear_idx, count)
+
+
+def _assemble_dense_marginal(element, clique_meta, mbi_domain):
+  """Converts sparse counts to an mbi.Factor for one clique."""
+  clique_idx, sparse_pairs = element
+  _, clique_cols, shape = clique_meta[clique_idx]
+  total_size = math.prod(shape)
+  dense = np.zeros(total_size, dtype=np.float64)
+  for linear_idx, count in sparse_pairs:
+    dense[linear_idx] = count
+  return mbi.Factor(mbi_domain.project(clique_cols), dense.reshape(shape))
+
+
+def _build_mbi_domain(column_measurements):
+  """Builds an mbi.Domain from ColumnMeasurement results."""
+  attrs = tuple(column_measurements.keys())
+  shape = tuple(
+      r.categorical_attribute.size for r in column_measurements.values()
+  )
+  labels = tuple(
+      tuple(r.categorical_attribute.possible_values)
+      for r in column_measurements.values()
+  )
+  return mbi.Domain(attributes=attrs, shape=shape, labels=labels)
+
+
+class ComputeMarginals(beam.PTransform):
+  """Computes a workload of marginals over integer-encoded rows.
+
+  Takes raw rows plus the ``ColumnMeasurement`` results from stage 1,
+  integer-encodes each row, and computes the contingency table for each
+  clique in the workload. The output is a singleton ``PCollection``
+  containing one ``mbi.CliqueVector``.
+
+  Attributes:
+    column_measurements: Per-column results from stage 1 initialization.
+    domains: Original attribute domain specs (needed for numerical encoding).
+    workload: List of cliques (tuples of column names) to measure.
+  """
+
+  def __init__(
+      self,
+      column_measurements: dict[str, initialization.ColumnMeasurement],
+      domains: dict[str, Any],
+      workload: list[mbi.Clique],
+  ):
+    super().__init__()
+    self._column_measurements = column_measurements
+    self._domains = domains
+    self._workload = workload
+    self._mbi_domain = _build_mbi_domain(column_measurements)
+    self._clique_meta = []
+    for idx, clique in enumerate(workload):
+      shape = self._mbi_domain.project(clique).shape
+      self._clique_meta.append((idx, clique, shape))
+
+  def expand(self, rows: beam.PCollection[Row]):
+    mbi_domain = self._mbi_domain
+
+    def _to_clique_vector(factors):
+      cliques = tuple(f.domain.attributes for f in factors)
+      arrays = {cl: f for cl, f in zip(cliques, factors)}
+      return mbi.CliqueVector(mbi_domain, cliques, arrays)
+
+    return (
+        rows
+        | 'EncodeProject'
+        >> beam.ParDo(
+            _EncodeAndProject(
+                self._column_measurements, self._domains, self._workload
+            )
+        )
+        | 'CountPerElement' >> beam.combiners.Count.PerElement()
+        | 'Unpack' >> beam.Map(_unpack_marginal_count)
+        | 'GroupByClique' >> beam.GroupByKey()
+        | 'ToLists' >> beam.MapTuple(_materialize_pairs)
+        | 'ToFactor'
+        >> beam.Map(
+            _assemble_dense_marginal,
+            clique_meta=self._clique_meta,
+            mbi_domain=mbi_domain,
+        )
+        | 'ToList' >> beam.combiners.ToList()
+        | 'BuildCliqueVector' >> beam.Map(_to_clique_vector)
     )
