@@ -11,7 +11,7 @@
 
 *   [Why DPSynth?](index.md#why-dpsynth)
 *   [Core APIs and Execution Models](index.md#core-apis-and-execution-models)
-    *   [1. In-Memory DataFrame API (`dpsynth.generate`)](index.md#1-in-memory-dataframe-api-dpsynthgenerate)
+    *   [1. In-Memory DataFrame API (`dpsynth.TabularSynthesizer`)](index.md#1-in-memory-dataframe-api-dpsynth-tabularsynthesizer)
     *   [2. Scalable PipelineBackend API (`dpsynth.data_generation`)](index.md#2-scalable-pipelinebackend-api-dpsynthdata_generation)
 *   [Documentation Sitemap & Navigation](index.md#documentation-sitemap--navigation)
 *   [Supported Synthesis Algorithms](index.md#supported-synthesis-algorithms)
@@ -46,7 +46,7 @@
 <details>
 <summary>📁 <a href="in_memory_api.md">In-Memory DataFrame API Guide</a></summary>
 
-*   [Python API: `dpsynth.generate`](in_memory_api.md#python-api-dpsynthgenerate)
+*   [Python API: `dpsynth.TabularSynthesizer`](in_memory_api.md#python-api-dpsynth-tabularsynthesizer)
     *   [Function Signature](in_memory_api.md#function-signature)
     *   [Key Arguments](in_memory_api.md#key-arguments)
 *   [End-to-End Python Example](in_memory_api.md#end-to-end-python-example)

@@ -12,149 +12,33 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""Smoke test for the deprecated data_generation_v2 shim."""
+
+import warnings
+
 from absl.testing import absltest
-from dpsynth import constraints
 from dpsynth import data_generation_v2
 from dpsynth import domain
 import pandas as pd
 
 
-class MechanismTest(absltest.TestCase):
+class DeprecationShimTest(absltest.TestCase):
 
-  def test_end_to_end_categorical(self):
+  def test_generate_emits_deprecation_warning(self):
     attribute_domains = {
-        "A": domain.CategoricalAttribute(
-            possible_values=["a", "b", "c"], out_of_domain_index=0
-        ),
-        "B": domain.CategoricalAttribute(
-            possible_values=["x", "y", "z"], out_of_domain_index=0
-        ),
-        "C": domain.OpenSetCategoricalAttribute(),
-    }
-
-    values = [
-        ["a", "x", "4"],
-        ["b", "y", "4"],
-        ["c", "z", "4"],
-    ]
-
-    df = pd.DataFrame(data=values, columns=["A", "B", "C"])
-    synthetic_df = data_generation_v2.generate(
-        df,
-        attribute_domains,
-        epsilon=100,
-        delta=0.1,
-        skip_compression=True,
-    )
-    self.assertIsInstance(synthetic_df, pd.DataFrame)
-
-  def test_end_to_end_numerical(self):
-    attribute_domains = {
-        "A": domain.NumericalAttribute(min_value=0, max_value=10),
-        "B": domain.NumericalAttribute(min_value=-10, max_value=10),
-    }
-
-    values = [
-        [5, 5],
-        [5, -10],
-        [0, -5],
-    ]
-
-    df = pd.DataFrame(data=values, columns=["A", "B"], dtype=float)
-    synthetic_df = data_generation_v2.generate(df, attribute_domains, 1000, 0.1)
-    self.assertListEqual(synthetic_df.columns.tolist(), ["A", "B"])
-    for col in attribute_domains:
-      dom = attribute_domains[col]
-      left, right = dom.min_value, dom.max_value
-      self.assertTrue(synthetic_df[col].between(left, right).all())
-
-  def test_end_to_end_categorical_with_constraint(self):
-    attribute_domains = {
-        "A": domain.CategoricalAttribute(
-            possible_values=["a", "b", "c"], out_of_domain_index=0
-        ),
-        "B": domain.CategoricalAttribute(
-            possible_values=["x", "y", "z"], out_of_domain_index=0
+        'A': domain.CategoricalAttribute(
+            possible_values=['a', 'b', 'c'], out_of_domain_index=0
         ),
     }
-
-    constraint = constraints.Constraint(
-        attribute_names=("A", "B"),
-        attribute_domains=(
-            attribute_domains["A"],
-            attribute_domains["B"],
-        ),
-        possible_combinations=[
-            ("a", "x"),
-            ("b", "y"),
-            ("c", "z"),
-        ],
-    )
-
-    values = [
-        ["a", "x"],
-        ["b", "y"],
-        ["c", "z"],
-        ["a", "y"],
-        ["b", "x"],
-        ["c", "x"],
-    ]
-
-    df = pd.DataFrame(data=values, columns=["A", "B"])
-    synthetic_df = data_generation_v2.generate(
-        df,
-        attribute_domains,
-        epsilon=1.0,
-        delta=1e-5,
-        discrete_config=data_generation_v2.discrete_mechanisms.MSTConfig(),
-        cross_attribute_constraints=[constraint],
-        skip_compression=True,
-    )
-
-    def is_valid(row):
-      return (row["A"], row["B"]) in constraint.possible_combinations
-
-    self.assertTrue(synthetic_df.apply(is_valid, axis=1).all())
-
-  def test_end_to_end_mixed_domain(self):
-    attribute_domains = {
-        "A": domain.OpenSetCategoricalAttribute(),
-        "B": domain.NumericalAttribute(min_value=0, max_value=10),
-    }
-
-    values = [
-        ["a", 1],
-        ["b", 5],
-        ["c", 10],
-    ]
-
-    df = pd.DataFrame(data=values, columns=["A", "B"])
-    df["B"] = df["B"].astype(float)
-    synthetic_df = data_generation_v2.generate(
-        df,
-        attribute_domains,
-        epsilon=100,
-        delta=0.1,
-        skip_compression=True,
-    )
-    self.assertIsInstance(synthetic_df, pd.DataFrame)
-    self.assertListEqual(synthetic_df.columns.tolist(), ["A", "B"])
-    dom_b = attribute_domains["B"]
-    self.assertTrue(
-        synthetic_df["B"].between(dom_b.min_value, dom_b.max_value).all()
-    )
-
-  def test_raises_on_freeform_text_attribute(self):
-    attribute_domains = {
-        "A": domain.CategoricalAttribute(possible_values=["a", "b"]),
-        "text": domain.FreeFormTextAttribute(max_tokens=128),
-    }
-    df = pd.DataFrame({"A": ["a", "b"], "text": ["hello", "world"]})
-    with self.assertRaises(ValueError):
-      data_generation_v2.generate(
-          df, attribute_domains, epsilon=1.0, delta=1e-5
+    df = pd.DataFrame({'A': ['a', 'b', 'c']})
+    with warnings.catch_warnings(record=True) as w:
+      warnings.simplefilter('always')
+      synthetic_df = data_generation_v2.generate(
+          df, attribute_domains, epsilon=100, delta=0.1, skip_compression=True
       )
+    self.assertTrue(any(issubclass(x.category, DeprecationWarning) for x in w))
+    self.assertIsInstance(synthetic_df, pd.DataFrame)
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
   absltest.main()

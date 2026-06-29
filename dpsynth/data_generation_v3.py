@@ -71,6 +71,18 @@ def _create_initializers(
   return initializers
 
 
+def _build_mbi_domain(
+    results: Mapping[str, initialization.ColumnMeasurement],
+) -> mbi.Domain:
+  """Builds an mbi.Domain with labels from per-column measurement results."""
+  attrs = tuple(results.keys())
+  shape = tuple(r.categorical_attribute.size for r in results.values())
+  labels = tuple(
+      tuple(r.categorical_attribute.possible_values) for r in results.values()
+  )
+  return mbi.Domain(attributes=attrs, shape=shape, labels=labels)
+
+
 @dataclasses.dataclass
 class DataGenerationResult:
   """Result of end-to-end DP synthetic data generation."""
@@ -354,11 +366,9 @@ class TabularSynthesizer(primitives.DPMechanism):
         results[col] = init(rng, data[col].values)
 
     # Phase 2: Encode data to discrete domain.
-    discrete_domains = {}
     discrete_data = {}
     one_way_measurements = []
     for col, result in results.items():
-      discrete_domains[col] = result.categorical_attribute.size
       if result.bin_edges is not None:
         discrete_data[col] = vtx.discretize(
             data[col].values, result.bin_edges, self.domains[col]
@@ -370,7 +380,8 @@ class TabularSynthesizer(primitives.DPMechanism):
       if result.measurement is not None:
         one_way_measurements.append(result.measurement)
 
-    discrete = mbi.Dataset(discrete_data, mbi.Domain.fromdict(discrete_domains))
+    mbi_domain = _build_mbi_domain(results)
+    discrete = mbi.Dataset(discrete_data, mbi_domain)
     logging.info('[DPSynth]: Finished encoding data.')
 
     # Phase 3: Run the discrete mechanism.
@@ -389,7 +400,7 @@ class TabularSynthesizer(primitives.DPMechanism):
     # Phase 4: Decode synthetic data back to original domain.
     synthetic_columns = {}
     for col, result in results.items():
-      col_data = synthetic_data.df[col].values
+      col_data = synthetic_data.to_dict()[col]
       if result.bin_edges is not None:
         synthetic_columns[col] = vtx.undiscretize(
             col_data, result.bin_edges, self.domains[col], rng=rng

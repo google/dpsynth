@@ -94,11 +94,9 @@ def generate_synthetic_data(
   )
 
   def gen_synthetic_data_task(num_records_per_task, model, domain):
-    df = model.synthetic_data(rows=num_records_per_task).df
-
-    # Convert the DataFrame to a list of tuples. The ordering of elements in
-    # tuples correspond to the ordering of attributes in the domain.
-    return df[list(domain.attributes)].itertuples(index=False, name=None)
+    data = model.synthetic_data(rows=num_records_per_task).to_dict()
+    cols = list(domain.attributes)
+    return zip(*(data[col] for col in cols))
 
   return backend.flat_map_with_side_inputs(
       num_records_per_task,

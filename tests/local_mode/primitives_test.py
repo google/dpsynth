@@ -23,88 +23,6 @@ from dpsynth.local_mode import primitives
 import numpy as np
 
 
-class QuantilesTest(absltest.TestCase):
-
-  def setUp(self):
-    super().setUp()
-    self.rng = np.random.default_rng(42)
-
-  def test_median_basic(self):
-    data = np.array([1.0, 2.0, 3.0, 4.0, 5.0])
-    med = primitives._median(self.rng, data, lower=0.0, upper=10.0, epsilon=100)
-    self.assertBetween(med, 2.0, 4.5)
-
-  def test_median_empty(self):
-    data = np.array([])
-    med = primitives._median(self.rng, data, lower=0.0, upper=10.0, epsilon=1.0)
-    self.assertBetween(med, 0.0, 10.0)
-
-  def test_quantiles_basic(self):
-    data = np.array([1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0])
-    eps_levels = primitives._quantile_epsilon_levels(100.0, 2)
-    qs = primitives._quantiles(
-        self.rng, data, lower=0.0, upper=10.0, epsilon_levels=eps_levels
-    )
-    self.assertLen(qs, 3)
-    self.assertTrue(all(qs[i] <= qs[i + 1] for i in range(len(qs) - 1)))
-
-  def test_quantiles_empty(self):
-    data = np.array([])
-    eps_levels = primitives._quantile_epsilon_levels(1.0, 2)
-    qs = primitives._quantiles(
-        self.rng, data, lower=0.0, upper=10.0, epsilon_levels=eps_levels
-    )
-    self.assertLen(qs, 3)
-    self.assertTrue(all(qs[i] <= qs[i + 1] for i in range(len(qs) - 1)))
-
-  def test_median_with_duplicates(self):
-    data = np.array([2.0, 2.0, 2.0, 2.0, 2.0, 5.0, 6.0])
-    med = primitives._median(self.rng, data, lower=0.0, upper=10.0, epsilon=100)
-    self.assertBetween(med, 1.5, 2.5)
-
-  def test_median_with_out_of_bounds(self):
-    data = np.array([-5.0, -2.0, 1.0, 2.0, 3.0, 12.0, 15.0])
-    med = primitives._median(self.rng, data, lower=0.0, upper=10.0, epsilon=100)
-    self.assertBetween(med, 1.0, 3.0)
-
-  def test_quantiles_with_duplicates_and_clamping(self):
-    data = np.array([-1.0, 1.0, 1.0, 1.0, 1.0, 10.0, 12.0])
-    eps_levels = primitives._quantile_epsilon_levels(100, 2)
-    qs = primitives._quantiles(
-        self.rng, data, lower=0.0, upper=10.0, epsilon_levels=eps_levels
-    )
-    self.assertLen(qs, 3)
-    self.assertTrue(all(qs[i] <= qs[i + 1] for i in range(len(qs) - 1)))
-
-  def test_median_zcdp_rho_zero(self):
-    data = np.array([1.0, 2.0, 3.0, 4.0, 5.0])
-    med = primitives._median(self.rng, data, lower=0.0, upper=10.0, epsilon=0.0)
-    self.assertBetween(med, 0.0, 10.0)
-
-  def test_median_zcdp_rho_inf(self):
-    data = np.array([1.0, 2.0, 3.0, 4.0, 5.0])
-    med = primitives._median(self.rng, data, 0, 10, epsilon=np.inf)
-    self.assertEqual(med, 3.0)
-
-  def test_quantiles_zcdp_rho_zero(self):
-    data = np.array([1.0, 2.0, 3.0, 4.0, 5.0])
-    eps_levels = primitives._quantile_epsilon_levels(0.0, 2)
-    qs = primitives._quantiles(
-        self.rng, data, lower=0.0, upper=10.0, epsilon_levels=eps_levels
-    )
-    self.assertLen(qs, 3)
-    self.assertTrue(all(0.0 <= q <= 10.0 for q in qs))
-
-  def test_quantiles_zcdp_rho_inf(self):
-    data = np.array([1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0])
-    eps_levels = primitives._quantile_epsilon_levels(np.inf, 2)
-    qs = primitives._quantiles(
-        self.rng, data, lower=0.0, upper=10.0, epsilon_levels=eps_levels
-    )
-    self.assertLen(qs, 3)
-    self.assertEqual(qs, [2.5, 4.0, 6.0])
-
-
 @unittest.skip(
     "SIPS tests are broken at HEAD; will be replaced by Gaussian partition"
     " selection."
@@ -310,105 +228,28 @@ class GaussianHistogramTest(absltest.TestCase):
     self.rng = np.random.default_rng(42)
 
   def test_basic_operation(self):
-    data = np.array([0, 0, 1, 1, 1, 2])
+    counts = np.array([2, 3, 1, 0])
     mech = primitives.DPGaussianHistogram(domain_size=4, sigma=1.0)
-    result = mech(self.rng, data)
+    result = mech(self.rng, counts)
     self.assertLen(result.counts, 4)
     # Noisy counts should be close to true counts [2, 3, 1, 0].
     np.testing.assert_allclose(result.counts, [2, 3, 1, 0], atol=5.0)
 
   def test_zero_sigma(self):
-    data = np.array([0, 0, 1, 2, 2, 2])
+    counts = np.array([2, 1, 3])
     mech = primitives.DPGaussianHistogram(domain_size=3, sigma=0.0)
-    result = mech(self.rng, data)
+    result = mech(self.rng, counts)
     np.testing.assert_array_equal(result.counts, [2, 1, 3])
 
   def test_empty_data(self):
-    data = np.array([], dtype=int)
+    counts = np.array([0, 0, 0])
     mech = primitives.DPGaussianHistogram(domain_size=3, sigma=1.0)
-    result = mech(self.rng, data)
+    result = mech(self.rng, counts)
     self.assertLen(result.counts, 3)
 
 
 # ---------------------------------------------------------------------------
 # DPMechanism wrapper tests
-# ---------------------------------------------------------------------------
-
-
-class DPQuantilesTest(parameterized.TestCase):
-
-  def setUp(self):
-    super().setUp()
-    self.rng = np.random.default_rng(42)
-
-  def test_calibrate_and_call(self):
-    mech = primitives.DPQuantiles(lower=0.0, upper=10.0, num_partitions=4)
-    calibrated = mech.calibrate(zcdp_rho=100.0)
-    data = np.array([1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0])
-    result = calibrated(self.rng, data)
-    self.assertLen(result.quantiles, 3)
-
-  @parameterized.parameters([0.3, 1.0, 2.718])
-  def test_calibrate_default_ratio(self, zcdp_rho):
-    mech = primitives.DPQuantiles(lower=0.0, upper=10.0, num_partitions=4)
-    calibrated = mech.calibrate(zcdp_rho=zcdp_rho)
-    # Default ratio=2: deeper level gets double the epsilon.
-    events = calibrated.dp_event.events
-    self.assertLen(events, 2)
-    np.testing.assert_allclose(events[0].epsilon / events[1].epsilon, 2.0)
-
-  def test_calibrate_custom_ratio(self):
-    mech = primitives.DPQuantiles(lower=0.0, upper=10.0, num_partitions=4)
-    calibrated = mech.calibrate(zcdp_rho=1.0, epsilon_ratio=1.0)
-    # Ratio=1 means uniform epsilon across levels.
-    events = calibrated.dp_event.events
-    np.testing.assert_allclose(events[0].epsilon, events[1].epsilon)
-
-  def test_dp_event_raises_before_calibration(self):
-    mech = primitives.DPQuantiles(lower=0.0, upper=10.0, num_partitions=4)
-    with self.assertRaises(ValueError):
-      _ = mech.dp_event
-
-  def test_dp_event_type(self):
-    mech = primitives.DPQuantiles(
-        lower=0.0, upper=10.0, num_partitions=4
-    ).calibrate(zcdp_rho=1.0)
-    event = mech.dp_event
-    self.assertIsInstance(event, dp_accounting.ComposedDpEvent)
-    self.assertLen(event.events, 2)  # log2(4) = 2 levels
-    for e in event.events:
-      self.assertIsInstance(e, dp_accounting.ExponentialMechanismDpEvent)
-
-  def test_dp_event_single_partition(self):
-    mech = primitives.DPQuantiles(
-        lower=0.0, upper=10.0, num_partitions=1
-    ).calibrate(zcdp_rho=1.0)
-    event = mech.dp_event
-    self.assertIsInstance(event, dp_accounting.ComposedDpEvent)
-    self.assertEmpty(event.events)
-
-  def test_quantiles_filters_nan(self):
-    """DPQuantiles should handle NaN in input data without crashing."""
-    data = np.array([1.0, np.nan, 3.0, np.nan, 5.0])
-    mechanism = primitives.DPQuantiles(lower=0.0, upper=10.0, num_partitions=4)
-    calibrated = mechanism.calibrate(zcdp_rho=10.0)
-    result = calibrated(self.rng, data)
-    edges = result.quantiles
-    self.assertLen(edges, 3)
-    for e in edges:
-      self.assertBetween(e, 0.0, 10.0)
-
-  def test_median_zero_length_intervals(self):
-    """_median should handle degenerate lower == upper from recursive splits."""
-    data = np.array([5.0, 5.0, 5.0, 5.0])
-    med = primitives._median(self.rng, data, lower=5.0, upper=5.0, epsilon=0.01)
-    self.assertEqual(med, 5.0)
-
-  def test_median_data_at_boundaries(self):
-    """_median handles data near boundaries where jitter gets clipped back."""
-    data = np.array([0.0, 0.0, 0.0, 5.0, 10.0, 10.0])
-    med = primitives._median(self.rng, data, lower=0.0, upper=10.0, epsilon=1.0)
-    self.assertBetween(med, 0.0, 10.0)
 
 
 class DPGaussianHistogramTest(absltest.TestCase):
@@ -420,15 +261,15 @@ class DPGaussianHistogramTest(absltest.TestCase):
   def test_calibrate_and_call(self):
     mech = primitives.DPGaussianHistogram(domain_size=4)
     calibrated = mech.calibrate(zcdp_rho=0.5)
-    data = np.array([0, 0, 1, 1, 1, 2])
-    result = calibrated(self.rng, data)
+    counts = np.array([2, 3, 1, 0])
+    result = calibrated(self.rng, counts)
     self.assertLen(result.counts, 4)
     np.testing.assert_allclose(result.counts, [2, 3, 1, 0], atol=5.0)
 
   def test_direct_sigma(self):
     mech = primitives.DPGaussianHistogram(domain_size=3, sigma=0.0)
-    data = np.array([0, 0, 1, 2, 2, 2])
-    np.testing.assert_array_equal(mech(self.rng, data).counts, [2, 1, 3])
+    counts = np.array([2, 1, 3])
+    np.testing.assert_array_equal(mech(self.rng, counts).counts, [2, 1, 3])
 
   def test_dp_event_raises_before_calibration(self):
     mech = primitives.DPGaussianHistogram(domain_size=4)
@@ -438,7 +279,7 @@ class DPGaussianHistogramTest(absltest.TestCase):
   def test_call_raises_before_calibration(self):
     mech = primitives.DPGaussianHistogram(domain_size=4)
     with self.assertRaises(ValueError):
-      mech(self.rng, np.array([0, 1]))
+      mech(self.rng, np.array([0, 0, 1, 0]))
 
   def test_dp_event_type(self):
     mech = primitives.DPGaussianHistogram(domain_size=4).calibrate(zcdp_rho=0.5)

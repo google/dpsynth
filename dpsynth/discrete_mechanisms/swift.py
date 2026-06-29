@@ -28,7 +28,10 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping, Sequence
 import dataclasses
 import functools
+import itertools
 import math
+import time
+import typing
 
 from absl import logging
 import dp_accounting
@@ -37,11 +40,9 @@ from dpsynth.discrete_mechanisms import clique_tree
 from dpsynth.discrete_mechanisms import common
 from dpsynth.discrete_mechanisms import swift_utils
 from dpsynth.local_mode import primitives
-import jax
 import mbi
 import networkx as nx
 import numpy as np
-import tqdm
 
 
 @dataclasses.dataclass
@@ -114,15 +115,21 @@ class SWIFTMechanism(primitives.DPMechanism):
       raise ValueError('Must call calibrate() before using the mechanism.')
 
     logging.info('[SWIFT] Starting Mechanism.')
+    phase_times = {}
 
     #########################################################################
     # Compile workload into candidate measurements, and precompute answers. #
     #########################################################################
-    candidates = common.compiled_workload(
-        data.domain, self.workload, self.max_marginal_size
-    )
-    answers = mbi.CliqueVector.from_projectable(data, candidates)
-    logging.info('[SWIFT] Calculated workload-query answers.')
+    with common.timed(phase_times, 'compiled_workload'):
+      candidates = common.compiled_workload(
+          data.domain,
+          self.workload,
+          self.max_marginal_size,
+      )
+    logging.info('[SWIFT] %d candidates.', len(candidates))
+
+    with common.timed(phase_times, 'from_projectable'):
+      answers = mbi.CliqueVector.from_projectable(data, candidates)
 
     # Convert end-to-end GDP sigma to budget for internal allocation.
     gdp_budget = 1.0 / self.gdp_sigma**2
@@ -143,65 +150,106 @@ class SWIFTMechanism(primitives.DPMechanism):
     if potentials is not None:
       potentials = potentials.expand([m.clique for m in measurements])
 
-    model = mbi.estimation.MirrorDescent(
-        marginal_oracle=self.marginal_oracle,
-    ).estimate(
-        domain,
-        measurements,
-        iters=self.pgm_iters,
-        potentials=potentials,
-    )
-    assert isinstance(model, mbi.MarkovRandomField)
-    logging.info('[SWIFT] Estimated initial model.')
+    with common.timed(phase_times, 'initial_mirror_descent'):
+      model = mbi.estimation.MirrorDescent(
+          marginal_oracle=self.marginal_oracle,
+      ).estimate(
+          domain,
+          measurements,
+          iters=self.pgm_iters,
+          potentials=potentials,
+      )
+      model = typing.cast(mbi.MarkovRandomField, model)
 
     ###########################################
     # Select subset of candidates to measure. #
     ###########################################
-    assert 0 < self.select_budget_frac < 1
-    l1_error_budget = self.select_budget_frac * gdp_budget
-    budget_remaining -= l1_error_budget
+    with common.timed(phase_times, 'selection'):
+      assert 0 < self.select_budget_frac < 1
+      l1_error_budget = self.select_budget_frac * gdp_budget
+      budget_remaining -= l1_error_budget
 
-    errors = _compute_initial_errors(
-        rng, answers, model, list(candidates), l1_error_budget
-    )
-    logging.info('[SWIFT] Computed initial errors.')
+      with common.timed(phase_times, 'compute_initial_errors'):
+        errors = _compute_initial_errors(
+            rng, answers, model, list(candidates), l1_error_budget
+        )
 
-    selected, jtree = select_queries(
-        errors, candidates, domain, self.max_clique_size, budget_remaining
+      with common.timed(phase_times, 'select_queries'):
+        selected, jtree = select_queries(
+            errors, candidates, domain, self.max_clique_size, budget_remaining
+        )
+
+    ########################################################
+    # Precompile MirrorDescent + synth while measuring.    #
+    ########################################################
+    closed_oracle = functools.partial(
+        mbi.marginal_oracles.message_passing_stable, jtree=jtree
     )
+    estimator = mbi.estimation.MirrorDescent(marginal_oracle=closed_oracle)
+    rows = int(mbi.estimation.minimum_variance_unbiased_total(measurements))
+
+    pgm_future, synth_future = None, None
+    try:
+      pgm_future = estimator.precompile(
+          domain, measurements, extra_cliques=list(selected)
+      )
+      synth_future = mbi.extensions.precompile(domain, list(jtree.nodes), rows)
+      logging.info('[SWIFT] Started precompilation of MirrorDescent + synth.')
+    except Exception as e:  # pylint: disable=broad-exception-caught
+      logging.warning('[SWIFT] Precompile failed (non-fatal): %s', e)
 
     ##########################################
     # Measure the selected marginal queries. #
     ##########################################
-    new_measurements, _ = _measure_selected_marginals(
-        rng, answers, selected, budget_remaining
-    )
-    measurements.extend(new_measurements)
+    with common.timed(phase_times, 'measurement'):
+      logging.info('[SWIFT] Starting measurements.')
+      new_measurements, _ = _measure_selected_marginals(
+          rng, answers, selected, budget_remaining
+      )
+      measurements.extend(new_measurements)
+      logging.info('[SWIFT] Finished measurements.')
 
     ########################################################
     # Estimate the model using all measurements            #
     ########################################################
+    with common.timed(phase_times, 'estimation'):
+      if pgm_future is not None:
+        t0 = time.time()
+        try:
+          pgm_future.result()
+        except Exception as e:  # pylint: disable=broad-exception-caught
+          logging.warning('[SWIFT] PGM precompile failed (non-fatal): %s', e)
+        logging.info('[SWIFT] PGM precompile wait: %.2fs', time.time() - t0)
 
-    closed_oracle = functools.partial(
-        mbi.marginal_oracles.message_passing_stable, jtree=jtree
-    )
+      callback_fn = mbi.callbacks.default(measurements, domain)
+      final_model = estimator.estimate(
+          domain,
+          measurements,
+          iters=self.pgm_iters,
+          potentials=potentials,
+          callback_fn=callback_fn,
+      )
+      assert isinstance(final_model, mbi.MarkovRandomField)
+      logging.info('[SWIFT] Estimated final model.')
 
-    callback_fn = mbi.callbacks.default(measurements)
-    model = mbi.estimation.MirrorDescent(
-        marginal_oracle=closed_oracle,
-    ).estimate(
-        domain,
-        measurements,
-        iters=self.pgm_iters,
-        potentials=potentials,
-        callback_fn=callback_fn,
-    )
-    logging.info('[SWIFT] Estimated final model.')
+    if synth_future is not None:
+      t0 = time.time()
+      try:
+        synth_future.result()
+      except Exception as e:  # pylint: disable=broad-exception-caught
+        logging.warning('[SWIFT] Synth precompile failed (non-fatal): %s', e)
+      logging.info('[SWIFT] Synth precompile wait: %.2fs', time.time() - t0)
 
+    syn = mbi.extensions.synthetic_data(final_model, rows)
+    logging.info('[SWIFT] Generated %d synthetic records.', rows)
+
+    diagnostics = common.clique_stats(final_model)
+    diagnostics.phase_times = phase_times
     return common.DiscreteMechanismResult(
-        model=model,
-        synthetic_data=model.synthetic_data(),
+        model=final_model,
+        synthetic_data=syn,
         measurements=measurements,
+        diagnostics=diagnostics,
     )
 
 
@@ -210,11 +258,21 @@ def _is_supported(clique: mbi.Clique, tree: nx.Graph) -> bool:
   return any(set(clique) <= set(n) for n in tree.nodes)
 
 
+def _supported_pairs(tree: nx.Graph) -> frozenset[tuple[str, str]]:
+  """Returns all attribute pairs supported by the clique tree."""
+  pairs = set()
+  for node in tree.nodes:
+    for pair in itertools.combinations(sorted(node), 2):
+      pairs.add(pair)
+  return frozenset(pairs)
+
+
 def build_clique_tree(
     domain: mbi.Domain,
     errors: Mapping[mbi.Clique, float],
     max_clique_size: float,
     penalty: float = 0.0,
+    max_candidates: int = 5000,
 ) -> nx.Graph:
   """Greedily construct a clique tree using the SWIFT heuristic.
 
@@ -228,6 +286,8 @@ def build_clique_tree(
       marginal in the workload.
     max_clique_size: The maximum size of a clique in the clique tree.
     penalty: Penalize scores by the domain size of the clique times this factor.
+    max_candidates: Cap on the number of top-error candidates to keep before the
+      greedy loop. Set to 0 to disable.
 
   Returns:
     A clique tree whose nodes (cliques) support a subset of the workload with
@@ -238,18 +298,31 @@ def build_clique_tree(
 
   # We only consider 2-way cliques for this greedy algorithm, although the
   # resulting clique tree will generally contain larger cliques.
+  # The penalty is a surrogate for the noise sigma that will be determined
+  # later by best_subset_and_allocation once the budget is split.
   errors = {
       key: value - penalty * domain.size(key)
       for key, value in errors.items()
       if len(key) == 2
   }
-  prev_size = None
 
+  # Sort once — values never change, only entries get removed.
+  sorted_cliques = sorted(errors, key=errors.get, reverse=True)
+
+  # Cap candidates to keep the greedy loop tractable.
+  if max_candidates > 0 and len(sorted_cliques) > max_candidates:
+    dropped = set(sorted_cliques[max_candidates:])
+    sorted_cliques = sorted_cliques[:max_candidates]
+    errors = {c: errors[c] for c in errors if c not in dropped}
+
+  prev_size = None
   while prev_size != len(errors):
     prev_size = len(errors)
     supporting_edges = clique_tree.derive_supporting_edges(result)
 
-    for cl in sorted(errors, key=lambda x: errors[x], reverse=True):
+    for cl in sorted_cliques:
+      if cl not in errors:
+        continue
       edge, cost = clique_tree.best_supporting_edge(
           cl, supporting_edges, domain
       )
@@ -257,7 +330,10 @@ def build_clique_tree(
       is_small_enough = cost <= max_clique_size
       if is_supported and is_small_enough:
         result = clique_tree.local_update(result, cl, domain)
-        errors = {c: errors[c] for c in errors if not _is_supported(c, result)}
+        supported = _supported_pairs(result)
+        errors = {
+            c: errors[c] for c in errors if tuple(sorted(c)) not in supported
+        }
         break
 
       elif math.isfinite(cost) and not is_small_enough:
@@ -279,7 +355,12 @@ def build_best_clique_tree(
     tree = build_clique_tree(domain, errors, max_clique_size, penalty)
     # By measuring these cliques, we will be able to greatly reduce the error.
     # Therefore, selecting clique with high total error is beneficial.
-    score = sum(errors[cl] for cl in errors if _is_supported(cl, tree))
+    supported = _supported_pairs(tree)
+    score = sum(
+        errors[cl]
+        for cl in errors
+        if len(cl) == 2 and tuple(sorted(cl)) in supported
+    )
 
     if score > best_score:
       best_score = score
@@ -293,21 +374,14 @@ def _compute_initial_errors(
     data: mbi.Projectable,
     model: mbi.MarkovRandomField,
     cliques: Sequence[mbi.Clique],
-    gdp_mu: float,
+    gdp_budget: float,
 ) -> dict[mbi.Clique, float]:
-  """Computes the initial errors for the SWIFT mechanism."""
-  gdp_per_clique = gdp_mu / len(cliques)
-  sigma_per_clique = accounting.gdp_gaussian_sigma(gdp_per_clique)
-  errors = {}
-  total = float(model.total)
-  oneway = {a: model.project((a,)) / total for a in data.domain}
-  oneway = jax.tree.map(np.asarray, oneway)
-  for cl in tqdm.tqdm(cliques, desc='Computing initial errors'):
-    estimate = functools.reduce(mbi.Factor.__mul__, (oneway[a] for a in cl))
-    actual = data.project(cl)
-    diff = (total * estimate - actual).datavector()
-    error = np.abs(diff).sum()
-    errors[cl] = error + rng.normal(loc=0.0, scale=sigma_per_clique)
+  """Computes DP initial errors for the SWIFT mechanism."""
+  budget_per_clique = gdp_budget / len(cliques)
+  sigma_per_clique = accounting.gdp_gaussian_sigma(budget_per_clique)
+  errors = common.compute_independence_errors(data, model, cliques)
+  for cl in errors:
+    errors[cl] += rng.normal(loc=0.0, scale=sigma_per_clique)
   return errors
 
 

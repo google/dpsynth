@@ -19,6 +19,7 @@
 from dpsynth.discrete_mechanisms.aim import AIMMechanism
 from dpsynth.discrete_mechanisms.aim_gdp import AIMGDPMechanism
 from dpsynth.discrete_mechanisms.common import DiscreteMechanismResult
+from dpsynth.discrete_mechanisms.common import MechanismDiagnostics
 from dpsynth.discrete_mechanisms.direct import DirectMechanism
 from dpsynth.discrete_mechanisms.independent import IndependentMechanism
 from dpsynth.discrete_mechanisms.mst import MSTMechanism

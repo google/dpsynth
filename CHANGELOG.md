@@ -16,8 +16,8 @@ private synthetic data.
 This first release contains code for generating differentially private synthetic
 tabular data using marginal measurement and Private-PGM inference, including:
 
--   **Two execution modes**: In-memory local mode (via `dpsynth.generate()`,
-    tested up to ~100M rows) and a distributed Apache Beam mode for larger
+-   **Two execution modes**: In-memory local mode
+    (via `dpsynth.TabularSynthesizer`, tested up to ~100M rows) and a
     workloads.
 -   **Marginal-based mechanisms**: AIM, MST, Independent, and Direct mechanisms
     for selecting and measuring marginals under differential privacy.

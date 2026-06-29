@@ -19,6 +19,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 import dataclasses
 import itertools
+import typing
 
 from absl import logging
 import dp_accounting
@@ -29,7 +30,6 @@ import mbi
 import networkx as nx
 import numpy as np
 from scipy.cluster.hierarchy import DisjointSet  # pylint: disable=g-importing-member
-import tqdm
 
 
 def dp_maximum_spanning_tree(
@@ -127,26 +127,19 @@ def _select_two_way_marginal_queries(
   independent_model = mbi.estimation.MirrorDescent().estimate(
       data.domain, one_way_measurements, iters=2500
   )
-
-  oneway_marginals = {
-      attr: np.array(independent_model.project(attr).datavector())
-      for attr in data.domain.attributes
-  }
+  independent_model = typing.cast(mbi.MarkovRandomField, independent_model)
 
   # Construct a complete graph where nodes=attributes and weight of edge
   # (a, b) is a sensitivity 1 measure of correlation between a and b.
-  weights = {}
   candidates = [
       cl
       for cl in itertools.combinations(data.domain.attributes, 2)
       if data.domain.size(cl) <= maximum_marginal_size
   ]
   logging.info('[MST]: Computing Quality Scores')
-  for a, b in tqdm.tqdm(candidates):
-    # For efficiency, we compute the outer product of one-way marginals.
-    xhat = np.outer(oneway_marginals[a], oneway_marginals[b]).flatten()
-    x = data.project((a, b)).datavector()
-    weights[a, b] = np.linalg.norm(x - xhat, 1)
+  weights = common.compute_independence_errors(
+      data, independent_model, candidates
+  )
 
   return dp_maximum_spanning_tree(
       rng,
@@ -220,38 +213,42 @@ class MSTMechanism(primitives.DPMechanism):
     if self.zcdp_rho is None:
       raise ValueError('Must call calibrate() before using the mechanism.')
     logging.info('[MST]: Starting MST mechanism.')
+    phase_times = {}
     budget_remaining = self.zcdp_rho
 
-    if initial_measurements is None:
-      budget_remaining -= self.one_way_budget_fraction * self.zcdp_rho
-      one_way_rho = self.zcdp_rho * self.one_way_budget_fraction
-      one_way_sigma = accounting.zcdp_gaussian_sigma(one_way_rho)
-      one_way_measurements = common.measure_marginals_with_noise(
-          rng,
-          data,
-          marginal_queries=[(a,) for a in data.domain],
-          gdp_sigma=one_way_sigma,
-      )
-    else:
-      one_way_measurements = initial_measurements
+    with common.timed(phase_times, 'measurement'):
+      if initial_measurements is None:
+        budget_remaining -= self.one_way_budget_fraction * self.zcdp_rho
+        one_way_rho = self.zcdp_rho * self.one_way_budget_fraction
+        one_way_sigma = accounting.zcdp_gaussian_sigma(one_way_rho)
+        one_way_measurements = common.measure_marginals_with_noise(
+            rng,
+            data,
+            marginal_queries=[(a,) for a in data.domain],
+            gdp_sigma=one_way_sigma,
+        )
+      else:
+        one_way_measurements = initial_measurements
 
     exponential_rho = self.select_budget_fraction * self.zcdp_rho
     budget_remaining -= exponential_rho
     # Select and measure 2-way marginals using rho/3 budget for each step.
-    two_way_marginal_queries = _select_two_way_marginal_queries(
-        rng,
-        data,
-        exponential_rho,
-        one_way_measurements,
-        maximum_marginal_size=self.maximum_marginal_size,
-    )
-    logging.info('[MST]: Selected two-way marginal queries.')
-    gaussian_rho = budget_remaining
-    sigma = accounting.zcdp_gaussian_sigma(gaussian_rho)
-    two_way_measurements = common.measure_marginals_with_noise(
-        rng, data, two_way_marginal_queries, sigma
-    )
-    logging.info('[MST]: Measured two-way marginals.')
+    with common.timed(phase_times, 'selection'):
+      two_way_marginal_queries = _select_two_way_marginal_queries(
+          rng,
+          data,
+          exponential_rho,
+          one_way_measurements,
+          maximum_marginal_size=self.maximum_marginal_size,
+      )
+      logging.info('[MST]: Selected two-way marginal queries.')
+    with common.timed(phase_times, 'measurement'):
+      gaussian_rho = budget_remaining
+      sigma = accounting.zcdp_gaussian_sigma(gaussian_rho)
+      two_way_measurements = common.measure_marginals_with_noise(
+          rng, data, two_way_marginal_queries, sigma
+      )
+      logging.info('[MST]: Measured two-way marginals.')
     all_measurements = one_way_measurements + two_way_measurements
     # Fit a distribution to the noisy measurements using Private-PGM.
     potentials = initial_potentials
@@ -262,18 +259,22 @@ class MSTMechanism(primitives.DPMechanism):
         data.domain, [m.clique for m in all_measurements]
     )
     logging.info('[MST]: Model size: %d MB', model_size)
-    model = mbi.estimation.MirrorDescent(
-        marginal_oracle=self.marginal_oracle,
-    ).estimate(
-        data.domain,
-        all_measurements,
-        iters=self.pgm_iters,
-        potentials=potentials,
-        callback_fn=mbi.callbacks.default(all_measurements),
-    )
-    logging.info('[MST]: Fit distribution to the noisy measurements.')
+    with common.timed(phase_times, 'estimation'):
+      model = mbi.estimation.MirrorDescent(
+          marginal_oracle=self.marginal_oracle,
+      ).estimate(
+          data.domain,
+          all_measurements,
+          iters=self.pgm_iters,
+          potentials=potentials,
+          callback_fn=mbi.callbacks.default(all_measurements, data.domain),
+      )
+      logging.info('[MST]: Fit distribution to the noisy measurements.')
+    diagnostics = common.clique_stats(model)
+    diagnostics.phase_times = phase_times
     return common.DiscreteMechanismResult(
         model=model,
         synthetic_data=model.synthetic_data(),
         measurements=all_measurements,
+        diagnostics=diagnostics,
     )

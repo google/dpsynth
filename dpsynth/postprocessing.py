@@ -237,7 +237,9 @@ def generate_synthetic_data_from_marginals(
   )
 
   if log:
-    callback_fn = mbi.callbacks.default(measurements, duck_typed_exact_data)
+    callback_fn = mbi.callbacks.default(
+        measurements, mbi_domain, data=duck_typed_exact_data
+    )
   else:
     callback_fn = lambda _: None
   if estimator is None:
@@ -256,5 +258,5 @@ def generate_synthetic_data_from_marginals(
   for col in attribute_domains:
     attr_domain = attribute_domains[col]
     transform_fn = transformations.discrete_encoder(attr_domain)
-    result[col] = encoded_data.df[col].map(transform_fn.inverse)
+    result[col] = [transform_fn.inverse(x) for x in encoded_data.to_dict()[col]]
   return result

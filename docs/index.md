@@ -58,7 +58,7 @@ dataframes to massive distributed datasets across computing clusters:
                └────────────────────────────────────────┘
 ```
 
-### 1. In-Memory DataFrame API (`dpsynth.generate`)
+### 1. In-Memory DataFrame API (`dpsynth.TabularSynthesizer`)
 
 Optimized for rapid prototyping, research experimentation, and datasets that
 easily fit within single-machine memory.

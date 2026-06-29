@@ -14,29 +14,21 @@
 
 """Differentially private primitives for quantiles and partition selection.
 
-These implementations only depened on numpy and scipy and utilize vectorized
+These implementations only depend on numpy and scipy and utilize vectorized
 operations for efficiency in single-machine environments.
 """
 
 from __future__ import annotations
 
 import abc
-from collections.abc import Sequence
 import dataclasses
 import math
 from typing import Any
 
 import dp_accounting
+from dpsynth.local_mode import _quantiles
 import numpy as np
-import scipy.special
 import scipy.stats
-
-
-@dataclasses.dataclass
-class QuantileResult:
-  """Result of a differentially private quantile computation."""
-
-  quantiles: list[float]
 
 
 @dataclasses.dataclass
@@ -123,165 +115,6 @@ class DPMechanism(abc.ABC):
 _UNCALIBRATED_MSG = (
     '{param} has not been set. Set it directly or call calibrate().'
 )
-
-
-def _median(
-    rng: np.random.Generator,
-    data: np.ndarray,
-    lower: float,
-    upper: float,
-    epsilon: float,
-    jitter_multiple: float = 1e-4,
-    integer_jitter: bool = False,
-) -> float:
-  """Computes a differentially private median using the exponential mechanism.
-
-  This function implements the continuous rank-based DP median. Candidates are
-  the intervals between sorted data points. The utility of an interval is based
-  on the distance of its rank from N/2.
-
-  Args:
-    rng: A numpy random number generator.
-    data: 1D array of numerical data.
-    lower: Lower bound for the data.
-    upper: Upper bound for the data.
-    epsilon: Exponential mechanism privacy parameter.
-    jitter_multiple: Multiplier for the jitter scale, relative to upper-lower.
-    integer_jitter: If True, use positive jitter U(0, 0.5) so that integer data
-      points are never pushed across an integer boundary before floor.
-
-  Returns:
-    A differentially private median estimate.
-  """
-  if lower > upper:
-    raise ValueError(f'{lower=} cannot be greater than {upper=}.')
-  if lower == upper:
-    return lower
-
-  clamped_data = np.clip(data, lower, upper)
-  n = clamped_data.size
-
-  if epsilon == np.inf:
-    if n == 0:
-      return (lower + upper) / 2
-    return float(np.median(clamped_data))
-
-  # Jitter breaks ties, giving duplicate data points non-zero length intervals.
-  if integer_jitter:
-    # Positive jitter keeps floor() from shifting integers to a neighbor.
-    jitter = rng.uniform(0, 0.5, size=clamped_data.size)
-  else:
-    jitter_scale = (upper - lower) * jitter_multiple
-    jitter = rng.uniform(-jitter_scale, jitter_scale, size=clamped_data.size)
-  jittered_data = np.clip(clamped_data + jitter, lower, upper)
-
-  sorted_data = np.sort(jittered_data)
-  n = sorted_data.size
-  x = np.r_[lower, sorted_data, upper]
-  lengths = np.diff(x)
-  ranks = np.arange(n + 1)
-  utilities = -np.abs(ranks - n / 2)
-
-  # Compute output probabilities for each interval.
-  probs = scipy.special.softmax(np.log(lengths) + epsilon * utilities)
-
-  # Sample an interval index, and a value uniformly from the interval.
-  interval_idx = rng.choice(n + 1, p=probs)
-  v_min = x[interval_idx]
-  v_max = x[interval_idx + 1]
-  return rng.uniform(v_min, v_max)
-
-
-def _quantile_epsilon_levels(
-    zcdp_rho: float, num_levels: int, epsilon_ratio: float = 2.0
-) -> np.ndarray:
-  """Computes per-level exponential mechanism epsilons for DP quantiles.
-
-  At each level of the recursive bisection, each data point participates in
-  exactly one median computation (parallel composition), so the privacy cost
-  at each level is that of a single exponential mechanism invocation.  Deeper
-  levels operate on half the data of the level above, halving the signal.  To
-  keep the noise proportional to the signal, epsilon grows by a factor of
-  ``epsilon_ratio`` at each deeper level.  Since rho = epsilon^2 / 8 for the
-  exponential mechanism under zCDP, scaling epsilon by ``epsilon_ratio``
-  scales rho by ``epsilon_ratio**2``.
-
-  Args:
-    zcdp_rho: Total zCDP privacy budget.
-    num_levels: Number of levels in the quantile tree. Number of buckets is ``2
-      ** num_levels``.
-    epsilon_ratio: Factor by which epsilon grows at each deeper level. A value
-      of 2 means epsilon doubles per level (noise halves), preserving the
-      signal-to-noise ratio as data is split.
-
-  Returns:
-    A length ``num_levels`` array of per-level epsilons, ordered from the
-    deepest (finest) level to the shallowest (coarsest).
-  """
-  if num_levels == 0:
-    return np.array([])
-  # Since rho = eps^2 / 8, scaling epsilon by r scales rho by r^2.
-  rho_ratio = epsilon_ratio**2
-  budget_weights = rho_ratio ** np.arange(num_levels)[::-1]
-  rho_levels = zcdp_rho * budget_weights / budget_weights.sum()
-  return np.sqrt(8 * rho_levels)
-
-
-def _quantiles(
-    rng: np.random.Generator,
-    data: np.ndarray,
-    lower: float,
-    upper: float,
-    epsilon_levels: np.ndarray,
-    integer_jitter: bool = False,
-) -> list[float]:
-  """Computes uniformly spaced differentially private quantiles.
-
-  This function is a ``len(epsilon_levels)``-level composition of the
-  exponential mechanism.  The number of partitions is inferred as
-  ``2 ** len(epsilon_levels)``.
-
-  Args:
-    rng: A numpy random number generator.
-    data: 1D array of numerical data.
-    lower: Lower bound for the data.
-    upper: Upper bound for the data.
-    epsilon_levels: Per-level exponential mechanism epsilons, as returned by
-      ``_quantile_epsilon_levels``.
-    integer_jitter: If True, use positive jitter U(0, 0.5) for integer data.
-
-  Returns:
-    A list of ``2 ** len(epsilon_levels) - 1`` sorted private quantile
-    estimates.
-  """
-  levels = len(epsilon_levels)
-  if levels == 0:
-    return []
-
-  def quantiles_rec(current_data, curr_lower, curr_upper, current_depth):
-    if current_depth == 0:
-      return []
-
-    eps = epsilon_levels[current_depth - 1]
-    med = _median(
-        rng,
-        current_data,
-        curr_lower,
-        curr_upper,
-        eps,
-        integer_jitter=integer_jitter,
-    )
-
-    left_mask = current_data <= med
-    left_data = current_data[left_mask]
-    right_data = current_data[~left_mask]
-
-    left_points = quantiles_rec(left_data, curr_lower, med, current_depth - 1)
-    right_points = quantiles_rec(right_data, med, curr_upper, current_depth - 1)
-
-    return left_points + [med] + right_points
-
-  return quantiles_rec(data, lower, upper, levels)
 
 
 def _contribution_bound(prng, user_ids, max_part):
@@ -498,31 +331,24 @@ def _select_partitions_sips(
 class DPQuantiles(DPMechanism):
   """Differentially private quantiles via composed exponential mechanisms.
 
-  This is a ``log2(num_partitions)``-level composition of the exponential
-  mechanism.  Use ``calibrate`` to set privacy parameters before calling.
+  Computes quantile edges by recursive median bisection on a dense histogram.
+  The ``__call__`` method takes a 1D histogram of counts and returns the
+  quantile edge values.
 
   Attributes:
-    lower: Lower bound for the data domain.
-    upper: Upper bound for the data domain.
-    num_partitions: Number of partitions (must be a power of 2).
-    integer_jitter: If True, use positive jitter U(0, 0.5) for integer data.
+    num_partitions: Number of quantile partitions (must be a power of 2).
+    lower: Lower bound of the data domain.
+    upper: Upper bound of the data domain (exclusive).
+    grid_size: Number of uniformly spaced grid points.
   """
 
+  num_partitions: int
   lower: float
   upper: float
-  num_partitions: int
-  integer_jitter: bool = False
-  _epsilon_levels: Sequence[float] | None = dataclasses.field(
+  grid_size: int = 10_000_000
+  _epsilon_levels: tuple[float, ...] | None = dataclasses.field(
       default=None, repr=False
   )
-
-  def __post_init__(self):
-    if self._epsilon_levels is not None:
-      if len(self._epsilon_levels) != self._num_levels:
-        raise ValueError(
-            f'len(epsilon_levels)={len(self._epsilon_levels)} must equal'
-            f' log2(num_partitions)={self._num_levels}.'
-        )
 
   @property
   def _num_levels(self) -> int:
@@ -531,6 +357,13 @@ class DPQuantiles(DPMechanism):
       raise ValueError(f'{self.num_partitions=} must be a power of 2.')
     return result
 
+  @property
+  def zcdp_rho(self) -> float:
+    """Total zCDP rho consumed, derived from the per-level epsilons."""
+    if self._epsilon_levels is None:
+      raise ValueError(_UNCALIBRATED_MSG.format(param='_epsilon_levels'))
+    return sum(e**2 / 8.0 for e in self._epsilon_levels)
+
   def calibrate(
       self, *, zcdp_rho: float, epsilon_ratio: float = 2.0
   ) -> DPQuantiles:
@@ -538,19 +371,22 @@ class DPQuantiles(DPMechanism):
 
     Args:
       zcdp_rho: The zCDP privacy budget (rho).
-      epsilon_ratio: Factor by which epsilon grows at each deeper level. A value
-        of 2 (default) means epsilon doubles per level, preserving the
-        signal-to-noise ratio as data is halved at each split.
-
-    Returns:
-      A new calibrated ``DPQuantiles`` instance.
+      epsilon_ratio: Factor by which epsilon grows at each deeper level.
     """
-    eps = _quantile_epsilon_levels(zcdp_rho, self._num_levels, epsilon_ratio)
+    if zcdp_rho <= 0:
+      raise ValueError(f'zcdp_rho must be positive, got {zcdp_rho}.')
+    levels = self._num_levels
+    if levels == 0:
+      return dataclasses.replace(self, _epsilon_levels=())
+    rho_ratio = epsilon_ratio**2
+    budget_weights = rho_ratio ** np.arange(levels)[::-1]
+    rho_levels = zcdp_rho * budget_weights / budget_weights.sum()
+    eps = np.sqrt(8.0 * rho_levels)
     return dataclasses.replace(self, _epsilon_levels=tuple(eps.tolist()))
 
   @property
   def dp_event(self) -> dp_accounting.DpEvent:
-    """Returns the composed privacy event for this mechanism."""
+    """Returns the composed privacy event for the quantile computation."""
     if self._epsilon_levels is None:
       raise ValueError(_UNCALIBRATED_MSG.format(param='_epsilon_levels'))
     return dp_accounting.ComposedDpEvent([
@@ -559,23 +395,19 @@ class DPQuantiles(DPMechanism):
     ])
 
   def __call__(
-      self, rng: np.random.Generator, data: np.ndarray
-  ) -> QuantileResult:
-    """Computes differentially private quantiles."""
+      self, rng: np.random.Generator, counts: np.ndarray
+  ) -> list[float]:
+    """Returns quantile edges from a dense histogram of counts."""
     if self._epsilon_levels is None:
       raise ValueError(_UNCALIBRATED_MSG.format(param='_epsilon_levels'))
-    # Filter NaN values — they represent missing data and cannot participate
-    # in the exponential mechanism's interval scoring.
-    finite_data = data[np.isfinite(data.astype(float))]
-    result = _quantiles(
+    return _quantiles.quantiles_from_histogram(
         rng,
-        finite_data,
+        counts,
         self.lower,
         self.upper,
-        np.asarray(self._epsilon_levels),
-        integer_jitter=self.integer_jitter,
+        epsilon_levels=np.asarray(self._epsilon_levels),
+        grid_size=self.grid_size,
     )
-    return QuantileResult(quantiles=result)
 
 
 @dataclasses.dataclass
@@ -605,14 +437,13 @@ class DPGaussianHistogram(DPMechanism):
     return dp_accounting.GaussianDpEvent(noise_multiplier=self.sigma)
 
   def __call__(
-      self, rng: np.random.Generator, data: np.ndarray
+      self, rng: np.random.Generator, counts: np.ndarray
   ) -> HistogramResult:
-    """Computes a differentially private histogram."""
+    """Adds Gaussian noise to the given counts."""
     if self.sigma is None:
       raise ValueError(_UNCALIBRATED_MSG.format(param='sigma'))
-    true_counts = np.bincount(data, minlength=self.domain_size)
     noise = rng.normal(scale=self.sigma, size=self.domain_size)
-    return HistogramResult(counts=true_counts + noise)
+    return HistogramResult(counts=counts.astype(float) + noise)
 
 
 @dataclasses.dataclass
@@ -682,4 +513,36 @@ class DPPartitionSelection(DPMechanism):
     )
     return PartitionSelectionResult(
         selected_partitions=parts, estimated_counts=counts
+    )
+
+  def from_summary(
+      self,
+      rng: np.random.Generator,
+      counts: np.ndarray,
+  ) -> PartitionSelectionResult:
+    """Single-round partition selection from pre-aggregated counts.
+
+    Args:
+      rng: A numpy random number generator.
+      counts: 1D array of per-partition counts.
+
+    Returns:
+      A PartitionSelectionResult with indices into `counts` as the
+      selected_partitions and their noisy counts.
+    """
+    if self.sigma is None:
+      raise ValueError(_UNCALIBRATED_MSG.format(param='sigma'))
+    above_min = counts >= self.min_count
+    eligible_idx = np.where(above_min)[0]
+    eligible_counts = counts[above_min].astype(float)
+    noisy_counts = eligible_counts + rng.normal(
+        scale=self.sigma, size=len(eligible_counts)
+    )
+    threshold = float(self.min_count) + self.sigma * scipy.stats.norm.ppf(
+        1.0 - self.delta
+    )
+    passed = noisy_counts >= threshold
+    return PartitionSelectionResult(
+        selected_partitions=eligible_idx[passed],
+        estimated_counts=noisy_counts[passed],
     )

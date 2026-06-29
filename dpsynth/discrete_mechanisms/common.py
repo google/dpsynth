@@ -14,18 +14,98 @@
 
 """Common utility functions for synthetic data mechanisms."""
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
+import contextlib
 import dataclasses
 import functools
 import itertools
-from typing import Any, TypeAlias
+import time
+from typing import TypeAlias
 
+from absl import logging
 from dpsynth import transformations
 import mbi
+import mbi.junction_tree
 import more_itertools
 import numpy as np
 import scipy
 import scipy.special
+import tqdm
+
+
+@dataclasses.dataclass
+class MechanismDiagnostics:
+  """Diagnostic info from a discrete mechanism run.
+
+  Attributes:
+    phase_times: Wall-clock time in seconds for each named phase.
+    num_rounds: Number of select-measure rounds (iterative mechanisms only).
+    num_cliques: Number of cliques in the fitted model.
+    max_clique_size: Size of the largest clique.
+    total_clique_size: Sum of all clique sizes.
+    max_jtree_node_size: Size of the largest junction tree node.
+    total_jtree_size: Sum of all junction tree node sizes.
+  """
+
+  phase_times: dict[str, float] = dataclasses.field(default_factory=dict)
+  num_rounds: int = 0
+  num_cliques: int = 0
+  max_clique_size: int = 0
+  total_clique_size: int = 0
+  max_jtree_node_size: int = 0
+  total_jtree_size: int = 0
+
+
+@contextlib.contextmanager
+def timed(phase_times: dict[str, float], name: str):
+  """Context manager that logs and records wall-clock time for a phase."""
+  start = time.monotonic()
+  yield
+  elapsed = time.monotonic() - start
+  phase_times[name] = phase_times.get(name, 0.0) + elapsed
+  logging.info('[%s] %.2fs', name, elapsed)
+
+
+def clique_stats(model: mbi.Model) -> MechanismDiagnostics:
+  """Compute structural diagnostics from a fitted model and log them.
+
+  Args:
+    model: The fitted graphical model (must be a MarkovRandomField).
+
+  Returns:
+    A MechanismDiagnostics populated with clique and junction tree stats.
+
+  Raises:
+    TypeError: If model is not a MarkovRandomField.
+  """
+  if not isinstance(model, mbi.MarkovRandomField):
+    raise TypeError(f'Expected MarkovRandomField, got {type(model).__name__}')
+  domain = model.potentials.domain
+  cliques = model.potentials.cliques
+  sizes = [domain.size(c) for c in cliques]
+  jtree, _ = mbi.junction_tree.make_junction_tree(domain, cliques)
+  jtree_nodes = list(jtree.nodes)
+  jtree_sizes = [domain.size(n) for n in jtree_nodes]
+  diagnostics = MechanismDiagnostics(
+      num_cliques=len(cliques),
+      max_clique_size=max(sizes, default=0),
+      total_clique_size=sum(sizes),
+      max_jtree_node_size=max(jtree_sizes, default=0),
+      total_jtree_size=sum(jtree_sizes),
+  )
+  logging.info(
+      'Cliques: %d, max_size: %d, total_size: %d',
+      diagnostics.num_cliques,
+      diagnostics.max_clique_size,
+      diagnostics.total_clique_size,
+  )
+  logging.info(
+      'Junction tree: %d nodes, max_size: %d, total_size: %d',
+      len(jtree_nodes),
+      diagnostics.max_jtree_node_size,
+      diagnostics.total_jtree_size,
+  )
+  return diagnostics
 
 
 @dataclasses.dataclass
@@ -44,7 +124,7 @@ class DiscreteMechanismResult:
   measurements: list[mbi.LinearMeasurement] = dataclasses.field(
       default_factory=list
   )
-  diagnostics: Any | None = None
+  diagnostics: MechanismDiagnostics | None = None
 
 
 def exponential_mechanism(
@@ -250,14 +330,40 @@ def compiled_workload(
   if not isinstance(workload, Mapping):
     workload = {cl: 1.0 for cl in workload}
 
-  def score(cl):
-    return sum(
-        workload[workload_cl] * len(set(cl) & set(workload_cl))
-        for workload_cl in workload
-    )
+  dc = list(downward_closure(workload.keys()))
 
-  return {
-      cl: score(cl)
-      for cl in downward_closure(workload.keys())
-      if domain.size(cl) <= max_marginal_size
+  # Precompute per-attribute weights so we can score each candidate in
+  # O(|candidate|) instead of O(|workload|).
+  attr_weight: dict[str, float] = {}
+  for workload_cl, weight in workload.items():
+    for attr in workload_cl:
+      attr_weight[attr] = attr_weight.get(attr, 0.0) + weight
+
+  def score(cl):
+    return sum(attr_weight.get(attr, 0.0) for attr in cl)
+
+  return {cl: score(cl) for cl in dc if domain.size(cl) <= max_marginal_size}
+
+
+def compute_independence_errors(
+    data: mbi.Projectable,
+    model: mbi.MarkovRandomField,
+    cliques: Sequence[mbi.Clique],
+) -> dict[mbi.Clique, float]:
+  """Computes L1 errors between actual marginals and the independence model."""
+  total = float(model.total)
+
+  # Pure numpy to avoid XLA recompilation: each distinct clique shape triggers
+  # a separate compilation, which dominates runtime for large candidate sets.
+  oneway = {
+      a: np.asarray(model.project((a,)).datavector()) / total
+      for a in data.domain
   }
+
+  errors = {}
+  for cl in tqdm.tqdm(cliques, desc='Computing independence errors'):
+    estimate = functools.reduce(np.multiply.outer, (oneway[a] for a in cl))
+    actual = np.asarray(data.project(cl).datavector(flatten=False))
+    error = np.abs(total * estimate - actual).sum()
+    errors[cl] = error
+  return errors

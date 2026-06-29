@@ -11,32 +11,31 @@ within a single machine's RAM.
 
 --------------------------------------------------------------------------------
 
-## Python API: `dpsynth.generate`
+## Python API: `dpsynth.TabularSynthesizer`
 
-The primary entry point for in-memory synthesis is `dpsynth.generate()`. It
-accepts a Pandas DataFrame alongside a dictionary of attribute domains and
-returns a fully synthetic, differentially private DataFrame matching the exact
-schema and data types of your input.
+The primary entry point for in-memory synthesis is
+`dpsynth.TabularSynthesizer`. It accepts a dictionary of attribute domains,
+is calibrated with a privacy budget, and generates a fully synthetic,
+differentially private DataFrame matching the exact schema and data types of
+your input.
 
-### Function Signature
+### Usage
 
 ```python
 import dpsynth
 from dpsynth import discrete_mechanisms
+import numpy as np
 import pandas as pd
 
-synthetic_df = dpsynth.generate(
-    data: pd.DataFrame,
-    domains: dict[str, dpsynth.domain.AttributeType],
-    epsilon: float,
-    delta: float,
-    *,
-    discrete_config: discrete_mechanisms.DiscreteMechanismConfig = discrete_mechanisms.MSTConfig(),
-    numerical_bins: int = 32,
-    one_way_marginal_budget_fraction: float = 0.1,
-    cross_attribute_constraints: list = (),
-    skip_compression: bool = False,
-) -> pd.DataFrame
+synth = dpsynth.TabularSynthesizer(
+    domains=domains,
+    discrete_mechanism=discrete_mechanisms.MSTMechanism(),
+)
+result = synth.calibrate(
+    epsilon=1.0,
+    delta=1e-6,
+)(np.random.default_rng(), sensitive_df)
+synthetic_df = result.synthetic_data
 ```
 
 ### Key Arguments
@@ -70,6 +69,7 @@ synthetic records.
 import dpsynth
 from dpsynth import discrete_mechanisms
 from dpsynth import domain
+import numpy as np
 import pandas as pd
 
 # 1. Load sensitive tabular data into Pandas
@@ -78,22 +78,24 @@ sensitive_df = pd.read_csv("sensitive_transactions.csv")
 # 2. Load domain schema from YAML
 attribute_domains = domain.from_yaml_file("transaction_domain.yaml")
 
-# 3. Configure the synthesis mechanism (AIM)
-aim_config = discrete_mechanisms.AIMConfig(
-    seed=42,
-    rounds=50,
-    pgm_iters=1000,
+# 3. Configure and calibrate the synthesizer (AIM)
+synth = dpsynth.TabularSynthesizer(
+    domains=attribute_domains,
+    discrete_mechanism=discrete_mechanisms.AIMConfig(
+        seed=42,
+        rounds=50,
+        pgm_iters=1000,
+    ),
+)
+calibrated = synth.calibrate(
+    epsilon=1.0,
+    delta=1e-6,
+    numerical_bins=16,  # Use 16 quantile buckets for numerical columns
 )
 
 # 4. Generate Differentially Private synthetic data
-synthetic_df = dpsynth.generate(
-    data=sensitive_df,
-    domains=attribute_domains,
-    epsilon=1.0,
-    delta=1e-6,
-    discrete_config=aim_config,
-    numerical_bins=16, # Use 16 quantile buckets for numerical columns
-)
+result = calibrated(np.random.default_rng(), sensitive_df)
+synthetic_df = result.synthetic_data
 
 # 5. Save the synthetic dataframe
 synthetic_df.to_csv("synthetic_transactions.csv", index=False)
@@ -139,7 +141,7 @@ python3 bin/main.py \
 
 ## Under the Hood: The In-Memory Lifecycle
 
-When you invoke `dpsynth.generate()`, the library performs the following
+When you invoke `TabularSynthesizer`, the library performs the following
 single-machine pipeline:
 
 1.  **Discretization**: Continuous numerical columns are bucketed into
