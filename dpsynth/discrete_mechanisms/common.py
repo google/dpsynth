@@ -330,17 +330,19 @@ def compiled_workload(
   if not isinstance(workload, Mapping):
     workload = {cl: 1.0 for cl in workload}
 
-  def score(cl):
-    return sum(
-        workload[workload_cl] * len(set(cl) & set(workload_cl))
-        for workload_cl in workload
-    )
+  dc = list(downward_closure(workload.keys()))
 
-  return {
-      cl: score(cl)
-      for cl in downward_closure(workload.keys())
-      if domain.size(cl) <= max_marginal_size
-  }
+  # Precompute per-attribute weights so we can score each candidate in
+  # O(|candidate|) instead of O(|workload|).
+  attr_weight: dict[str, float] = {}
+  for workload_cl, weight in workload.items():
+    for attr in workload_cl:
+      attr_weight[attr] = attr_weight.get(attr, 0.0) + weight
+
+  def score(cl):
+    return sum(attr_weight.get(attr, 0.0) for attr in cl)
+
+  return {cl: score(cl) for cl in dc if domain.size(cl) <= max_marginal_size}
 
 
 def compute_independence_errors(

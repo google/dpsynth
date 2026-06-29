@@ -28,6 +28,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping, Sequence
 import dataclasses
 import functools
+import itertools
 import math
 import time
 import typing
@@ -119,11 +120,16 @@ class SWIFTMechanism(primitives.DPMechanism):
     #########################################################################
     # Compile workload into candidate measurements, and precompute answers. #
     #########################################################################
-    candidates = common.compiled_workload(
-        data.domain, self.workload, self.max_marginal_size
-    )
-    answers = mbi.CliqueVector.from_projectable(data, candidates)
-    logging.info('[SWIFT] Calculated workload-query answers.')
+    with common.timed(phase_times, 'compiled_workload'):
+      candidates = common.compiled_workload(
+          data.domain,
+          self.workload,
+          self.max_marginal_size,
+      )
+    logging.info('[SWIFT] %d candidates.', len(candidates))
+
+    with common.timed(phase_times, 'from_projectable'):
+      answers = mbi.CliqueVector.from_projectable(data, candidates)
 
     # Convert end-to-end GDP sigma to budget for internal allocation.
     gdp_budget = 1.0 / self.gdp_sigma**2
@@ -144,16 +150,16 @@ class SWIFTMechanism(primitives.DPMechanism):
     if potentials is not None:
       potentials = potentials.expand([m.clique for m in measurements])
 
-    model = mbi.estimation.MirrorDescent(
-        marginal_oracle=self.marginal_oracle,
-    ).estimate(
-        domain,
-        measurements,
-        iters=self.pgm_iters,
-        potentials=potentials,
-    )
-    model = typing.cast(mbi.MarkovRandomField, model)
-    logging.info('[SWIFT] Estimated initial model.')
+    with common.timed(phase_times, 'initial_mirror_descent'):
+      model = mbi.estimation.MirrorDescent(
+          marginal_oracle=self.marginal_oracle,
+      ).estimate(
+          domain,
+          measurements,
+          iters=self.pgm_iters,
+          potentials=potentials,
+      )
+      model = typing.cast(mbi.MarkovRandomField, model)
 
     ###########################################
     # Select subset of candidates to measure. #
@@ -163,14 +169,15 @@ class SWIFTMechanism(primitives.DPMechanism):
       l1_error_budget = self.select_budget_frac * gdp_budget
       budget_remaining -= l1_error_budget
 
-      errors = _compute_initial_errors(
-          rng, answers, model, list(candidates), l1_error_budget
-      )
-      logging.info('[SWIFT] Computed initial errors.')
+      with common.timed(phase_times, 'compute_initial_errors'):
+        errors = _compute_initial_errors(
+            rng, answers, model, list(candidates), l1_error_budget
+        )
 
-      selected, jtree = select_queries(
-          errors, candidates, domain, self.max_clique_size, budget_remaining
-      )
+      with common.timed(phase_times, 'select_queries'):
+        selected, jtree = select_queries(
+            errors, candidates, domain, self.max_clique_size, budget_remaining
+        )
 
     ########################################################
     # Precompile MirrorDescent + synth while measuring.    #
@@ -251,11 +258,21 @@ def _is_supported(clique: mbi.Clique, tree: nx.Graph) -> bool:
   return any(set(clique) <= set(n) for n in tree.nodes)
 
 
+def _supported_pairs(tree: nx.Graph) -> frozenset[tuple[str, str]]:
+  """Returns all attribute pairs supported by the clique tree."""
+  pairs = set()
+  for node in tree.nodes:
+    for pair in itertools.combinations(sorted(node), 2):
+      pairs.add(pair)
+  return frozenset(pairs)
+
+
 def build_clique_tree(
     domain: mbi.Domain,
     errors: Mapping[mbi.Clique, float],
     max_clique_size: float,
     penalty: float = 0.0,
+    max_candidates: int = 5000,
 ) -> nx.Graph:
   """Greedily construct a clique tree using the SWIFT heuristic.
 
@@ -269,6 +286,8 @@ def build_clique_tree(
       marginal in the workload.
     max_clique_size: The maximum size of a clique in the clique tree.
     penalty: Penalize scores by the domain size of the clique times this factor.
+    max_candidates: Cap on the number of top-error candidates to keep before the
+      greedy loop. Set to 0 to disable.
 
   Returns:
     A clique tree whose nodes (cliques) support a subset of the workload with
@@ -279,18 +298,31 @@ def build_clique_tree(
 
   # We only consider 2-way cliques for this greedy algorithm, although the
   # resulting clique tree will generally contain larger cliques.
+  # The penalty is a surrogate for the noise sigma that will be determined
+  # later by best_subset_and_allocation once the budget is split.
   errors = {
       key: value - penalty * domain.size(key)
       for key, value in errors.items()
       if len(key) == 2
   }
-  prev_size = None
 
+  # Sort once — values never change, only entries get removed.
+  sorted_cliques = sorted(errors, key=errors.get, reverse=True)
+
+  # Cap candidates to keep the greedy loop tractable.
+  if max_candidates > 0 and len(sorted_cliques) > max_candidates:
+    dropped = set(sorted_cliques[max_candidates:])
+    sorted_cliques = sorted_cliques[:max_candidates]
+    errors = {c: errors[c] for c in errors if c not in dropped}
+
+  prev_size = None
   while prev_size != len(errors):
     prev_size = len(errors)
     supporting_edges = clique_tree.derive_supporting_edges(result)
 
-    for cl in sorted(errors, key=lambda x: errors[x], reverse=True):
+    for cl in sorted_cliques:
+      if cl not in errors:
+        continue
       edge, cost = clique_tree.best_supporting_edge(
           cl, supporting_edges, domain
       )
@@ -298,7 +330,10 @@ def build_clique_tree(
       is_small_enough = cost <= max_clique_size
       if is_supported and is_small_enough:
         result = clique_tree.local_update(result, cl, domain)
-        errors = {c: errors[c] for c in errors if not _is_supported(c, result)}
+        supported = _supported_pairs(result)
+        errors = {
+            c: errors[c] for c in errors if tuple(sorted(c)) not in supported
+        }
         break
 
       elif math.isfinite(cost) and not is_small_enough:
@@ -320,7 +355,12 @@ def build_best_clique_tree(
     tree = build_clique_tree(domain, errors, max_clique_size, penalty)
     # By measuring these cliques, we will be able to greatly reduce the error.
     # Therefore, selecting clique with high total error is beneficial.
-    score = sum(errors[cl] for cl in errors if _is_supported(cl, tree))
+    supported = _supported_pairs(tree)
+    score = sum(
+        errors[cl]
+        for cl in errors
+        if len(cl) == 2 and tuple(sorted(cl)) in supported
+    )
 
     if score > best_score:
       best_score = score
