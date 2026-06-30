@@ -175,6 +175,14 @@ class MSTMechanism(primitives.DPMechanism):
   select_budget_fraction: float = 1 / 3
   zcdp_rho: float | None = None
 
+  def supporting_cliques(self, domain: mbi.Domain) -> list[mbi.Clique]:
+    """Returns all pairwise marginals within the size limit."""
+    return common.supporting_cliques(
+        domain,
+        itertools.combinations(domain.attributes, 2),
+        self.maximum_marginal_size,
+    )
+
   def calibrate(self, *, zcdp_rho: float) -> MSTMechanism:
     """Returns a copy calibrated to the given zCDP budget."""
     return dataclasses.replace(self, zcdp_rho=zcdp_rho)

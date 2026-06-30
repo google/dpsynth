@@ -25,6 +25,7 @@ from typing import TypeAlias
 from absl import logging
 from dpsynth import transformations
 import mbi
+import mbi.clique_utils
 import mbi.junction_tree
 import more_itertools
 import numpy as np
@@ -304,6 +305,38 @@ def downward_closure(
 
 Workload: TypeAlias = Mapping[mbi.Clique, float]
 Workload2: TypeAlias = Iterable[mbi.Clique]
+
+
+def supporting_cliques(
+    domain: mbi.Domain,
+    workload: Workload | Workload2 | None,
+    max_marginal_size: float = float('inf'),
+) -> list[mbi.Clique]:
+  """Returns the maximal workload cliques filtered by domain size.
+
+  This function extracts a collection of top-level cliques from the workload,
+  filtering out cliques whose domain exceeds ``max_marginal_size`` or that
+  are redundant given other cliques. Any marginal query in the downward closure
+  of the workload below ``max_marginal_size`` can be computed from the
+  supporting marginals.
+
+  Args:
+    domain: The domain of the dataset.
+    workload: A workload specification. Defaults to all three-way marginals.
+    max_marginal_size: The maximum domain size of a clique to include.
+
+  Returns:
+    A list of cliques from the workload whose domain size is within the limit.
+  """
+  if workload is None:
+    cliques = list(itertools.combinations(domain.attributes, 3))
+  elif isinstance(workload, Mapping):
+    cliques = list(workload.keys())
+  else:
+    cliques = list(workload)
+  cliques = mbi.clique_utils.downward_closure(cliques)
+  cliques = [cl for cl in cliques if domain.size(cl) <= max_marginal_size]
+  return mbi.clique_utils.maximal_subset(cliques)
 
 
 def compiled_workload(

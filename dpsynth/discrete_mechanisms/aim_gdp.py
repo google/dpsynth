@@ -179,6 +179,12 @@ class AIMGDPMechanism(primitives.DPMechanism):
   select_budget_fraction: float = 0.1
   gdp_sigma: float | None = None
 
+  def supporting_cliques(self, domain: mbi.Domain) -> list[mbi.Clique]:
+    """Returns the workload cliques filtered by max_marginal_size."""
+    return common.supporting_cliques(
+        domain, self.workload, self.max_marginal_size
+    )
+
   def calibrate(self, *, zcdp_rho: float) -> 'AIMGDPMechanism':
     """Returns a new instance calibrated to the given zCDP budget."""
     return dataclasses.replace(

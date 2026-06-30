@@ -40,6 +40,10 @@ class IndependentMechanism(primitives.DPMechanism):
   marginal_oracle: mbi.MarginalOracle | None = None
   gdp_sigma: float | None = None
 
+  def supporting_cliques(self, domain: mbi.Domain) -> list[mbi.Clique]:
+    """Returns the one-way marginals this mechanism will measure."""
+    return [(a,) for a in domain.attributes]
+
   def calibrate(self, *, zcdp_rho: float) -> 'IndependentMechanism':
     """Returns a copy calibrated to the given zCDP budget."""
     return dataclasses.replace(

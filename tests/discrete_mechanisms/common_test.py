@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import itertools
 import pickle
 
 from absl.testing import absltest
@@ -72,6 +73,25 @@ class CommonTest(absltest.TestCase):
         [measurement]
     )[0]
     self.assertEqual(compressed_domain, mbi.Domain.fromdict({"a": 5}))
+
+  def test_supporting_cliques(self):
+    domain = mbi.Domain(["a", "b", "c", "d"], [3, 3, 3, 100])
+    cliques = common.supporting_cliques(domain, workload=None)
+    self.assertCountEqual(
+        cliques, list(itertools.combinations(domain.attributes, 3))
+    )
+    # List workload.
+    cliques = common.supporting_cliques(domain, [("a", "b"), ("c", "d")])
+    self.assertCountEqual(cliques, [("a", "b"), ("c", "d")])
+    # Dict workload uses keys.
+    cliques = common.supporting_cliques(domain, {("a", "b"): 1.0})
+    self.assertCountEqual(cliques, [("a", "b")])
+    # Filters by max_marginal_size.
+    cliques = common.supporting_cliques(
+        domain, [("a", "b"), ("a", "d")], max_marginal_size=50
+    )
+    self.assertIn(("a", "b"), cliques)
+    self.assertNotIn(("a", "d"), cliques)
 
 
 if __name__ == "__main__":

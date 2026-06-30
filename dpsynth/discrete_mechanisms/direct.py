@@ -43,6 +43,11 @@ class DirectMechanism(primitives.DPMechanism):
   marginal_oracle: mbi.MarginalOracle | None = None
   gdp_sigma: float | None = None
 
+  def supporting_cliques(self, domain: mbi.Domain) -> list[mbi.Clique]:
+    """Returns the prespecified marginal queries."""
+    del domain  # Unused; cliques are user-specified.
+    return list(self.prespecified_marginal_queries)
+
   def calibrate(self, *, zcdp_rho: float) -> 'DirectMechanism':
     """Returns a copy calibrated to the given zCDP budget."""
     return dataclasses.replace(
