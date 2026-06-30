@@ -51,6 +51,7 @@ from __future__ import annotations
 import dataclasses
 import json
 import math
+import typing
 
 from absl import logging
 import dp_accounting
@@ -92,7 +93,7 @@ class DPTrainer(primitives.DPMechanism):
 
   init_params: training.Params
   loss_fn: training.LossFn
-  mechanism_config: execution_plan.BandMFConfig
+  mechanism_config: execution_plan.ExecutionPlanConfig
   optimizer: optax.GradientTransformation
   performance_flags: execution_plan.PerformanceFlags | None = None
   callback: training.CallbackFn | None = None
@@ -111,11 +112,14 @@ class DPTrainer(primitives.DPMechanism):
     Returns:
       A new ``DPTrainer`` with calibrated ``config.noise_multiplier``.
     """
-    num_bands = len(self.mechanism_config.strategy)  # pyrefly: ignore[bad-argument-type]
-    rounds = math.ceil(self.mechanism_config.iterations / num_bands)
+    if isinstance(self.mechanism_config, execution_plan.NonPrivateConfig):
+      return self
+    cfg = typing.cast(execution_plan.BandMFConfig, self.mechanism_config)
+    num_bands = len(cfg.strategy)  # pyrefly: ignore[bad-argument-type]
+    rounds = math.ceil(cfg.iterations / num_bands)
     noise_multiplier = math.sqrt(rounds / (2.0 * zcdp_rho))
     calibrated_config = dataclasses.replace(
-        self.mechanism_config,
+        cfg,
         noise_multiplier=noise_multiplier,
     )
     return dataclasses.replace(self, mechanism_config=calibrated_config)
@@ -123,7 +127,10 @@ class DPTrainer(primitives.DPMechanism):
   @property
   def dp_event(self) -> dp_accounting.DpEvent:
     """The DpEvent characterizing the privacy cost of DP-SGD training."""
-    if self.mechanism_config.noise_multiplier is None:
+    if (
+        hasattr(self.mechanism_config, 'noise_multiplier')
+        and self.mechanism_config.noise_multiplier is None
+    ):
       raise ValueError('noise_multiplier is not set. Call calibrate() first.')
     return self._make_plan().dp_event
 
@@ -141,11 +148,16 @@ class DPTrainer(primitives.DPMechanism):
     Returns:
       Final ``TrainingState`` containing the trained parameters.
     """
-    if self.mechanism_config.noise_multiplier is None:
+    if (
+        hasattr(self.mechanism_config, 'noise_multiplier')
+        and self.mechanism_config.noise_multiplier is None
+    ):
       raise ValueError('noise_multiplier is not set. Call calibrate() first.')
 
-    d = dataclasses.asdict(self.mechanism_config)
-    d['strategy'] = self.mechanism_config.strategy.tolist()  # JSON/numpy hack.  # pyrefly: ignore[missing-attribute]
+    cfg = typing.cast(typing.Any, self.mechanism_config)
+    d = dataclasses.asdict(cfg)
+    if hasattr(self.mechanism_config, 'strategy') and cfg.strategy is not None:
+      d['strategy'] = cfg.strategy.tolist()  # JSON/numpy hack.
     logging.info('DPTrainer config:\n%s', json.dumps(d, indent=2))
 
     dp_trainer = training.DPTrainer(
