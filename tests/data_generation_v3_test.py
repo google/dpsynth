@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 from absl.testing import absltest
+from absl.testing import parameterized
 import dp_accounting
 from dpsynth import data_generation_v3
 from dpsynth import domain
@@ -24,7 +25,7 @@ import pandas as pd
 TabularSynthesizer = data_generation_v3.TabularSynthesizer
 
 
-class DataGenerationV3Test(absltest.TestCase):
+class DataGenerationV3Test(parameterized.TestCase):
 
   def test_end_to_end_categorical(self):
     domains = {
@@ -180,6 +181,33 @@ class DataGenerationV3Test(absltest.TestCase):
     self.assertIsNotNone(calibrated.total_count_mechanism)
     synthetic_df = calibrated(rng, df).synthetic_data
     self.assertListEqual(synthetic_df.columns.tolist(), ['A', 'B'])
+
+  @parameterized.product(
+      sentinel=[np.nan, None],
+      clip_to_range=[True, False],
+      dtype=['float', 'int'],
+  )
+  def test_nan_numerical_column(self, sentinel, clip_to_range, dtype):
+    """Regression test: NaN/None/pd.NA numerical columns should not crash."""
+    max_value = 100 if dtype == 'int' else 10
+    domains = {
+        'A': domain.NumericalAttribute(
+            min_value=0,
+            max_value=max_value,
+            clip_to_range=clip_to_range,
+            dtype=dtype,
+        ),
+        'B': domain.CategoricalAttribute(possible_values=['x', 'y']),
+    }
+    df = pd.DataFrame({
+        'A': [sentinel, sentinel, sentinel],
+        'B': ['x', 'y', 'x'],
+    })
+    rng = np.random.default_rng(0)
+    calibrated = TabularSynthesizer(domains=domains).calibrate(zcdp_rho=100.0)
+    result = calibrated(rng, df)
+    self.assertIsInstance(result.synthetic_data, pd.DataFrame)
+    self.assertListEqual(result.synthetic_data.columns.tolist(), ['A', 'B'])
 
 
 if __name__ == '__main__':

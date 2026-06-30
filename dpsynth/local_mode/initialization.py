@@ -123,7 +123,10 @@ class NumericalInitializer(primitives.DPMechanism):
     _validate_mechanism(self.mechanism)
     lower = self.attribute.min_value
     upper = self.attribute.exclusive_max_value
-    finite_data = data[np.isfinite(data.astype(float))]
+    # Convert to float64 first so object-typed arrays (e.g. containing None)
+    # become proper float64 with NaN values.
+    float_data = np.asarray(data, dtype=float)
+    finite_data = float_data[np.isfinite(float_data)]
     clamped = np.clip(finite_data, lower, upper)
     delta = (upper - lower) / (self.grid_size - 1)
     indices = np.round((clamped - lower) / delta).astype(np.int64)

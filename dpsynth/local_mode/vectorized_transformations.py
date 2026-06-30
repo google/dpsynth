@@ -136,6 +136,9 @@ def discretize(
     out-of-domain (``None``) bin and in-domain bins start at 1.
   """
   min_, max_ = attribute_domain.min_value, attribute_domain.max_value
+  # Coerce to float64 so object-typed arrays (e.g. containing None) work
+  # with np.clip / np.isnan without TypeError.
+  data = np.asarray(data, dtype=float)
   _validate_bin_edges(bin_edges, attribute_domain)
 
   if bin_edges.size == 0:
