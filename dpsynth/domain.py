@@ -289,6 +289,8 @@ AttributeType = (
     | FreeFormTextAttribute
 )
 
+Schema: TypeAlias = Mapping[str, AttributeType]
+
 
 def to_yaml_file(domain: Mapping[str, AttributeType], filepath: str | PathType):
   """Writes a dictionary of Attribute objects to a YAML file."""
