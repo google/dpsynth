@@ -16,6 +16,7 @@
 
 import dataclasses
 
+from absl import logging
 import dp_accounting
 from dpsynth.discrete_mechanisms import accounting
 from dpsynth.discrete_mechanisms import common
@@ -86,6 +87,10 @@ class DirectMechanism(primitives.DPMechanism):
       else:
         all_measurements = new_measurements
 
+    logging.info(
+        '[Direct]:\n%s',
+        mbi.summarize(data.domain, [m.clique for m in all_measurements]),
+    )
     # fit a distribution to the noisy measurements
     with common.timed(phase_times, 'estimation'):
       model = mbi.estimation.MirrorDescent(

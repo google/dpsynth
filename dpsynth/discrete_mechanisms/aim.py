@@ -249,12 +249,19 @@ class AIMMechanism(primitives.DPMechanism):
             data.domain,
         )
 
+      summary = mbi.summarize(
+          data.domain, [m.clique for m in measurements] + [marginal_query]
+      )
       logging.info(
-          '[AIM] Round %d, Budget used: %.4f, Measuring: %s, Candidates: %d',
+          '[AIM] Round %d, Budget used: %.4f, Measuring: %s, Candidates: %d,'
+          ' cliques: %d, treewidth: %d, memory: %d bytes',
           t,
           (zcdp_rho - rho_remaining) / zcdp_rho,
           marginal_query,
           len(small_candidates),
+          summary.num_cliques,
+          summary.treewidth,
+          summary.memory_bytes,
       )
 
       ######################################################################

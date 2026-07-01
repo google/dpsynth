@@ -185,6 +185,9 @@ class SWIFTMechanism(primitives.DPMechanism):
             errors, candidates, domain, self.max_clique_size, budget_remaining
         )
 
+    all_cliques = [m.clique for m in measurements] + list(selected)
+    logging.info('[SWIFT]:\n%s', mbi.summarize(domain, all_cliques, jtree))
+
     ########################################################
     # Precompile MirrorDescent + synth while measuring.    #
     ########################################################

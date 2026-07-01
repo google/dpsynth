@@ -16,6 +16,7 @@
 
 import dataclasses
 
+from absl import logging
 import dp_accounting
 from dpsynth.discrete_mechanisms import accounting
 from dpsynth.discrete_mechanisms import common
@@ -87,6 +88,10 @@ class IndependentMechanism(primitives.DPMechanism):
         )
         measurements.append(mbi.LinearMeasurement(noisy_marginal, clique))
 
+    logging.info(
+        '[Independent]:\n%s',
+        mbi.summarize(data.domain, [m.clique for m in measurements]),
+    )
     with common.timed(phase_times, 'estimation'):
       potentials = initial_potentials
       if potentials is not None:

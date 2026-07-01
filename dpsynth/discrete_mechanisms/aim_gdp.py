@@ -314,12 +314,19 @@ class AIMGDPMechanism(primitives.DPMechanism):
             max_new_evals=self.max_candidates_per_round,
         )
 
+      summary = mbi.summarize(
+          domain, [m.clique for m in measurements] + [marginal_query]
+      )
       logging.info(
-          '[AIM] Round %d, Budget used: %.4f, Measuring: %s, Candidates: %d',
+          '[AIM-GDP] Round %d, Budget used: %.4f, Measuring: %s,'
+          ' Candidates: %d, cliques: %d, treewidth: %d, memory: %d bytes',
           t,
           percent_used,
           marginal_query,
           len(small_candidates),
+          summary.num_cliques,
+          summary.treewidth,
+          summary.memory_bytes,
       )
 
       ######################################################################

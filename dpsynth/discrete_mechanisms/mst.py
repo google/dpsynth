@@ -267,6 +267,10 @@ class MSTMechanism(primitives.DPMechanism):
         data.domain, [m.clique for m in all_measurements]
     )
     logging.info('[MST]: Model size: %d MB', model_size)
+    logging.info(
+        '[MST]:\n%s',
+        mbi.summarize(data.domain, [m.clique for m in all_measurements]),
+    )
     with common.timed(phase_times, 'estimation'):
       model = mbi.estimation.MirrorDescent(
           marginal_oracle=self.marginal_oracle,
