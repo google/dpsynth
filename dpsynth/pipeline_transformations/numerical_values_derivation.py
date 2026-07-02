@@ -27,7 +27,6 @@ from dpsynth.dataset_descriptors import dataset_descriptor
 from dpsynth.pipeline_transformations import types
 import numpy as np
 import pipeline_dp
-from pipeline_dp import pipeline_functions
 
 Key: TypeAlias = TypeVar('Key', bound=str | int)
 Record: TypeAlias = tuple[Any, ...] | dict[Key, Any]
@@ -46,6 +45,7 @@ def derive_numerical_attributes(
     dp_engine: pipeline_dp.DPEngine,
     attribute_keys_to_derive: list[Key],
     num_quantile_buckets: int,
+    public_bounds: dict[Key, domain.NumericalAttribute] | None = None,
 ) -> types.Collection[NumericalAttributeOutput] | None:
   """Derives new NumericalAttribute objects by computing DP quantiles.
 
@@ -61,10 +61,12 @@ def derive_numerical_attributes(
     num_quantile_buckets: The number of quantile buckets to use for
       discretization. This means `num_quantile_buckets - 1` boundaries will be
       computed.
+    public_bounds: Public numerical bounds for each attribute. These bounds
+      must be provided by the caller instead of inferred from sensitive data.
 
   Returns:
     A collection of `NumericalAttributeOutput` objects, where
-    each object contains the field key, the min/max-based
+    each object contains the field key, the public-bounds-based
     `domain.NumericalAttribute`, and the DP-computed quantiles. Returns None if
     there are no attributes to derive values for.
   """
@@ -72,40 +74,18 @@ def derive_numerical_attributes(
     # No attributes to derive values for.
     return None
 
-  def extract_field_values(row):
-    for key in attribute_keys_to_derive:
-      yield key, row[key]
+  if public_bounds is None:
+    public_bounds = {}
+  for key in attribute_keys_to_derive:
+    if key not in public_bounds:
+      raise ValueError(
+          'Public numerical bounds must be provided for every numerical'
+          f' attribute. Missing bounds for: {key}.'
+      )
 
-  key_val_pairs = backend.flat_map(
-      input_data,
-      extract_field_values,
-      'Extract key-value pairs for all keys in attribute_keys_to_derive.',
-  )  # (key, value)
-
-  min_max = pipeline_functions.min_max_per_key(
-      backend, key_val_pairs, 'Compute min and max per key.'
-  )  # (key, (min, max))
-
-  def _make_numerical_attr(min_max):
-    lo, hi = min_max
-    if lo >= hi:
-      # Constant column: pad range so the attribute is valid.
-      hi = lo + 1.0
-    return domain.NumericalAttribute(min_value=lo, max_value=hi)
-
-  key_to_attr = backend.map_values(
-      min_max,
-      _make_numerical_attr,
-      'Create numerical attribute from min/max',
-  )  # (key, domain.NumericalAttribute)
-
-  # Conversion of key_to_attr to a singleton collection
-  key_to_attr = backend.to_list(
-      key_to_attr, 'key_to_attr to list'
-  )  # singleton [(key, domain.NumericalAttribute)]
-  key_to_attr = backend.map(
-      key_to_attr, dict, 'key_to_attr list to dict'
-  )  # singleton {key: domain.NumericalAttribute}
+  key_to_attr = backend.to_collection(
+      [public_bounds], input_data, 'Create public numerical attributes'
+  )
 
   quantiles = _compute_dp_quantiles(
       input_data,
