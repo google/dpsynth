@@ -15,63 +15,100 @@
 """Beam-backed column initializers for DP Synth.
 
 Computes per-column sufficient statistics via Apache Beam PTransforms,
-then delegates to the existing initializers' ``from_summary()`` methods
-for DP mechanism execution on the driver. The central assumption in this file
-is that the data is too large to feasibly materialize in memory on the driver,
-but the per-column sufficient statistics can easily fit. The intention is to
-use Beam where it is absolutely needed, but quickly delegate to local-mode
-implementations as soon as the sufficient statistics are available, creating
-a clear separation of concerns. All beam-related logic necessary to use the
-local mode variant of DPSynth is contained in this file.
+then runs DP mechanisms from ``primitives.py`` directly on the driver.
+No dependency on MBI or JAX — only ``numpy``, ``domain``, ``primitives``,
+and ``vectorized_transformations`` are imported.  All outputs are pure
+NumPy arrays in lightweight dataclasses.
 """
 
 from __future__ import annotations
 
+import dataclasses
+import enum
 import math
 from typing import Any
 
 import apache_beam as beam
-from dpsynth.local_mode import initialization
+from dpsynth import domain
+from dpsynth.local_mode import vectorized_transformations as vtx
 import numpy as np
 
-# A single row of tabular data: column name -> raw value.
-# representation for large pipelines.  Consider supporting named tuples or
-# a schema-aware format (e.g. Beam Rows, protos) to reduce per-element overhead.
+# representation for large pipelines.  Consider named tuples or Beam Rows.
 Row = dict[str, Any]
 
-Initializer = (
-    initialization.NumericalInitializer
-    | initialization.CategoricalInitializer
-    | initialization.OpenSetCategoricalInitializer
-)
+
+class ColumnType(enum.Enum):
+  NUMERICAL = 'numerical'
+  CATEGORICAL = 'categorical'
+  OPENSET = 'openset'
+
+
+@dataclasses.dataclass
+class BeamColumnResult:
+  """Lightweight column result without MBI/JAX dependency."""
+
+  column_type: ColumnType
+  categorical_attribute: domain.CategoricalAttribute
+  bin_edges: np.ndarray | None = None
+  noisy_counts: np.ndarray | None = None
+  stddev: float | None = None
+
+
+@dataclasses.dataclass
+class InitSpec:
+  """Per-column mechanism + attribute specification (MBI-free)."""
+
+  column_type: ColumnType
+  mechanism: Any  # primitives.DPMechanism subclass
+  attribute: Any  # domain.*Attribute
+  grid_size: int | None = None  # numerical only
+  min_count: int = 1  # openset only
+
+
+def _build_encode_specs(
+    init_specs: dict[str, InitSpec],
+) -> tuple[list[tuple[str, str, dict[str, Any]]], dict[str, int]]:
+  """Derives encoding specs and openset min-counts from InitSpecs."""
+  encode_specs = []
+  openset_min_counts = {}
+  for column, spec in init_specs.items():
+    if spec.column_type == ColumnType.NUMERICAL:
+      attr = spec.attribute
+      lower = attr.min_value
+      delta = (attr.exclusive_max_value - lower) / (spec.grid_size - 1)
+      encode_specs.append((
+          column,
+          'numerical',
+          {
+              'attribute': attr,
+              'lower': lower,
+              'delta': delta,
+          },
+      ))
+    elif spec.column_type == ColumnType.CATEGORICAL:
+      lookup = {str(v): i for i, v in enumerate(spec.attribute.possible_values)}
+      encode_specs.append((
+          column,
+          'categorical',
+          {
+              'lookup': lookup,
+              'default': spec.attribute.out_of_domain_index,
+          },
+      ))
+    elif spec.column_type == ColumnType.OPENSET:
+      encode_specs.append((column, 'openset', {}))
+      openset_min_counts[column] = spec.min_count
+  return encode_specs, openset_min_counts
 
 
 class _EncodeColumns(beam.DoFn):
   """Encodes each row into (column, key) pairs for all columns at once."""
 
-  def __init__(self, initializers: dict[str, Initializer]):
+  def __init__(self, specs: list[tuple[str, str, dict[str, Any]]]):
     # Do all setup in __init__ so that process below is cheaper.
     # We handle all columns at once here to reduce the size of the DAG in Beam.
     super().__init__()
-    self._specs: list[tuple[str, str, dict[str, Any]]] = []
-    for column, init in initializers.items():
-      if isinstance(init, initialization.NumericalInitializer):
-        attr = init.attribute
-        lower = attr.min_value
-        delta = (attr.exclusive_max_value - lower) / (init.grid_size - 1)
-        meta = {'attribute': attr, 'lower': lower, 'delta': delta}
-        self._specs.append((column, 'numerical', meta))
-
-      elif isinstance(init, initialization.CategoricalInitializer):
-        lookup = {
-            str(v): i for i, v in enumerate(init.attribute.possible_values)
-        }
-        meta = {'lookup': lookup, 'default': init.attribute.out_of_domain_index}
-        self._specs.append((column, 'categorical', meta))
-      elif isinstance(init, initialization.OpenSetCategoricalInitializer):
-        self._specs.append((column, 'openset', {}))
-      else:
-        raise TypeError(f'Unsupported initializer type: {type(init)}')
+    self._specs = specs
 
   def process(self, row: Row):
     for column, kind, params in self._specs:
@@ -109,31 +146,20 @@ def _materialize_pairs(col, pairs):
 
 
 class ComputeSufficientStats(beam.PTransform):
-  """Computes per-column sufficient statistics in a single pass.
+  """Computes per-column sufficient statistics in a single pass."""
 
-  Encodes all columns in one ``DoFn``, then counts via a single
-  ``Count.PerElement`` and groups by column. The output is a ``PCollection``
-  of ``(column_name, sparse_counts_list)`` pairs.
-
-  Attributes:
-    initializers: Calibrated initializers keyed by column name.
-  """
-
-  def __init__(self, initializers: dict[str, Initializer]):
+  def __init__(self, init_specs: dict[str, InitSpec]):
     super().__init__()
-    self._initializers = initializers
-    self._openset_min_counts = {
-        col: init.min_count
-        for col, init in initializers.items()
-        if isinstance(init, initialization.OpenSetCategoricalInitializer)
-    }
+    self._encode_specs, self._openset_min_counts = _build_encode_specs(
+        init_specs
+    )
 
   def expand(
       self, rows: beam.PCollection[Row]
   ) -> beam.PCollection[tuple[str, list[tuple[Any, int]]]]:
     return (
         rows
-        | 'Encode' >> beam.ParDo(_EncodeColumns(self._initializers))
+        | 'Encode' >> beam.ParDo(_EncodeColumns(self._encode_specs))
         | 'Count' >> beam.combiners.Count.PerElement()
         | 'Unpack' >> beam.Map(_unpack_count)
         # Aggregate data and materialize on the driver (see module header).
@@ -168,75 +194,78 @@ def _sparse_to_openset(sparse):
   return np.array(keys), np.array(vals, dtype=np.float64)
 
 
-# into the Beam pipeline, which can increase setup time for each worker.
+def _edges_to_beam_result(raw_edges, attribute):
+  """Processes quantile edges into a BeamColumnResult (no MBI)."""
+  raw_edges = np.asarray(raw_edges, dtype=float)
+  if attribute.dtype == 'int':
+    raw_edges = np.floor(raw_edges)
+  bin_edges, _ = np.unique(raw_edges, return_counts=True)
+  # Remove edges at max_value to avoid degenerate tail bins.
+  if len(bin_edges) > 0 and bin_edges[-1] >= attribute.max_value:
+    bin_edges = bin_edges[:-1]
+  cat_attr = vtx.categorical_attribute_from_edges(bin_edges, attribute)
+  return BeamColumnResult(ColumnType.NUMERICAL, cat_attr, bin_edges=bin_edges)
+
+
 def run_from_summary(
     sparse_stats: dict[str, list[tuple[Any, int]]],
-    initializers: dict[str, Initializer],
+    init_specs: dict[str, InitSpec],
     rng: np.random.Generator,
-) -> dict[str, initialization.ColumnMeasurement]:
-  """Converts materialized sparse stats to ColumnMeasurements on the driver.
-
-  Meant to be called after ``ComputeSufficientStats`` results have been
-  materialized (e.g. via ``beam.combiners.ToDict()``).
-
-  Args:
-    sparse_stats: Column-keyed dict of sparse (key, count) pair lists, as
-      produced by ``ComputeSufficientStats``.
-    initializers: Calibrated initializers keyed by column name.
-    rng: NumPy random generator for DP noise.
-
-  Returns:
-    Per-column ``ColumnMeasurement`` results.
-  """
-  results: dict[str, initialization.ColumnMeasurement] = {}
-  for column, init in initializers.items():
+) -> dict[str, BeamColumnResult]:
+  """Runs DP mechanisms via primitives and returns pure NumPy results."""
+  results: dict[str, BeamColumnResult] = {}
+  for column, spec in init_specs.items():
     sparse = sparse_stats[column]
-    if isinstance(init, initialization.NumericalInitializer):
-      counts = _sparse_to_dense_numerical(sparse, init.grid_size)
-      results[column] = init.from_summary(rng, counts)
-    elif isinstance(init, initialization.CategoricalInitializer):
-      counts = _sparse_to_dense_categorical(sparse, init.attribute.size)
-      results[column] = init.from_summary(rng, counts)
-    elif isinstance(init, initialization.OpenSetCategoricalInitializer):
+    if spec.column_type == ColumnType.NUMERICAL:
+      counts = _sparse_to_dense_numerical(sparse, spec.grid_size)
+      raw_edges = spec.mechanism(rng, counts)
+      results[column] = _edges_to_beam_result(raw_edges, spec.attribute)
+    elif spec.column_type == ColumnType.CATEGORICAL:
+      counts = _sparse_to_dense_categorical(sparse, spec.attribute.size)
+      result = spec.mechanism(rng, counts)
+      results[column] = BeamColumnResult(
+          ColumnType.CATEGORICAL,
+          spec.attribute,
+          noisy_counts=result.counts,
+          stddev=spec.mechanism.sigma,
+      )
+    elif spec.column_type == ColumnType.OPENSET:
       unique_values, value_counts = _sparse_to_openset(sparse)
-      results[column] = init.from_summary(rng, unique_values, value_counts)
+      result = spec.mechanism.from_summary(rng, value_counts)
+      selected = list(unique_values[result.selected_partitions])
+      possible = [spec.attribute.default_value] + selected
+      cat_attr = domain.CategoricalAttribute(
+          possible_values=possible,
+          out_of_domain_index=0,
+      )
+      results[column] = BeamColumnResult(
+          ColumnType.OPENSET,
+          cat_attr,
+          noisy_counts=result.estimated_counts,
+          stddev=spec.mechanism.sigma,
+      )
   return results
 
 
 class BeamInitialize(beam.PTransform):
-  """End-to-end: computes sufficient stats and runs DP initialization.
+  """Computes sufficient stats and runs DP initialization."""
 
-  Composes ``ComputeSufficientStats`` with sparse-to-dense conversion and
-  ``from_summary()`` calls. Produces a singleton ``PCollection`` containing
-  one ``dict[str, ColumnMeasurement]`` with all results.
-
-  Attributes:
-    initializers: Calibrated initializers keyed by column name.
-    rng: NumPy random generator for DP noise.
-  """
-
-  def __init__(
-      self,
-      initializers: dict[str, Initializer],
-      rng: np.random.Generator,
-  ):
+  def __init__(self, init_specs: dict[str, InitSpec], rng: np.random.Generator):
     super().__init__()
-    self._initializers = initializers
+    self._init_specs = init_specs
     self._rng = rng
 
   def expand(
       self, rows: beam.PCollection[Row]
-  ) -> beam.PCollection[dict[str, initialization.ColumnMeasurement]]:
+  ) -> beam.PCollection[dict[str, BeamColumnResult]]:
     return (
         rows
-        | 'Stats' >> ComputeSufficientStats(self._initializers)
+        | 'Stats' >> ComputeSufficientStats(self._init_specs)
         | 'ToDict' >> beam.combiners.ToDict()
         | 'Initialize'
-        # Since all sufficient stats have been computed and materialized on the
-        # driver, passing a single rng is fine here.
         >> beam.Map(
             run_from_summary,
-            initializers=self._initializers,
+            init_specs=self._init_specs,
             rng=self._rng,
         )
     )

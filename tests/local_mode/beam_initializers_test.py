@@ -29,18 +29,44 @@ def _store(x):
   _TEST_RESULTS.append(x)
 
 
+def _init_spec_from_initializer(init):
+  """Helper: builds an InitSpec from a calibrated initializer."""
+  if isinstance(init, initialization.NumericalInitializer):
+    return beam_initializers.InitSpec(
+        beam_initializers.ColumnType.NUMERICAL,
+        init.mechanism,
+        init.attribute,
+        grid_size=init.grid_size,
+    )
+  elif isinstance(init, initialization.CategoricalInitializer):
+    return beam_initializers.InitSpec(
+        beam_initializers.ColumnType.CATEGORICAL,
+        init.mechanism,
+        init.attribute,
+    )
+  elif isinstance(init, initialization.OpenSetCategoricalInitializer):
+    return beam_initializers.InitSpec(
+        beam_initializers.ColumnType.OPENSET,
+        init.mechanism,
+        init.attribute,
+        min_count=init.min_count,
+    )
+  raise TypeError(type(init))
+
+
 class NumericalHistogramTest(absltest.TestCase):
 
   def _run(self, rows, attr, grid_size=101):
     init = initialization.NumericalInitializer(
         name='x', num_partitions=4, attribute=attr, grid_size=grid_size
     ).calibrate(zcdp_rho=np.inf)
+    spec = _init_spec_from_initializer(init)
     _TEST_RESULTS.clear()
     with beam.Pipeline() as p:
       stats = (
           p
           | beam.Create(rows)
-          | beam_initializers.ComputeSufficientStats({'x': init})
+          | beam_initializers.ComputeSufficientStats({'x': spec})
       )
       _ = stats | beam.combiners.ToDict() | beam.Map(_store)
     return dict(_TEST_RESULTS[0]['x'])
@@ -85,6 +111,7 @@ class CategoricalCountsTest(absltest.TestCase):
     init = initialization.CategoricalInitializer(
         name='col', attribute=attr
     ).calibrate(zcdp_rho=np.inf)
+    spec = _init_spec_from_initializer(init)
     rows = [
         {'col': 'a'},
         {'col': 'a'},
@@ -99,7 +126,7 @@ class CategoricalCountsTest(absltest.TestCase):
       stats = (
           p
           | beam.Create(rows)
-          | beam_initializers.ComputeSufficientStats({'col': init})
+          | beam_initializers.ComputeSufficientStats({'col': spec})
       )
       _ = stats | beam.combiners.ToDict() | beam.Map(_store)
     counts = dict(_TEST_RESULTS[0]['col'])
@@ -117,6 +144,7 @@ class OpenSetCountsTest(absltest.TestCase):
     init = initialization.OpenSetCategoricalInitializer(
         name='col', attribute=attr, delta=0.01, min_count=1
     ).calibrate(zcdp_rho=np.inf)
+    spec = _init_spec_from_initializer(init)
     rows = [
         {'col': 'apple'},
         {'col': 'apple'},
@@ -130,7 +158,7 @@ class OpenSetCountsTest(absltest.TestCase):
       stats = (
           p
           | beam.Create(rows)
-          | beam_initializers.ComputeSufficientStats({'col': init})
+          | beam_initializers.ComputeSufficientStats({'col': spec})
       )
       _ = stats | beam.combiners.ToDict() | beam.Map(_store)
     counts = dict(_TEST_RESULTS[0]['col'])
@@ -142,49 +170,70 @@ class OpenSetCountsTest(absltest.TestCase):
 
 class BeamInitializeTest(absltest.TestCase):
 
-  def test_end_to_end_mixed(self):
-    num_attr = domain.NumericalAttribute(min_value=0, max_value=100)
-    cat_attr = domain.CategoricalAttribute(possible_values=['a', 'b'])
-    open_attr = domain.OpenSetCategoricalAttribute(default_value=None)
-
-    initializers = {
+  def _make_init_specs(self):
+    inits = {
         'score': (
             initialization.NumericalInitializer(
-                name='score', num_partitions=4, attribute=num_attr
+                name='score',
+                num_partitions=4,
+                attribute=domain.NumericalAttribute(min_value=0, max_value=100),
             ).calibrate(zcdp_rho=np.inf)
         ),
         'grade': (
             initialization.CategoricalInitializer(
-                name='grade', attribute=cat_attr
+                name='grade',
+                attribute=domain.CategoricalAttribute(
+                    possible_values=['a', 'b']
+                ),
             ).calibrate(zcdp_rho=np.inf)
         ),
         'tag': (
             initialization.OpenSetCategoricalInitializer(
-                name='tag', attribute=open_attr, delta=0.01, min_count=1
+                name='tag',
+                attribute=domain.OpenSetCategoricalAttribute(
+                    default_value=None
+                ),
+                delta=0.01,
+                min_count=1,
             ).calibrate(zcdp_rho=np.inf)
         ),
     }
+    return {k: _init_spec_from_initializer(v) for k, v in inits.items()}
 
+  def _run_pipeline(self, init_specs):
     rows = [
         {'score': 25.0, 'grade': 'a', 'tag': 'p'},
         {'score': 50.0, 'grade': 'b', 'tag': 'q'},
         {'score': 75.0, 'grade': 'a', 'tag': 'p'},
     ]
     rng = np.random.default_rng(42)
-
     _TEST_RESULTS.clear()
     with beam.Pipeline() as p:
       result = (
           p
           | beam.Create(rows)
-          | beam_initializers.BeamInitialize(initializers, rng)
+          | beam_initializers.BeamInitialize(init_specs, rng)
       )
       _ = result | beam.Map(_store)
-    measurements = _TEST_RESULTS[0]
+    return _TEST_RESULTS[0]
 
-    self.assertLen(measurements, 3)
-    for cm in measurements.values():
-      self.assertIsInstance(cm, initialization.ColumnMeasurement)
+  def test_end_to_end_mixed(self):
+    results = self._run_pipeline(self._make_init_specs())
+    self.assertLen(results, 3)
+    for br in results.values():
+      self.assertIsInstance(br, beam_initializers.BeamColumnResult)
+    self.assertEqual(
+        results['score'].column_type,
+        beam_initializers.ColumnType.NUMERICAL,
+    )
+    self.assertEqual(
+        results['grade'].column_type,
+        beam_initializers.ColumnType.CATEGORICAL,
+    )
+    self.assertEqual(
+        results['tag'].column_type,
+        beam_initializers.ColumnType.OPENSET,
+    )
 
 
 if __name__ == '__main__':
