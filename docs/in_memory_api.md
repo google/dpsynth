@@ -62,7 +62,7 @@ synthetic_df = result.synthetic_data
 ## End-to-End Python Example
 
 Here is a complete Python script demonstrating how to load data, parse a domain
-YAML file, configure the AIM mechanism with a fixed random seed, and generate
+YAML file, configure the AIM mechanism, set a fixed random seed, and generate
 synthetic records.
 
 ```python
@@ -82,8 +82,7 @@ attribute_domains = domain.from_yaml_file("transaction_domain.yaml")
 synth = dpsynth.TabularSynthesizer(
     domains=attribute_domains,
     discrete_mechanism=discrete_mechanisms.AIMConfig(
-        seed=42,
-        rounds=50,
+        max_rounds=50,
         pgm_iters=1000,
     ),
 )
@@ -94,7 +93,8 @@ calibrated = synth.calibrate(
 )
 
 # 4. Generate Differentially Private synthetic data
-result = calibrated(np.random.default_rng(), sensitive_df)
+seed = 42
+result = calibrated(np.random.default_rng(seed), sensitive_df)
 synthetic_df = result.synthetic_data
 
 # 5. Save the synthetic dataframe
