@@ -14,6 +14,7 @@
 
 """This mechanisms measures all 1-way marginals via the Gaussian mechanism."""
 
+from collections.abc import Sequence
 import dataclasses
 
 from absl import logging
@@ -31,6 +32,8 @@ class IndependentMechanism(primitives.DPMechanism):
 
   Attributes:
     pgm_iters: The number of iterations for the mirror descent algorithm.
+    compress_columns: Controls domain compression. True compresses all columns,
+      False disables compression, or a list of column names to compress.
     marginal_oracle: The marginal oracle to use for the mirror descent
       algorithm.
     gdp_sigma: The GDP sigma of the end-to-end mechanism. Privacy budget is
@@ -38,6 +41,7 @@ class IndependentMechanism(primitives.DPMechanism):
   """
 
   pgm_iters: int = 5000
+  compress_columns: bool | Sequence[str] = False
   marginal_oracle: mbi.MarginalOracle | None = None
   gdp_sigma: float | None = None
 
@@ -61,7 +65,7 @@ class IndependentMechanism(primitives.DPMechanism):
   def __call__(
       self,
       rng: np.random.Generator,
-      data: mbi.Projectable,
+      data: mbi.Dataset | mbi.CliqueVector,
       *,
       initial_measurements: list[mbi.LinearMeasurement] | None = None,
       initial_potentials: mbi.CliqueVector | None = None,
@@ -88,6 +92,14 @@ class IndependentMechanism(primitives.DPMechanism):
         )
         measurements.append(mbi.LinearMeasurement(noisy_marginal, clique))
 
+    one_way_only = [m for m in measurements if len(m.clique) == 1]
+    mappings = common.compression_mappings(
+        one_way_only, self.compress_columns, initial_potentials
+    )
+    if mappings:
+      data = data.compress(mappings)
+      measurements = [m.compress(mappings, data.domain) for m in measurements]
+
     logging.info(
         '[Independent]:\n%s',
         mbi.summarize(data.domain, [m.clique for m in measurements]),
@@ -107,9 +119,13 @@ class IndependentMechanism(primitives.DPMechanism):
       )
     diagnostics = common.clique_stats(model)
     diagnostics.phase_times = phase_times
+    synthetic_data = model.synthetic_data()
+    if mappings:
+      synthetic_data = synthetic_data.decompress(mappings)
     return common.DiscreteMechanismResult(
         model=model,
-        synthetic_data=model.synthetic_data(),
+        synthetic_data=synthetic_data,
         measurements=measurements,
         diagnostics=diagnostics,
+        mappings=mappings,
     )

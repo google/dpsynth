@@ -24,6 +24,7 @@ import dp_accounting
 from dpsynth import constraints
 from dpsynth import discrete_mechanisms
 from dpsynth import domain
+from dpsynth.discrete_mechanisms import common as dm_common
 from dpsynth.local_mode import initialization
 from dpsynth.local_mode import primitives
 from dpsynth.local_mode import vectorized_transformations as vtx
@@ -88,6 +89,7 @@ class DataGenerationResult:
   """Result of end-to-end DP synthetic data generation."""
 
   synthetic_data: pd.DataFrame
+  discrete_mechanism_result: dm_common.DiscreteMechanismResult
 
 
 @dataclasses.dataclass
@@ -385,9 +387,11 @@ class TabularSynthesizer(primitives.DPMechanism):
     logging.info('[DPSynth]: Finished encoding data.')
 
     # Phase 3: Run the discrete mechanism.
-    initial_potentials = constraints.get_initial_parameters(
-        self.cross_attribute_constraints, discrete.domain
-    )
+    initial_potentials = None
+    if self.cross_attribute_constraints:
+      initial_potentials = constraints.get_initial_parameters(
+          self.cross_attribute_constraints, discrete.domain
+      )
     mechanism_result = self.discrete_mechanism(
         rng,
         data=discrete,
@@ -413,5 +417,6 @@ class TabularSynthesizer(primitives.DPMechanism):
 
     column_order = [col for col in data.columns if col in self.domains]
     return DataGenerationResult(
-        synthetic_data=pd.DataFrame(synthetic_columns)[column_order]
+        synthetic_data=pd.DataFrame(synthetic_columns)[column_order],
+        discrete_mechanism_result=mechanism_result,
     )

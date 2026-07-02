@@ -14,6 +14,7 @@
 
 """Implementation of the direct mechanism."""
 
+from collections.abc import Sequence
 import dataclasses
 
 from absl import logging
@@ -32,6 +33,8 @@ class DirectMechanism(primitives.DPMechanism):
   Attributes:
     prespecified_marginal_queries: A list of k-way marginals that a user has
       specified, ONLY these will be used outside of the initial measurements.
+    compress_columns: Controls domain compression. True compresses all columns,
+      False disables compression, or a list of column names to compress.
     pgm_iters: The number of iterations for the mirror descent algorithm.
     marginal_oracle: The marginal oracle to use for the mirror descent
       algorithm.
@@ -40,6 +43,7 @@ class DirectMechanism(primitives.DPMechanism):
   """
 
   prespecified_marginal_queries: list[tuple[str, ...]]
+  compress_columns: bool | Sequence[str] = False
   pgm_iters: int = 5000
   marginal_oracle: mbi.MarginalOracle | None = None
   gdp_sigma: float | None = None
@@ -65,7 +69,7 @@ class DirectMechanism(primitives.DPMechanism):
   def __call__(
       self,
       rng: np.random.Generator,
-      data: mbi.Projectable,
+      data: mbi.Dataset | mbi.CliqueVector,
       *,
       initial_measurements: list[mbi.LinearMeasurement] | None = None,
       initial_potentials: mbi.CliqueVector | None = None,
@@ -75,6 +79,22 @@ class DirectMechanism(primitives.DPMechanism):
       raise ValueError('Must call calibrate() before using the mechanism.')
 
     phase_times = {}
+
+    # Domain compression: merge rare values to shrink the state space.
+    one_way = (
+        [m for m in initial_measurements if len(m.clique) == 1]
+        if initial_measurements
+        else []
+    )
+    mappings = common.compression_mappings(
+        one_way, self.compress_columns, initial_potentials
+    )
+    if mappings:
+      data = data.compress(mappings)
+    if mappings and initial_measurements:
+      initial_measurements = [
+          m.compress(mappings, data.domain) for m in initial_measurements
+      ]
 
     # measure_marginals_with_noise splits gdp_sigma across the queries
     # internally via weight normalization.
@@ -93,9 +113,8 @@ class DirectMechanism(primitives.DPMechanism):
     )
     # fit a distribution to the noisy measurements
     with common.timed(phase_times, 'estimation'):
-      model = mbi.estimation.MirrorDescent(
-          marginal_oracle=self.marginal_oracle,
-      ).estimate(
+      est = mbi.estimation.MirrorDescent(marginal_oracle=self.marginal_oracle)
+      model = est.estimate(
           data.domain,
           all_measurements,
           iters=self.pgm_iters,
@@ -103,9 +122,13 @@ class DirectMechanism(primitives.DPMechanism):
       )
     diagnostics = common.clique_stats(model)
     diagnostics.phase_times = phase_times
+    synthetic_data = model.synthetic_data()
+    if mappings:
+      synthetic_data = synthetic_data.decompress(mappings)
     return common.DiscreteMechanismResult(
         model=model,
-        synthetic_data=model.synthetic_data(),
+        synthetic_data=synthetic_data,
         measurements=all_measurements,
         diagnostics=diagnostics,
+        mappings=mappings,
     )

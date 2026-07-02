@@ -164,6 +164,9 @@ class MSTMechanism(primitives.DPMechanism):
       algorithm.
     one_way_budget_fraction: The fraction of the total budget to use for one-way
       marginal queries.
+    compress_columns: Controls domain compression. True compresses all columns,
+      False disables compression, or a sequence of column names to compress
+      selectively.
     select_budget_fraction: The fraction of the total budget to use for
       selecting two-way marginal queries.
   """
@@ -172,6 +175,7 @@ class MSTMechanism(primitives.DPMechanism):
   maximum_marginal_size: int = 10_000_000
   marginal_oracle: mbi.MarginalOracle | None = None
   one_way_budget_fraction: float = 1 / 3
+  compress_columns: bool | Sequence[str] = False
   select_budget_fraction: float = 1 / 3
   zcdp_rho: float | None = None
 
@@ -198,7 +202,7 @@ class MSTMechanism(primitives.DPMechanism):
   def __call__(
       self,
       rng: np.random.Generator,
-      data: mbi.Projectable,
+      data: mbi.Dataset | mbi.CliqueVector,
       *,
       initial_measurements: list[mbi.LinearMeasurement] | None = None,
       initial_potentials: mbi.CliqueVector | None = None,
@@ -207,7 +211,9 @@ class MSTMechanism(primitives.DPMechanism):
 
     Args:
       rng: A numpy random number generator.
-      data: The sensitive dataset.
+      data: The sensitive dataset. Must be an mbi.Dataset for domain
+        compression; mbi.CliqueVector is supported but compression will be
+        skipped.
       initial_measurements: Optional pre-existing one-way measurements.
       initial_potentials: Optional initial potentials for constrained
         estimation.
@@ -237,6 +243,15 @@ class MSTMechanism(primitives.DPMechanism):
         )
       else:
         one_way_measurements = initial_measurements
+
+    mappings = common.compression_mappings(
+        one_way_measurements, self.compress_columns, initial_potentials
+    )
+    if mappings:
+      data = data.compress(mappings)
+      one_way_measurements = [
+          m.compress(mappings, data.domain) for m in one_way_measurements
+      ]
 
     exponential_rho = self.select_budget_fraction * self.zcdp_rho
     budget_remaining -= exponential_rho
@@ -284,9 +299,13 @@ class MSTMechanism(primitives.DPMechanism):
       logging.info('[MST]: Fit distribution to the noisy measurements.')
     diagnostics = common.clique_stats(model)
     diagnostics.phase_times = phase_times
+    synthetic_data = model.synthetic_data()
+    if mappings:
+      synthetic_data = synthetic_data.decompress(mappings)
     return common.DiscreteMechanismResult(
         model=model,
-        synthetic_data=model.synthetic_data(),
+        synthetic_data=synthetic_data,
         measurements=all_measurements,
         diagnostics=diagnostics,
+        mappings=mappings,
     )

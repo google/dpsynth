@@ -14,7 +14,7 @@
 
 """Variant of the Adaptive+Iterative Mechanism (AIM) that satisfies Gaussian DP."""
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 import dataclasses
 import typing
 
@@ -32,10 +32,10 @@ MarginalQuery: typing.TypeAlias = tuple[str, ...]
 
 
 def _filter_candidates(
-    candidates: Mapping[MarginalQuery, float],
+    candidates: Mapping[mbi.Clique, float],
     model: mbi.MarkovRandomField,
     size_limit: float,
-) -> Mapping[MarginalQuery, float]:
+) -> Mapping[mbi.Clique, float]:
   """Filters the given candidates that lead to tractable graphical models.
 
   Args:
@@ -66,8 +66,8 @@ def _compute_dp_errors(
     answers: mbi.CliqueVector,
     estimates: mbi.CliqueVector,
     gdp_budget: float,
-    subset: Iterable[MarginalQuery] | None = None,
-) -> dict[MarginalQuery, float]:
+    subset: Iterable[mbi.Clique] | None = None,
+) -> dict[mbi.Clique, float]:
   """Compute L1 error between the model answers and the true answers with DP."""
   if subset is None:
     subset = answers.cliques
@@ -87,14 +87,14 @@ def _compute_dp_errors(
 
 def _worst_approximated(
     rng: np.random.Generator,
-    candidates: Mapping[MarginalQuery, float],
-    errors: dict[MarginalQuery, float],  # will be updated in-place.
+    candidates: Mapping[mbi.Clique, float],
+    errors: dict[mbi.Clique, float],  # will be updated in-place.
     answers: mbi.CliqueVector,  # derived from sensitive data.
     model: mbi.MarkovRandomField,
     select_budget: float,  # satisfies select_budget-GDP.
     measure_sigma: float,
     max_new_evals: int,
-) -> MarginalQuery:
+) -> mbi.Clique:
   """Returns the worst approximated candidate in the given candidates."""
   current_score_estimates = {}
   for cl in candidates:
@@ -159,15 +159,15 @@ class AIMGDPMechanism(primitives.DPMechanism):
     anneal_factor: The factor by which to anneal the privacy budget.
     one_way_budget_fraction: The fraction of the privacy budget to use for
       one-way marginals.
+    compress_columns: Controls domain compression. True compresses all columns,
+      False disables compression, or a list of column names to compress.
     select_budget_fraction: The fraction of the privacy budget to use for the
       "Select" step.
     gdp_sigma: The GDP sigma of the end-to-end mechanism. Privacy budget is
       split across rounds internally.
   """
 
-  workload: Mapping[MarginalQuery, float] | Iterable[MarginalQuery] | None = (
-      None
-  )
+  workload: Mapping[mbi.Clique, float] | Iterable[mbi.Clique] | None = None
   max_rounds: int | None = None
   pgm_iters: int = 1000
   max_model_size: int = 80
@@ -176,6 +176,7 @@ class AIMGDPMechanism(primitives.DPMechanism):
   marginal_oracle: mbi.MarginalOracle | None = None
   anneal_factor: float = 4.0
   one_way_budget_fraction: float = 0.1
+  compress_columns: bool | Sequence[str] = False
   select_budget_fraction: float = 0.1
   gdp_sigma: float | None = None
 
@@ -201,7 +202,7 @@ class AIMGDPMechanism(primitives.DPMechanism):
   def __call__(
       self,
       rng: np.random.Generator,
-      data: mbi.Projectable,
+      data: mbi.Dataset | mbi.CliqueVector,
       *,
       initial_measurements: list[mbi.LinearMeasurement] | None = None,
       initial_potentials: mbi.CliqueVector | None = None,
@@ -210,7 +211,8 @@ class AIMGDPMechanism(primitives.DPMechanism):
 
     Args:
       rng: A numpy random number generator.
-      data: The input data to the mechanism.
+      data: The input data. Must be an mbi.Dataset for domain compression;
+        mbi.CliqueVector is supported but compression will be skipped.
       initial_measurements: Optional initial measurements to start from.
       initial_potentials: Optional initial potentials (constraints).
 
@@ -226,26 +228,16 @@ class AIMGDPMechanism(primitives.DPMechanism):
     # Convert end-to-end GDP sigma to budget for internal allocation.
     gdp_budget = 1.0 / self.gdp_sigma**2
 
-    #########################################################################
-    # Compile workload into candidate measurements, and precompute answers. #
-    #########################################################################
-    candidates = common.compiled_workload(
-        data.domain, self.workload, self.max_marginal_size
-    )
-    answers = mbi.CliqueVector.from_projectable(data, candidates)
-
-    logging.info('[AIM] Calculated workload-query answers.')
     terminate = False
     budget_remaining = gdp_budget
-    domain = data.domain
-    max_rounds = self.max_rounds or 16 * len(domain)
+    max_rounds = self.max_rounds or 16 * len(data.domain)
     budget_per_round = budget_remaining / max_rounds
 
     if initial_measurements is None:
       one_way_budget = self.one_way_budget_fraction * gdp_budget
       one_way_gdp_sigma = accounting.gdp_gaussian_sigma(one_way_budget)
       budget_remaining -= one_way_budget
-      marginal_queries = [cl for cl in candidates.keys() if len(cl) == 1]
+      marginal_queries = common.one_way_cliques(self.workload, data.domain)
       # measure_marginals_with_noise splits one_way_gdp_sigma across queries.
       measurements = common.measure_marginals_with_noise(
           rng,
@@ -255,6 +247,23 @@ class AIMGDPMechanism(primitives.DPMechanism):
       )
     else:
       measurements = list(initial_measurements)
+
+    mappings = common.compression_mappings(
+        measurements, self.compress_columns, initial_potentials
+    )
+    if mappings:
+      data = data.compress(mappings)
+      measurements = [m.compress(mappings, data.domain) for m in measurements]
+
+    #########################################################################
+    # Compile workload into candidate measurements, and precompute answers. #
+    #########################################################################
+    candidates = common.compiled_workload(
+        data.domain, self.workload, self.max_marginal_size
+    )
+    answers = mbi.CliqueVector.from_projectable(data, candidates)
+    logging.info('[AIM] Calculated workload-query answers.')
+    domain = data.domain
 
     potentials = initial_potentials
     if potentials is not None:
@@ -377,9 +386,13 @@ class AIMGDPMechanism(primitives.DPMechanism):
     diagnostics = common.clique_stats(model)
     diagnostics.phase_times = phase_times
     diagnostics.num_rounds = t
+    synthetic_data = model.synthetic_data()
+    if mappings:
+      synthetic_data = synthetic_data.decompress(mappings)
     return common.DiscreteMechanismResult(
         model=model,
-        synthetic_data=model.synthetic_data(),
+        synthetic_data=synthetic_data,
         measurements=measurements,
         diagnostics=diagnostics,
+        mappings=mappings,
     )

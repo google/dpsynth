@@ -114,10 +114,14 @@ class DiscreteMechanismResult:
   """Result of running a discrete mechanism.
 
   Attributes:
-    model: The estimated graphical model (Markov random field).
+    model: The estimated graphical model (Markov random field). When domain
+      compression is enabled, this model is defined over the compressed domain.
     synthetic_data: A synthetic dataset whose marginals closely match the model.
+      Always defined over the original (uncompressed) domain.
     measurements: The noisy marginal measurements made by the mechanism.
     diagnostics: Optional mechanism-specific diagnostic information.
+    mappings: A dict mapping column names to integer mapping arrays used for
+      domain compression. Empty when no compression was applied.
   """
 
   model: mbi.Model
@@ -126,6 +130,43 @@ class DiscreteMechanismResult:
       default_factory=list
   )
   diagnostics: MechanismDiagnostics | None = None
+  mappings: dict[str, np.ndarray] = dataclasses.field(default_factory=dict)
+
+
+def compression_mappings(
+    one_way_measurements: list[mbi.LinearMeasurement],
+    compress_columns: bool | Sequence[str] = False,
+    initial_potentials: mbi.CliqueVector | None = None,
+) -> dict[str, np.ndarray]:
+  """Computes mappings that merge rare domain values for compression."""
+  if not compress_columns:
+    return {}
+
+  cols = (
+      set(compress_columns)
+      if isinstance(compress_columns, Sequence)
+      else {m.clique[0] for m in one_way_measurements}
+  )
+  if initial_potentials is not None:
+    constrained = set().union(*initial_potentials.cliques)
+    skipped = cols & constrained
+    if skipped:
+      logging.info(
+          'Skipping compression for columns with constraints: %s', skipped
+      )
+    cols -= constrained
+
+  mappings: dict[str, np.ndarray] = {}
+  for m in one_way_measurements:
+    col = m.clique[0]
+    if col not in cols:
+      continue
+    mask = np.asarray(m.noisy_measurement) < 3 * m.stddev
+    compressed_size = int((~mask).sum()) + 1
+    mapping = np.where(mask, compressed_size - 1, np.cumsum(~mask) - 1)
+    if compressed_size < len(mapping):
+      mappings[col] = mapping
+  return mappings
 
 
 def exponential_mechanism(
@@ -337,6 +378,15 @@ def supporting_cliques(
   cliques = mbi.clique_utils.downward_closure(cliques)
   cliques = [cl for cl in cliques if domain.size(cl) <= max_marginal_size]
   return mbi.clique_utils.maximal_subset(cliques)
+
+
+def one_way_cliques(
+    workload: Workload | Workload2 | None, domain: mbi.Domain
+) -> list[mbi.Clique]:
+  """Returns one-way cliques from the workload, or all columns if None."""
+  if workload is None:
+    return [(col,) for col in domain]
+  return [cl for cl in workload if len(cl) == 1]
 
 
 def compiled_workload(

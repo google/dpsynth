@@ -62,6 +62,8 @@ class SWIFTMechanism(primitives.DPMechanism):
       marginals to measure.
     one_way_budget_frac: Fraction of the total budget used for measuring one-way
       marginals initially.
+    compress_columns: Controls domain compression. True compresses all columns,
+      False disables compression, or a list of column names to compress.
     gdp_sigma: The GDP sigma of the end-to-end mechanism. Privacy budget is
       split across measurement steps internally.
   """
@@ -73,6 +75,7 @@ class SWIFTMechanism(primitives.DPMechanism):
   pgm_iters: int = 25_000
   select_budget_frac: float = 0.1
   one_way_budget_frac: float = 0.1
+  compress_columns: bool | Sequence[str] = False
   gdp_sigma: float | None = None
 
   def supporting_cliques(self, domain: mbi.Domain) -> list[mbi.Clique]:
@@ -97,7 +100,7 @@ class SWIFTMechanism(primitives.DPMechanism):
   def __call__(
       self,
       rng: np.random.Generator,
-      data: mbi.Projectable,
+      data: mbi.Dataset | mbi.CliqueVector,
       *,
       initial_measurements: Sequence[mbi.LinearMeasurement] | None = None,
       initial_potentials: mbi.CliqueVector | None = None,
@@ -106,7 +109,9 @@ class SWIFTMechanism(primitives.DPMechanism):
 
     Args:
       rng: A numpy random number generator.
-      data: The sensitive dataset.
+      data: The sensitive dataset. Must be an mbi.Dataset for domain
+        compression; mbi.CliqueVector is supported but compression will be
+        skipped.
       initial_measurements: Optional pre-existing one-way measurements.
       initial_potentials: Optional initial potentials for constrained
         estimation.
@@ -123,6 +128,30 @@ class SWIFTMechanism(primitives.DPMechanism):
     logging.info('[SWIFT] Starting Mechanism.')
     phase_times = {}
 
+    # Convert end-to-end GDP sigma to budget for internal allocation.
+    gdp_budget = 1.0 / self.gdp_sigma**2
+    budget_remaining = gdp_budget
+    if initial_measurements is None:
+      budget_oneway = self.one_way_budget_frac * gdp_budget
+      sigma_oneway = accounting.gdp_gaussian_sigma(budget_oneway)
+      budget_remaining -= budget_oneway
+      marginal_queries = common.one_way_cliques(self.workload, data.domain)
+      measurements = common.measure_marginals_with_noise(
+          rng,
+          data,
+          marginal_queries,
+          gdp_sigma=sigma_oneway,
+      )
+    else:
+      measurements = list(initial_measurements)
+
+    mappings = common.compression_mappings(
+        measurements, self.compress_columns, initial_potentials
+    )
+    if mappings:
+      data = data.compress(mappings)
+      measurements = [m.compress(mappings, data.domain) for m in measurements]
+
     #########################################################################
     # Compile workload into candidate measurements, and precompute answers. #
     #########################################################################
@@ -136,21 +165,7 @@ class SWIFTMechanism(primitives.DPMechanism):
 
     with common.timed(phase_times, 'from_projectable'):
       answers = mbi.CliqueVector.from_projectable(data, candidates)
-
-    # Convert end-to-end GDP sigma to budget for internal allocation.
-    gdp_budget = 1.0 / self.gdp_sigma**2
-    budget_remaining = gdp_budget
     domain = data.domain
-    if initial_measurements is None:
-      budget_oneway = self.one_way_budget_frac * gdp_budget
-      sigma_oneway = accounting.gdp_gaussian_sigma(budget_oneway)
-      budget_remaining -= budget_oneway
-      # measure_marginals_with_noise splits sigma_oneway across queries.
-      measurements = common.measure_marginals_with_noise(
-          rng, data, [(a,) for a in domain], gdp_sigma=sigma_oneway
-      )
-    else:
-      measurements = list(initial_measurements)
 
     potentials = initial_potentials
     if potentials is not None:
@@ -250,6 +265,8 @@ class SWIFTMechanism(primitives.DPMechanism):
       logging.info('[SWIFT] Synth precompile wait: %.2fs', time.time() - t0)
 
     syn = mbi.extensions.synthetic_data(final_model, rows)
+    if mappings:
+      syn = syn.decompress(mappings)
     logging.info('[SWIFT] Generated %d synthetic records.', rows)
 
     diagnostics = common.clique_stats(final_model)
@@ -259,6 +276,7 @@ class SWIFTMechanism(primitives.DPMechanism):
         synthetic_data=syn,
         measurements=measurements,
         diagnostics=diagnostics,
+        mappings=mappings,
     )
 
 

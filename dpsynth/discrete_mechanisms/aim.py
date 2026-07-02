@@ -14,9 +14,8 @@
 
 """Implementation of the Adaptive+Iterative Mechanism (AIM)."""
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 import dataclasses
-from typing import TypeAlias
 
 from absl import logging
 import dp_accounting
@@ -28,14 +27,12 @@ import mbi
 import mbi.junction_tree
 import numpy as np
 
-MarginalQuery: TypeAlias = tuple[str, ...]
-
 
 def _filter_candidates(
-    candidates: Mapping[MarginalQuery, float],
+    candidates: Mapping[mbi.Clique, float],
     model: mbi.MarkovRandomField,
     size_limit: float,
-) -> Mapping[MarginalQuery, float]:
+) -> Mapping[mbi.Clique, float]:
   """Filters the given candidates that lead to tractable graphical models.
 
   Args:
@@ -63,13 +60,13 @@ def _filter_candidates(
 
 def _worst_approximated(
     rng: np.random.Generator,
-    candidates: Mapping[MarginalQuery, float],
+    candidates: Mapping[mbi.Clique, float],
     answers: mbi.CliqueVector,
     estimates: mbi.CliqueVector,
     eps: float,
     sigma: float,
     domain: mbi.Domain,
-) -> MarginalQuery:
+) -> mbi.Clique:
   """Returns the worst approximated candidate in the given candidates."""
   errors = {}
   for cl in candidates:
@@ -118,13 +115,13 @@ class AIMMechanism(primitives.DPMechanism):
     anneal_factor: The factor by which to anneal the privacy.
     one_way_budget_fraction: The fraction of the total budget to use for one-way
       marginal queries.
+    compress_columns: Controls domain compression. True compresses all columns,
+      False disables compression, or a list of column names to compress.
     select_budget_fraction: The fraction of the total budget to use for
       selecting two-way marginal queries.
   """
 
-  workload: Mapping[MarginalQuery, float] | Iterable[MarginalQuery] | None = (
-      None
-  )
+  workload: Mapping[mbi.Clique, float] | Iterable[mbi.Clique] | None = None
   max_rounds: int | None = None
   pgm_iters: int = 1000
   max_model_size: int = 80
@@ -132,6 +129,7 @@ class AIMMechanism(primitives.DPMechanism):
   marginal_oracle: mbi.MarginalOracle | None = None
   anneal_factor: float = 4.0
   one_way_budget_fraction: float = 0.1
+  compress_columns: bool | Sequence[str] = False
   select_budget_fraction: float = 0.1
   zcdp_rho: float | None = None
 
@@ -155,7 +153,7 @@ class AIMMechanism(primitives.DPMechanism):
   def __call__(
       self,
       rng: np.random.Generator,
-      data: mbi.Projectable,
+      data: mbi.Dataset | mbi.CliqueVector,
       *,
       initial_measurements: list[mbi.LinearMeasurement] | None = None,
       initial_potentials: mbi.CliqueVector | None = None,
@@ -164,7 +162,8 @@ class AIMMechanism(primitives.DPMechanism):
 
     Args:
       rng: A numpy random number generator.
-      data: The input data to the mechanism.
+      data: The input data. Must be an mbi.Dataset for domain compression;
+        mbi.CliqueVector is supported but compression will be skipped.
       initial_measurements: Optional initial measurements to start from.
       initial_potentials: Optional initial potentials (constraints).
 
@@ -178,6 +177,29 @@ class AIMMechanism(primitives.DPMechanism):
     phase_times = {}
 
     zcdp_rho = self.zcdp_rho
+    terminate = False
+    rho_remaining = zcdp_rho
+    max_rounds = self.max_rounds or 16 * len(data.domain)
+    rho_per_round = zcdp_rho / max_rounds
+
+    if initial_measurements is None:
+      rho_remaining -= self.one_way_budget_fraction * zcdp_rho
+      marginal_queries = common.one_way_cliques(self.workload, data.domain)
+      measurements = common.measure_marginals_with_noise(
+          rng,
+          data,
+          marginal_queries=marginal_queries,
+          gdp_sigma=zcdp_rho * self.one_way_budget_fraction,
+      )
+    else:
+      measurements = list(initial_measurements)
+
+    mappings = common.compression_mappings(
+        measurements, self.compress_columns, initial_potentials
+    )
+    if mappings:
+      data = data.compress(mappings)
+      measurements = [m.compress(mappings, data.domain) for m in measurements]
 
     #########################################################################
     # Compile workload into candidate measurements, and precompute answers. #
@@ -187,22 +209,6 @@ class AIMMechanism(primitives.DPMechanism):
     )
     answers = mbi.CliqueVector.from_projectable(data, list(candidates))
     logging.info('[AIM]: Calculated workload-query answers.')
-    terminate = False
-    rho_remaining = zcdp_rho
-    max_rounds = self.max_rounds or 16 * len(data.domain)
-    rho_per_round = zcdp_rho / max_rounds
-
-    if initial_measurements is None:
-      rho_remaining -= self.one_way_budget_fraction * zcdp_rho
-      marginal_queries = [cl for cl in candidates.keys() if len(cl) == 1]
-      measurements = common.measure_marginals_with_noise(
-          rng,
-          data,
-          marginal_queries=marginal_queries,
-          gdp_sigma=zcdp_rho * self.one_way_budget_fraction,
-      )
-    else:
-      measurements = list(initial_measurements)
 
     potentials = initial_potentials
     if potentials is not None:
@@ -308,9 +314,13 @@ class AIMMechanism(primitives.DPMechanism):
     diagnostics = common.clique_stats(model)
     diagnostics.phase_times = phase_times
     diagnostics.num_rounds = t
+    synthetic_data = model.synthetic_data()
+    if mappings:
+      synthetic_data = synthetic_data.decompress(mappings)
     return common.DiscreteMechanismResult(
         model=model,
-        synthetic_data=model.synthetic_data(),
+        synthetic_data=synthetic_data,
         measurements=measurements,
         diagnostics=diagnostics,
+        mappings=mappings,
     )

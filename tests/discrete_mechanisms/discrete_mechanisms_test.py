@@ -12,7 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Property tests for supporting_cliques across all discrete mechanisms."""
+"""Property tests shared across all discrete mechanisms."""
+
+import dataclasses
 
 from absl.testing import absltest
 from absl.testing import parameterized
@@ -26,21 +28,29 @@ from dpsynth.discrete_mechanisms import swift
 import mbi
 import numpy as np
 
-_DOMAIN = mbi.Domain(['a', 'b', 'c', 'd'], [3, 4, 5, 6])
-_WORKLOAD = [('a', 'b'), ('b', 'c'), ('c', 'd')]
+_ZCDP_RHO = 10000
+_WORKLOAD = [('a', 'b'), ('b', 'c'), ('a',), ('b',), ('c',)]
 
 _MECHANISMS = {
-    'Independent': independent.IndependentMechanism(pgm_iters=100),
-    'MST': mst.MSTMechanism(pgm_iters=100),
-    'AIM': aim.AIMMechanism(workload=_WORKLOAD, max_rounds=2, pgm_iters=100),
-    'AIMGDP': aim_gdp.AIMGDPMechanism(
-        workload=_WORKLOAD, max_rounds=2, pgm_iters=100
+    'AIM': aim.AIMMechanism(workload=_WORKLOAD, max_rounds=4, pgm_iters=500),
+    'AIM_GDP': aim_gdp.AIMGDPMechanism(
+        workload=_WORKLOAD, max_rounds=4, pgm_iters=500
     ),
-    'SWIFT': swift.SWIFTMechanism(workload=_WORKLOAD, pgm_iters=100),
+    'MST': mst.MSTMechanism(pgm_iters=500),
+    'SWIFT': swift.SWIFTMechanism(workload=_WORKLOAD, pgm_iters=500),
+    'Independent': independent.IndependentMechanism(pgm_iters=500),
     'Direct': direct.DirectMechanism(
-        prespecified_marginal_queries=_WORKLOAD, pgm_iters=100
+        prespecified_marginal_queries=_WORKLOAD, pgm_iters=500
     ),
 }
+
+
+def _make_skewed_dataset(rng):
+  """Creates a dataset where column 'a' concentrates in 3 of 10 bins."""
+  domain = mbi.Domain(['a', 'b', 'c'], [10, 4, 5])
+  df = {col: rng.integers(0, domain[col], size=1000) for col in domain}
+  df['a'] = rng.choice(3, size=1000)  # Only bins 0-2 populated.
+  return mbi.Dataset(df, domain)
 
 
 class SupportingCliquesSufficiencyTest(parameterized.TestCase):
@@ -54,23 +64,51 @@ class SupportingCliquesSufficiencyTest(parameterized.TestCase):
        projection the mechanism needs.
   """
 
-  @parameterized.named_parameters(
-      *[(name, mech) for name, mech in _MECHANISMS.items()]
-  )
+  @parameterized.named_parameters(*_MECHANISMS.items())
   def test_mechanism_runs_on_precomputed_marginals(self, mechanism):
-    data = mbi.Dataset.synthetic(_DOMAIN, N=500)
+    domain = mbi.Domain(['a', 'b', 'c', 'd'], [3, 4, 5, 6])
+    data = mbi.Dataset.synthetic(domain, N=500)
     rng = np.random.default_rng(42)
 
-    calibrated = mechanism.calibrate(zcdp_rho=10_000)
-    cliques = calibrated.supporting_cliques(_DOMAIN)
+    calibrated = mechanism.calibrate(zcdp_rho=_ZCDP_RHO)
+    cliques = calibrated.supporting_cliques(domain)
 
-    # Build a CliqueVector that holds exactly the supporting cliques.
     precomputed = mbi.CliqueVector.from_projectable(data, cliques)
 
-    # The mechanism should run to completion using only these marginals.
     result = calibrated(rng, precomputed)
     self.assertIsInstance(result, common.DiscreteMechanismResult)
     self.assertIsNotNone(result.model)
+
+
+class CompressionPropertyTest(parameterized.TestCase):
+  """Tests that compression restores the original domain across mechanisms."""
+
+  @parameterized.named_parameters(*_MECHANISMS.items())
+  def test_compression_restores_domain(self, config):
+    config = dataclasses.replace(config, compress_columns=True)
+    rng = np.random.default_rng(0)
+    data = _make_skewed_dataset(rng)
+    original_domain = data.domain
+
+    result = config.calibrate(zcdp_rho=_ZCDP_RHO)(rng, data)
+
+    self.assertEqual(result.synthetic_data.domain, original_domain)
+
+  @parameterized.named_parameters(*_MECHANISMS.items())
+  def test_compression_with_initial_measurements(self, config):
+    config = dataclasses.replace(config, compress_columns=True)
+    rng = np.random.default_rng(0)
+    data = _make_skewed_dataset(rng)
+    original_domain = data.domain
+    initial_measurements = common.measure_marginals_with_noise(
+        rng, data, [('a',), ('b',)], gdp_sigma=1.0
+    )
+
+    mechanism = config.calibrate(zcdp_rho=_ZCDP_RHO)
+    result = mechanism(rng, data, initial_measurements=initial_measurements)
+
+    self.assertEqual(result.synthetic_data.domain, original_domain)
+    self.assertNotEmpty(result.mappings)
 
 
 if __name__ == '__main__':
