@@ -165,7 +165,7 @@ def get_config() -> data_generation.DataGenerationConfig:
   Raises:
     NotImplementedError: If the data format is not supported.
   """
-    if _DATA_FORMAT.value == types.DataFormat.TFRECORD:
+  if _DATA_FORMAT.value == types.DataFormat.TFRECORD:
     descriptor = tfrecord_descriptor.get_dataset_descriptor_for_tfrecord(
         tfrecord_descriptor.read_tfrecords_sample(_DATASET_PATH.value),
         attributes=_ATTRIBUTES.value,
