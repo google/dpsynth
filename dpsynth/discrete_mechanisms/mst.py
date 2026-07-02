@@ -23,9 +23,9 @@ import typing
 
 from absl import logging
 import dp_accounting
+from dpsynth import _api
 from dpsynth.discrete_mechanisms import accounting
 from dpsynth.discrete_mechanisms import common
-from dpsynth.local_mode import primitives
 import mbi
 import networkx as nx
 import numpy as np
@@ -150,7 +150,7 @@ def _select_two_way_marginal_queries(
 
 
 @dataclasses.dataclass
-class MSTMechanism(primitives.DPMechanism):
+class MSTMechanism(_api.DPMechanism):
   """Configuration for the maximum spanning tree mechanism.
 
   Details are described in the paper:
@@ -187,7 +187,7 @@ class MSTMechanism(primitives.DPMechanism):
         self.maximum_marginal_size,
     )
 
-  def calibrate(self, *, zcdp_rho: float) -> MSTMechanism:
+  def configure(self, *, zcdp_rho: float, delta: float = 0.0) -> MSTMechanism:
     """Returns a copy calibrated to the given zCDP budget."""
     return dataclasses.replace(self, zcdp_rho=zcdp_rho)
 
