@@ -85,8 +85,8 @@ class NumericalInitializer(primitives.DPMechanism):
       default=None, repr=False
   )
 
-  def calibrate(
-      self, *, zcdp_rho: float, epsilon_ratio: float = 2.0
+  def configure(
+      self, *, zcdp_rho: float, delta: float = 0.0, epsilon_ratio: float = 2.0
   ) -> NumericalInitializer:
     """Returns a copy calibrated to the given zCDP budget."""
     mechanism = primitives.DPQuantiles(
@@ -94,7 +94,7 @@ class NumericalInitializer(primitives.DPMechanism):
         lower=self.attribute.min_value,
         upper=self.attribute.exclusive_max_value,
         grid_size=self.grid_size,
-    ).calibrate(zcdp_rho=zcdp_rho, epsilon_ratio=epsilon_ratio)
+    ).configure(zcdp_rho=zcdp_rho, epsilon_ratio=epsilon_ratio)
     return dataclasses.replace(self, mechanism=mechanism)
 
   @property
@@ -233,11 +233,13 @@ class CategoricalInitializer(primitives.DPMechanism):
       default=None, repr=False
   )
 
-  def calibrate(self, *, zcdp_rho: float) -> CategoricalInitializer:
+  def configure(
+      self, *, zcdp_rho: float, delta: float = 0.0
+  ) -> CategoricalInitializer:
     """Returns a copy calibrated to the given zCDP budget."""
     mechanism = primitives.DPGaussianHistogram(
         domain_size=self.attribute.size,
-    ).calibrate(zcdp_rho=zcdp_rho)
+    ).configure(zcdp_rho=zcdp_rho)
     return dataclasses.replace(self, mechanism=mechanism)
 
   @property
@@ -290,12 +292,14 @@ class OpenSetCategoricalInitializer(primitives.DPMechanism):
       default=None, repr=False
   )
 
-  def calibrate(self, *, zcdp_rho: float) -> OpenSetCategoricalInitializer:
+  def configure(
+      self, *, zcdp_rho: float, delta: float = 0.0
+  ) -> OpenSetCategoricalInitializer:
     """Returns a copy calibrated to the given zCDP budget."""
     mechanism = primitives.DPPartitionSelection(
         delta=self.delta,
         min_count=self.min_count,
-    ).calibrate(zcdp_rho=zcdp_rho)
+    ).configure(zcdp_rho=zcdp_rho)
     return dataclasses.replace(self, mechanism=mechanism)
 
   @property

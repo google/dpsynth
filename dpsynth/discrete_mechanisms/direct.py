@@ -19,15 +19,15 @@ import dataclasses
 
 from absl import logging
 import dp_accounting
+from dpsynth import _api
 from dpsynth.discrete_mechanisms import accounting
 from dpsynth.discrete_mechanisms import common
-from dpsynth.local_mode import primitives
 import mbi
 import numpy as np
 
 
 @dataclasses.dataclass
-class DirectMechanism(primitives.DPMechanism):
+class DirectMechanism(_api.DPMechanism):
   """Configuration for the direct mechanism.
 
   Attributes:
@@ -53,7 +53,9 @@ class DirectMechanism(primitives.DPMechanism):
     del domain  # Unused; cliques are user-specified.
     return list(self.prespecified_marginal_queries)
 
-  def calibrate(self, *, zcdp_rho: float) -> 'DirectMechanism':
+  def configure(
+      self, *, zcdp_rho: float, delta: float = 0.0
+  ) -> 'DirectMechanism':
     """Returns a copy calibrated to the given zCDP budget."""
     return dataclasses.replace(
         self, gdp_sigma=accounting.zcdp_gaussian_sigma(zcdp_rho)
