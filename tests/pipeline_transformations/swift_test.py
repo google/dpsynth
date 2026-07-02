@@ -14,6 +14,8 @@
 
 """Tests for SWIFT pipeline transformations."""
 
+from unittest import mock
+
 from absl.testing import absltest
 from dpsynth import data_generation
 from dpsynth.dataset_descriptors import dataset_descriptor
@@ -34,6 +36,29 @@ class DummyDataRecordConverter(dataset_descriptor.DataRecordConverter):
 
 
 class SwiftTest(absltest.TestCase):
+
+  def test_add_noise_to_errors(self):
+    mechanism_spec = pipeline_dp.budget_accounting.MechanismSpec(
+        mechanism_type=pipeline_dp.budget_accounting.MechanismType.GAUSSIAN,
+        name="test",
+    )
+
+    class FakeMechanism:
+
+      def add_noise(self, values):
+        return values + np.array([10.0, 20.0])
+
+    with mock.patch.object(
+        pipeline_dp.dp_computations,
+        "create_additive_mechanism",
+        return_value=FakeMechanism(),
+    ) as mock_create:
+      noised = swift._add_noise_to_errors(
+          {(1,): 1.0, (0,): 2.0}, mechanism_spec
+      )
+
+    self.assertEqual(noised, {(0,): 12.0, (1,): 21.0})
+    mock_create.assert_called_once()
 
   def test_fit_model(self):
     backend = pipeline_dp.LocalBackend()
@@ -71,27 +96,30 @@ class SwiftTest(absltest.TestCase):
         [diag_info_proto], data, "create diag info"
     )
 
-    result = swift.fit_model(
-        backend,
-        budget_accountant,
-        data,
-        descriptor_col,
-        parameters,
-        workload=[(0, 1)],
-        additional_output=additional_output,
-    )
+    with mock.patch.object(
+        swift, "_add_noise_to_errors", side_effect=lambda errors, _: errors
+    ):
+      result = swift.fit_model(
+          backend,
+          budget_accountant,
+          data,
+          descriptor_col,
+          parameters,
+          workload=[(0, 1)],
+          additional_output=additional_output,
+      )
 
-    budget_accountant.compute_budgets()
-    result_list = list(result)
-    self.assertLen(result_list, 1)
-    fitted_model = result_list[0]
+      budget_accountant.compute_budgets()
+      result_list = list(result)
+      self.assertLen(result_list, 1)
+      fitted_model = result_list[0]
 
-    self.assertIsInstance(fitted_model, mbi.MarkovRandomField)
-    self.assertEqual(fitted_model.domain.shape, (2, 2))
+      self.assertIsInstance(fitted_model, mbi.MarkovRandomField)
+      self.assertEqual(fitted_model.domain.shape, (2, 2))
 
-    # Check diagnostic info
-    self.assertIsNotNone(additional_output.diagnostic_info)
-    diag_infos = list(additional_output.diagnostic_info)
+      # Check diagnostic info
+      self.assertIsNotNone(additional_output.diagnostic_info)
+      diag_infos = list(additional_output.diagnostic_info)
     self.assertLen(diag_infos, 1)
     diag_info = diag_infos[0]
     self.assertLen(diag_info.round_info, 1)
