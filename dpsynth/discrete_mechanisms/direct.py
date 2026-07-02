@@ -72,7 +72,7 @@ class DirectMechanism(primitives.DPMechanism):
       data: mbi.Dataset | mbi.CliqueVector,
       *,
       initial_measurements: list[mbi.LinearMeasurement] | None = None,
-      initial_potentials: mbi.CliqueVector | None = None,
+      constraints: tuple[mbi.Constraint, ...] = (),
   ) -> common.DiscreteMechanismResult:
     """Generate synthetic data using user specified two way marginals."""
     if self.gdp_sigma is None:
@@ -87,7 +87,7 @@ class DirectMechanism(primitives.DPMechanism):
         else []
     )
     mappings = common.compression_mappings(
-        one_way, self.compress_columns, initial_potentials
+        one_way, self.compress_columns, constraints
     )
     if mappings:
       data = data.compress(mappings)
@@ -113,12 +113,12 @@ class DirectMechanism(primitives.DPMechanism):
     )
     # fit a distribution to the noisy measurements
     with common.timed(phase_times, 'estimation'):
-      est = mbi.estimation.MirrorDescent(marginal_oracle=self.marginal_oracle)
-      model = est.estimate(
+      estimator = mbi.estimation.MirrorDescent(self.marginal_oracle)
+      model = estimator.estimate(
           data.domain,
           all_measurements,
           iters=self.pgm_iters,
-          potentials=initial_potentials,
+          constraints=constraints,
       )
     diagnostics = common.clique_stats(model)
     diagnostics.phase_times = phase_times

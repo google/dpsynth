@@ -20,7 +20,7 @@ import mbi
 import numpy as np
 
 
-class ConstraintsTest(parameterized.TestCase):
+class ConstraintValidationTest(parameterized.TestCase):
 
   def setUp(self):
     super().setUp()
@@ -28,7 +28,62 @@ class ConstraintsTest(parameterized.TestCase):
         ['GameSuite', 'OfficePro', 'DevTool']
     )
     self.os = domain.CategoricalAttribute(['Windows', 'Linux', 'MacOS'])
-    self.constraint = constraints.Constraint(
+
+  def test_raises_on_unequal_attribute_lengths(self):
+    with self.assertRaisesRegex(ValueError, 'must have the same length'):
+      constraints.Constraint(
+          attribute_names=('Software',),
+          attribute_domains=(self.software, self.os),
+          possible_combinations=[],
+      )
+
+  def test_raises_on_bad_combination_length(self):
+    with self.assertRaisesRegex(ValueError, 'must have length equal'):
+      constraints.Constraint(
+          attribute_names=('Software', 'OS'),
+          attribute_domains=(self.software, self.os),
+          possible_combinations=[('GameSuite',)],
+      )
+
+  def test_raises_on_no_mode(self):
+    with self.assertRaisesRegex(ValueError, 'exactly one'):
+      constraints.Constraint(
+          attribute_names=('Software', 'OS'),
+          attribute_domains=(self.software, self.os),
+      )
+
+  def test_raises_on_multiple_modes(self):
+    with self.assertRaisesRegex(ValueError, 'exactly one'):
+      constraints.Constraint(
+          attribute_names=('Software', 'OS'),
+          attribute_domains=(self.software, self.os),
+          possible_combinations=[('GameSuite', 'Windows')],
+          impossible_combinations=[('DevTool', 'Windows')],
+      )
+
+  def test_functional_dependency_requires_two_attributes(self):
+    a = domain.CategoricalAttribute(['x', 'y'])
+    b = domain.CategoricalAttribute(['p', 'q'])
+    c = domain.CategoricalAttribute(['r', 's'])
+    with self.assertRaisesRegex(ValueError, 'exactly 2 attributes'):
+      constraints.Constraint(
+          attribute_names=('a', 'b', 'c'),
+          attribute_domains=(a, b, c),
+          functional_dependency={'x': 'p'},
+      )
+
+
+class ConstraintToMbiTest(parameterized.TestCase):
+
+  def setUp(self):
+    super().setUp()
+    self.software = domain.CategoricalAttribute(
+        ['GameSuite', 'OfficePro', 'DevTool']
+    )
+    self.os = domain.CategoricalAttribute(['Windows', 'Linux', 'MacOS'])
+
+  def test_possible_combinations(self):
+    c = constraints.Constraint(
         attribute_names=('Software', 'OS'),
         attribute_domains=(self.software, self.os),
         possible_combinations=[
@@ -39,50 +94,49 @@ class ConstraintsTest(parameterized.TestCase):
             ('DevTool', 'MacOS'),
         ],
     )
+    mbi_c = c.to_mbi()
+    self.assertIsInstance(mbi_c, mbi.Constraint)
+    expected = np.full((3, 3), -np.inf)
+    expected[0, 0] = 0  # GameSuite, Windows
+    expected[1, 0] = 0  # OfficePro, Windows
+    expected[1, 2] = 0  # OfficePro, MacOS
+    expected[2, 1] = 0  # DevTool, Linux
+    expected[2, 2] = 0  # DevTool, MacOS
+    np.testing.assert_array_equal(mbi_c.potential.values, expected)
 
-  def test_init_raises_error_on_unequal_attribute_lengths(self):
-    with self.assertRaisesRegex(ValueError, 'must have the same length'):
-      constraints.Constraint(
-          attribute_names=('Software',),
-          attribute_domains=(self.software, self.os),
-          possible_combinations=[],
-      )
+  def test_impossible_combinations(self):
+    c = constraints.Constraint(
+        attribute_names=('Software', 'OS'),
+        attribute_domains=(self.software, self.os),
+        impossible_combinations=[
+            ('GameSuite', 'Linux'),
+            ('GameSuite', 'MacOS'),
+        ],
+    )
+    vals = np.asarray(c.to_mbi().potential.values)
+    self.assertEqual(vals[0, 1], -np.inf)  # GameSuite, Linux
+    self.assertEqual(vals[0, 2], -np.inf)  # GameSuite, MacOS
+    self.assertEqual(vals[0, 0], 0.0)
+    self.assertEqual(vals[1, 0], 0.0)
+    self.assertEqual(vals[2, 2], 0.0)
 
-  def test_init_raises_error_on_bad_combination_length(self):
-    with self.assertRaisesRegex(ValueError, 'must have length equal'):
-      constraints.Constraint(
-          attribute_names=('Software', 'OS'),
-          attribute_domains=(self.software, self.os),
-          possible_combinations=[('GameSuite',)],
-      )
-
-  def test_init_raises_error_on_value_not_in_domain(self):
-    with self.assertRaisesRegex(ValueError, 'not found in possible values'):
-      constraints.Constraint(
-          attribute_names=('Software', 'OS'),
-          attribute_domains=(self.software, self.os),
-          possible_combinations=[('GameSuite', 'Solaris')],
-      )
-
-  def test_valid_constraint(self):
-    self.assertLen(self.constraint.possible_combinations, 5)
-
-  def test_possible_indices(self):
-    expected = ((0, 0), (1, 0), (1, 2), (2, 1), (2, 2))
-    self.assertEqual(constraints._possible_indices(self.constraint), expected)
-
-  def test_potential(self):
-    potential = constraints._mbi_potential(self.constraint)
-    self.assertIsInstance(potential, mbi.Factor)
-    self.assertEqual(potential.domain.shape, (3, 3))
-    self.assertEqual(potential.domain.attrs, ('Software', 'OS'))
-    expected_values = np.full((3, 3), -np.inf)
-    expected_values[0, 0] = 0
-    expected_values[1, 0] = 0
-    expected_values[1, 2] = 0
-    expected_values[2, 1] = 0
-    expected_values[2, 2] = 0
-    np.testing.assert_array_equal(potential.values, expected_values)
+  def test_functional_dependency(self):
+    fine = domain.CategoricalAttribute(['a', 'b', 'c', 'd'])
+    coarse = domain.CategoricalAttribute(['X', 'Y'])
+    c = constraints.Constraint(
+        attribute_names=('fine', 'coarse'),
+        attribute_domains=(fine, coarse),
+        functional_dependency={'a': 'X', 'b': 'X', 'c': 'Y', 'd': 'Y'},
+    )
+    mbi_c = c.to_mbi()
+    self.assertTrue(mbi_c.is_deterministic)
+    vals = np.asarray(mbi_c.potential.values)
+    self.assertEqual(vals[0, 0], 0.0)  # a -> X
+    self.assertEqual(vals[1, 0], 0.0)  # b -> X
+    self.assertEqual(vals[2, 1], 0.0)  # c -> Y
+    self.assertEqual(vals[3, 1], 0.0)  # d -> Y
+    self.assertEqual(vals[0, 1], -np.inf)
+    self.assertEqual(vals[2, 0], -np.inf)
 
 
 if __name__ == '__main__':

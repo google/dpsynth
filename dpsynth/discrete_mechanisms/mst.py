@@ -205,7 +205,7 @@ class MSTMechanism(primitives.DPMechanism):
       data: mbi.Dataset | mbi.CliqueVector,
       *,
       initial_measurements: list[mbi.LinearMeasurement] | None = None,
-      initial_potentials: mbi.CliqueVector | None = None,
+      constraints: tuple[mbi.Constraint, ...] = (),
   ) -> common.DiscreteMechanismResult:
     """Runs the MST mechanism on the given data.
 
@@ -215,8 +215,7 @@ class MSTMechanism(primitives.DPMechanism):
         compression; mbi.CliqueVector is supported but compression will be
         skipped.
       initial_measurements: Optional pre-existing one-way measurements.
-      initial_potentials: Optional initial potentials for constrained
-        estimation.
+      constraints: Structural constraints for the estimation.
 
     Returns:
       A DiscreteMechanismResult containing the estimated data distribution.
@@ -245,7 +244,7 @@ class MSTMechanism(primitives.DPMechanism):
         one_way_measurements = initial_measurements
 
     mappings = common.compression_mappings(
-        one_way_measurements, self.compress_columns, initial_potentials
+        one_way_measurements, self.compress_columns, constraints
     )
     if mappings:
       data = data.compress(mappings)
@@ -274,10 +273,6 @@ class MSTMechanism(primitives.DPMechanism):
       logging.info('[MST]: Measured two-way marginals.')
     all_measurements = one_way_measurements + two_way_measurements
     # Fit a distribution to the noisy measurements using Private-PGM.
-    potentials = initial_potentials
-    if potentials is not None:
-      potentials = potentials.expand([m.clique for m in all_measurements])
-
     model_size = mbi.junction_tree.hypothetical_model_size(
         data.domain, [m.clique for m in all_measurements]
     )
@@ -287,14 +282,13 @@ class MSTMechanism(primitives.DPMechanism):
         mbi.summarize(data.domain, [m.clique for m in all_measurements]),
     )
     with common.timed(phase_times, 'estimation'):
-      model = mbi.estimation.MirrorDescent(
-          marginal_oracle=self.marginal_oracle,
-      ).estimate(
+      estimator = mbi.estimation.MirrorDescent(self.marginal_oracle)
+      model = estimator.estimate(
           data.domain,
           all_measurements,
           iters=self.pgm_iters,
-          potentials=potentials,
           callback_fn=mbi.callbacks.default(all_measurements, data.domain),
+          constraints=constraints,
       )
       logging.info('[MST]: Fit distribution to the noisy measurements.')
     diagnostics = common.clique_stats(model)

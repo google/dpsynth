@@ -136,7 +136,7 @@ class DiscreteMechanismResult:
 def compression_mappings(
     one_way_measurements: list[mbi.LinearMeasurement],
     compress_columns: bool | Sequence[str] = False,
-    initial_potentials: mbi.CliqueVector | None = None,
+    constraints: tuple[mbi.Constraint, ...] = (),
 ) -> dict[str, np.ndarray]:
   """Computes mappings that merge rare domain values for compression."""
   if not compress_columns:
@@ -147,8 +147,8 @@ def compression_mappings(
       if isinstance(compress_columns, Sequence)
       else {m.clique[0] for m in one_way_measurements}
   )
-  if initial_potentials is not None:
-    constrained = set().union(*initial_potentials.cliques)
+  if constraints:
+    constrained = set().union(*(c.domain.attrs for c in constraints))
     skipped = cols & constrained
     if skipped:
       logging.info(

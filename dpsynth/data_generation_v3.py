@@ -387,16 +387,14 @@ class TabularSynthesizer(primitives.DPMechanism):
     logging.info('[DPSynth]: Finished encoding data.')
 
     # Phase 3: Run the discrete mechanism.
-    initial_potentials = None
-    if self.cross_attribute_constraints:
-      initial_potentials = constraints.get_initial_parameters(
-          self.cross_attribute_constraints, discrete.domain
-      )
+    mbi_constraints = tuple(
+        c.to_mbi() for c in self.cross_attribute_constraints
+    )
     mechanism_result = self.discrete_mechanism(
         rng,
         data=discrete,
         initial_measurements=one_way_measurements,
-        initial_potentials=initial_potentials,
+        constraints=mbi_constraints,
     )
     synthetic_data = mechanism_result.synthetic_data
     logging.info('[DPSynth]: Generated discrete synthetic data.')

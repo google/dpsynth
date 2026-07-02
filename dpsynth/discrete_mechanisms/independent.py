@@ -68,7 +68,7 @@ class IndependentMechanism(primitives.DPMechanism):
       data: mbi.Dataset | mbi.CliqueVector,
       *,
       initial_measurements: list[mbi.LinearMeasurement] | None = None,
-      initial_potentials: mbi.CliqueVector | None = None,
+      constraints: tuple[mbi.Constraint, ...] = (),
   ) -> common.DiscreteMechanismResult:
     """Generate synthetic data via the independent mechanism."""
     if self.gdp_sigma is None:
@@ -94,7 +94,7 @@ class IndependentMechanism(primitives.DPMechanism):
 
     one_way_only = [m for m in measurements if len(m.clique) == 1]
     mappings = common.compression_mappings(
-        one_way_only, self.compress_columns, initial_potentials
+        one_way_only, self.compress_columns, constraints
     )
     if mappings:
       data = data.compress(mappings)
@@ -105,17 +105,12 @@ class IndependentMechanism(primitives.DPMechanism):
         mbi.summarize(data.domain, [m.clique for m in measurements]),
     )
     with common.timed(phase_times, 'estimation'):
-      potentials = initial_potentials
-      if potentials is not None:
-        potentials = potentials.expand([m.clique for m in measurements])
-
-      model = mbi.estimation.MirrorDescent(
-          marginal_oracle=self.marginal_oracle,
-      ).estimate(
+      estimator = mbi.estimation.MirrorDescent(self.marginal_oracle)
+      model = estimator.estimate(
           data.domain,
           measurements,
           iters=self.pgm_iters,
-          potentials=potentials,
+          constraints=constraints,
       )
     diagnostics = common.clique_stats(model)
     diagnostics.phase_times = phase_times

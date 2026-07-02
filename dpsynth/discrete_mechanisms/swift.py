@@ -103,7 +103,7 @@ class SWIFTMechanism(primitives.DPMechanism):
       data: mbi.Dataset | mbi.CliqueVector,
       *,
       initial_measurements: Sequence[mbi.LinearMeasurement] | None = None,
-      initial_potentials: mbi.CliqueVector | None = None,
+      constraints: tuple[mbi.Constraint, ...] = (),
   ) -> common.DiscreteMechanismResult:
     """Runs the SWIFT mechanism on the given data.
 
@@ -113,8 +113,7 @@ class SWIFTMechanism(primitives.DPMechanism):
         compression; mbi.CliqueVector is supported but compression will be
         skipped.
       initial_measurements: Optional pre-existing one-way measurements.
-      initial_potentials: Optional initial potentials for constrained
-        estimation.
+      constraints: Structural constraints for the estimation.
 
     Returns:
       A DiscreteMechanismResult containing the estimated data distribution.
@@ -146,7 +145,7 @@ class SWIFTMechanism(primitives.DPMechanism):
       measurements = list(initial_measurements)
 
     mappings = common.compression_mappings(
-        measurements, self.compress_columns, initial_potentials
+        measurements, self.compress_columns, constraints
     )
     if mappings:
       data = data.compress(mappings)
@@ -167,18 +166,10 @@ class SWIFTMechanism(primitives.DPMechanism):
       answers = mbi.CliqueVector.from_projectable(data, candidates)
     domain = data.domain
 
-    potentials = initial_potentials
-    if potentials is not None:
-      potentials = potentials.expand([m.clique for m in measurements])
-
     with common.timed(phase_times, 'initial_mirror_descent'):
-      model = mbi.estimation.MirrorDescent(
-          marginal_oracle=self.marginal_oracle,
-      ).estimate(
-          domain,
-          measurements,
-          iters=self.pgm_iters,
-          potentials=potentials,
+      estimator = mbi.estimation.MirrorDescent(self.marginal_oracle)
+      model = estimator.estimate(
+          domain, measurements, iters=self.pgm_iters, constraints=constraints
       )
       model = typing.cast(mbi.MarkovRandomField, model)
 
@@ -250,8 +241,8 @@ class SWIFTMechanism(primitives.DPMechanism):
           domain,
           measurements,
           iters=self.pgm_iters,
-          potentials=potentials,
           callback_fn=callback_fn,
+          constraints=constraints,
       )
       assert isinstance(final_model, mbi.MarkovRandomField)
       logging.info('[SWIFT] Estimated final model.')

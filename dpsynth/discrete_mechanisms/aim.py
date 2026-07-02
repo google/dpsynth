@@ -156,7 +156,7 @@ class AIMMechanism(primitives.DPMechanism):
       data: mbi.Dataset | mbi.CliqueVector,
       *,
       initial_measurements: list[mbi.LinearMeasurement] | None = None,
-      initial_potentials: mbi.CliqueVector | None = None,
+      constraints: tuple[mbi.Constraint, ...] = (),
   ) -> common.DiscreteMechanismResult:
     """Runs the AIM mechanism on the given data.
 
@@ -165,7 +165,7 @@ class AIMMechanism(primitives.DPMechanism):
       data: The input data. Must be an mbi.Dataset for domain compression;
         mbi.CliqueVector is supported but compression will be skipped.
       initial_measurements: Optional initial measurements to start from.
-      initial_potentials: Optional initial potentials (constraints).
+      constraints: Structural constraints for the estimation.
 
     Returns:
       A DiscreteMechanismResult containing the estimated data distribution.
@@ -195,7 +195,7 @@ class AIMMechanism(primitives.DPMechanism):
       measurements = list(initial_measurements)
 
     mappings = common.compression_mappings(
-        measurements, self.compress_columns, initial_potentials
+        measurements, self.compress_columns, constraints
     )
     if mappings:
       data = data.compress(mappings)
@@ -210,16 +210,9 @@ class AIMMechanism(primitives.DPMechanism):
     answers = mbi.CliqueVector.from_projectable(data, list(candidates))
     logging.info('[AIM]: Calculated workload-query answers.')
 
-    potentials = initial_potentials
-    if potentials is not None:
-      potentials = potentials.expand([m.clique for m in measurements])
-    model = mbi.estimation.MirrorDescent(
-        marginal_oracle=self.marginal_oracle,
-    ).estimate(
-        data.domain,
-        measurements,
-        iters=self.pgm_iters,
-        potentials=potentials,
+    estimator = mbi.estimation.MirrorDescent(self.marginal_oracle)
+    model = estimator.estimate(
+        data.domain, measurements, iters=self.pgm_iters, constraints=constraints
     )
     assert isinstance(model, mbi.MarkovRandomField)
 
@@ -287,14 +280,13 @@ class AIMMechanism(primitives.DPMechanism):
         callback_fn = mbi.callbacks.default(measurements, data.domain)
         measured_cliques = list(set(m.clique for m in measurements))
         warm_start = model.potentials.expand(measured_cliques)
-        model = mbi.estimation.MirrorDescent(
-            marginal_oracle=self.marginal_oracle,
-        ).estimate(
+        model = estimator.estimate(
             data.domain,
             measurements,
             potentials=warm_start,
             iters=self.pgm_iters,
             callback_fn=callback_fn,
+            constraints=constraints,
         )
         assert isinstance(model, mbi.MarkovRandomField)
 

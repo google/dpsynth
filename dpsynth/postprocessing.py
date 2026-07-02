@@ -232,9 +232,7 @@ def generate_synthetic_data_from_marginals(
         arrays=factors,
     )
 
-  initial_potentials = constraints.get_initial_parameters(
-      cross_attribute_constraints, mbi_domain
-  )
+  mbi_constraints = tuple(c.to_mbi() for c in cross_attribute_constraints)
 
   if log:
     callback_fn = mbi.callbacks.default(
@@ -247,10 +245,10 @@ def generate_synthetic_data_from_marginals(
   model = estimator.estimate(
       mbi_domain,
       measurements,
-      potentials=initial_potentials,
       iters=iters,
       callback_fn=callback_fn,
       known_total=estimated_total,
+      constraints=mbi_constraints,
   )
   encoded_data = model.synthetic_data(nrows)
 
