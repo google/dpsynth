@@ -20,6 +20,7 @@ import apache_beam as beam
 from dpsynth import domain
 from dpsynth.local_mode import beam_initializers
 from dpsynth.local_mode import initialization
+import mbi
 import numpy as np
 
 _TEST_RESULTS = []
@@ -33,7 +34,10 @@ class NumericalHistogramTest(absltest.TestCase):
 
   def _run(self, rows, attr, grid_size=101):
     init = initialization.NumericalInitializer(
-        name='x', num_partitions=4, attribute=attr, grid_size=grid_size
+        name='x',
+        num_partitions=4,
+        attribute=attr,
+        grid_size=grid_size,
     ).calibrate(zcdp_rho=np.inf)
     _TEST_RESULTS.clear()
     with beam.Pipeline() as p:
@@ -80,10 +84,12 @@ class CategoricalCountsTest(absltest.TestCase):
 
   def test_basic_counts(self):
     attr = domain.CategoricalAttribute(
-        possible_values=['unk', 'a', 'b', 'c'], out_of_domain_index=0
+        possible_values=['unk', 'a', 'b', 'c'],
+        out_of_domain_index=0,
     )
     init = initialization.CategoricalInitializer(
-        name='col', attribute=attr
+        name='col',
+        attribute=attr,
     ).calibrate(zcdp_rho=np.inf)
     rows = [
         {'col': 'a'},
@@ -185,6 +191,74 @@ class BeamInitializeTest(absltest.TestCase):
     self.assertLen(measurements, 3)
     for cm in measurements.values():
       self.assertIsInstance(cm, initialization.ColumnMeasurement)
+
+
+class ComputeMarginalsTest(absltest.TestCase):
+
+  def test_marginals_match_manual_counts(self):
+    cat_attr = domain.CategoricalAttribute(possible_values=['a', 'b', 'c'])
+    num_attr = domain.NumericalAttribute(min_value=0, max_value=10)
+    cat_init = initialization.CategoricalInitializer(
+        name='color',
+        attribute=cat_attr,
+    ).calibrate(zcdp_rho=np.inf)
+    num_init = initialization.NumericalInitializer(
+        name='size',
+        num_partitions=4,
+        attribute=num_attr,
+        grid_size=11,
+    ).calibrate(zcdp_rho=np.inf)
+    domains = {'color': cat_attr, 'size': num_attr}
+    rows = [
+        {'color': 'a', 'size': 0},
+        {'color': 'a', 'size': 5},
+        {'color': 'b', 'size': 5},
+        {'color': 'b', 'size': 10},
+        {'color': 'c', 'size': 0},
+        {'color': 'c', 'size': 0},
+    ]
+
+    # Stage 1: get ColumnMeasurements.
+    inits = {'color': cat_init, 'size': num_init}
+    rng = np.random.default_rng(42)
+    _TEST_RESULTS.clear()
+    with beam.Pipeline() as p:
+      stats = (
+          p
+          | 'Create1' >> beam.Create(rows)
+          | beam_initializers.ComputeSufficientStats(inits)
+      )
+      _ = stats | 'ToDict1' >> beam.combiners.ToDict() | beam.Map(_store)
+    cms = beam_initializers.run_from_summary(_TEST_RESULTS[0], inits, rng)
+
+    # Stage 2: compute marginals.
+    workload = [('color',), ('size',), ('color', 'size')]
+    _TEST_RESULTS.clear()
+    with beam.Pipeline() as p:
+      result = (
+          p
+          | 'Create2' >> beam.Create(rows)
+          | beam_initializers.ComputeMarginals(cms, domains, workload)
+      )
+      _ = result | beam.Map(_store)
+
+    cv = _TEST_RESULTS[0]
+    self.assertIsInstance(cv, mbi.CliqueVector)
+    self.assertLen(cv.cliques, 3)
+
+    # 1-way: color [a=2, b=2, c=2].
+    np.testing.assert_array_equal(
+        cv.arrays[('color',)].datavector(),
+        [2, 2, 2],
+    )
+    # 1-way: size total equals number of rows.
+    self.assertEqual(cv.arrays[('size',)].datavector().sum(), 6)
+    # 2-way: shape matches product of column sizes, total equals rows.
+    joint = cv.arrays[('color', 'size')]
+    expected_size = cms['color'].categorical_attribute.size
+    expected_size *= cms['size'].categorical_attribute.size
+    self.assertEqual(joint.domain.size(), expected_size)
+    self.assertEqual(joint.datavector().sum(), 6)
 
 
 if __name__ == '__main__':

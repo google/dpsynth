@@ -105,6 +105,11 @@ class CategoricalAttribute:
       return value
     return self.possible_values[self.out_of_domain_index]
 
+  @functools.cached_property
+  def lookup(self) -> dict[str, int]:
+    """Returns a mapping from stringified values to their indices."""
+    return {str(v): i for i, v in enumerate(self.possible_values)}
+
 
 @attr.define(frozen=True)
 class OpenSetCategoricalAttribute:
