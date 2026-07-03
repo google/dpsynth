@@ -202,7 +202,7 @@ def _add_noise_to_errors(
   mechanism = pipeline_dp.dp_computations.create_additive_mechanism(
       mechanism_spec, sensitivities
   )
-  noised_errors = np.maximum(mechanism.add_noise(errors), 0.0)
+  noised_errors = mechanism.add_noise(errors)
   return dict(zip(cliques, noised_errors))
 
 
