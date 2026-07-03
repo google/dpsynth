@@ -22,16 +22,12 @@ from absl import app
 from absl import flags
 from absl import logging
 from dpsynth import domain
-import fancyflags as ff
 import pandas as pd
-import sdmetrics
 
 import pathlib
 
 
 PathType = pathlib.Path
-QualityReport = sdmetrics.reports.single_table.QualityReport
-DiagnosticsReport = sdmetrics.reports.single_table.DiagnosticReport
 
 
 @dataclasses.dataclass(frozen=True)
@@ -84,19 +80,16 @@ _COLUMNS_TO_COMPARE = flags.DEFINE_list(
 )
 
 
-_COLUMNS_TO_CROSS_COMPARE = ff.DEFINE_dict(
-    'cross_compare',
-    categorical_columns=ff.MultiString(
-        ['sex', 'race'],
-        'Multiple categorical columns to use for cross-column comparison. We'
-        ' will group by all the categorical columns and compare the mean with'
-        ' each of the numerical columns.',
-    ),
-    numerical_columns=ff.MultiString(
-        ['age'],
-        'Multiple numerical columns to cross compare, we will compare the mean'
-        ' of each column for all the categorical columns.',
-    ),
+_CROSS_COMPARE_CATEGORICAL_COLUMNS = flags.DEFINE_list(
+    'cross_compare_categorical_columns',
+    ['sex', 'race'],
+    'Categorical columns to group by for cross-column comparison.',
+)
+
+_CROSS_COMPARE_NUMERICAL_COLUMNS = flags.DEFINE_list(
+    'cross_compare_numerical_columns',
+    ['age'],
+    'Numerical columns whose grouped means are compared.',
 )
 
 
@@ -218,19 +211,30 @@ def _create_metadata_from_domain_yaml(
     elif isinstance(attr, domain.CategoricalAttribute):
       cols[name] = {'sdtype': 'categorical'}
     else:
-      raise ValueError('Unknown attribute type: {type(attr)}')
+      raise ValueError(f'Unknown attribute type: {type(attr)}')
 
   metadata['columns'] = cols
   return metadata
+
+
+def _get_sdmetrics_report_classes() -> tuple[type[Any], type[Any]]:
+  try:
+    from sdmetrics.reports import single_table
+  except ImportError as exc:
+    raise ImportError(
+        'comparison.py requires sdmetrics to generate quality reports.'
+    ) from exc
+  return single_table.QualityReport, single_table.DiagnosticReport
 
 
 def _create_quality_report(
     real_data: pd.DataFrame,
     synthetic_data: pd.DataFrame,
     metadata: dict[str, Any],
-  ) -> QualityReport:
+) -> Any:
   """Creates a quality report."""
   print('Quality report:')
+  QualityReport, _ = _get_sdmetrics_report_classes()
   quality_report = QualityReport()
   quality_report.generate(real_data, synthetic_data, metadata)
   if not quality_report.is_generated:
@@ -243,9 +247,10 @@ def _create_diagnostics_report(
     real_data: pd.DataFrame,
     synthetic_data: pd.DataFrame,
     metadata: dict[str, Any],
-  ) -> DiagnosticsReport:
+) -> Any:
   """Creates a diagnostics report."""
   print('Diagnostics report:')
+  _, DiagnosticsReport = _get_sdmetrics_report_classes()
   diagnostics_report = DiagnosticsReport()
   diagnostics_report.generate(real_data, synthetic_data, metadata)
   if not diagnostics_report.is_generated:
@@ -273,7 +278,8 @@ def main(_) -> None:
   sdmetrics_metadata = _create_metadata_from_domain_yaml(domain_path)
   columns_to_compare = _COLUMNS_TO_COMPARE.value
   columns_to_cross_compare = CompareGroupByColumns(
-      **_COLUMNS_TO_CROSS_COMPARE.value
+      categorical_columns=_CROSS_COMPARE_CATEGORICAL_COLUMNS.value or [],
+      numerical_columns=_CROSS_COMPARE_NUMERICAL_COLUMNS.value or [],
   )
 
   # Compare histograms of the given columns.

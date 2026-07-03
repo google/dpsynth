@@ -127,7 +127,8 @@ python3 bin/main.py \
 ### Supported CLI Flags
 
 *   `--dataset`: Path to the input CSV file. (Supports standard CSV parsing
-    arguments via `--read_csv_args`).
+    arguments via `--field_separator`, `--column_names`, and
+    `--column_count`).
 *   `--domain`: Path to the YAML domain specification file.
 *   `--epsilon`, `--delta`: Total DP privacy budget.
 *   `--mechanism`: Supported options are `mst`, `aim`, `independent`, and
