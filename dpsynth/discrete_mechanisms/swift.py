@@ -380,7 +380,7 @@ def build_best_clique_tree(
         if len(cl) == 2 and tuple(sorted(cl)) in supported
     )
 
-    if score > best_score:
+    if best_tree is None or score > best_score:
       best_score = score
       best_tree = tree
   assert best_tree is not None
