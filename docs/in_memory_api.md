@@ -82,8 +82,7 @@ attribute_domains = domain.from_yaml_file("transaction_domain.yaml")
 synth = dpsynth.TabularSynthesizer(
     domains=attribute_domains,
     discrete_mechanism=discrete_mechanisms.AIMConfig(
-        seed=42,
-        rounds=50,
+        max_rounds=50,
         pgm_iters=1000,
     ),
 )
