@@ -189,7 +189,9 @@ class AIMMechanism(primitives.DPMechanism):
           rng,
           data,
           marginal_queries=marginal_queries,
-          gdp_sigma=zcdp_rho * self.one_way_budget_fraction,
+          gdp_sigma=accounting.zcdp_gaussian_sigma(
+              zcdp_rho * self.one_way_budget_fraction
+          ),
       )
     else:
       measurements = list(initial_measurements)
