@@ -195,18 +195,18 @@ Both code paths support the following DP mechanisms:
 
 ## Further Documentation
 
-Detailed guides are available in the [`documentation/`](dpsynth/documentation/)
+Detailed guides are available in the [`docs/`](docs/)
 directory:
 
-*   **In-Memory DataFrame API Guide** (`documentation/in_memory_api.md`):
+*   **In-Memory DataFrame API Guide** (`docs/in_memory_api.md`):
     Detailed guide to using the Pandas-based API and local CLI.
-*   **Scalable Pipeline API Guide** (`documentation/scalable_beam_api.md`):
+*   **Scalable Pipeline API Guide** (`docs/scalable_beam_api.md`):
     Guide for distributed data generation.
-*   **Data Model & Terminology** (`documentation/data_and_terminology.md`):
+*   **Data Model & Terminology** (`docs/data_and_terminology.md`):
     Attributes, schema specifications, and `domain.yaml` format.
-*   **Processing Lifecycle** (`documentation/processing_lifecycle.md`):
+*   **Processing Lifecycle** (`docs/processing_lifecycle.md`):
     The 5-stage mathematical lifecycle shared by both code paths.
-*   **Contributor Guide** (`documentation/contributors_guide.md`):
+*   **Contributor Guide** (`docs/contributors_guide.md`):
     Architecture, PipelineBackend programming rules, and evaluation framework.
 
 *This is not an officially supported Google product. This project is
