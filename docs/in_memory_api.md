@@ -62,7 +62,7 @@ synthetic_df = result.synthetic_data
 ## End-to-End Python Example
 
 Here is a complete Python script demonstrating how to load data, parse a domain
-YAML file, configure the AIM mechanism with a fixed random seed, and generate
+YAML file, configure the AIM mechanism, set a fixed random seed, and generate
 synthetic records.
 
 ```python
@@ -93,7 +93,8 @@ calibrated = synth.calibrate(
 )
 
 # 4. Generate Differentially Private synthetic data
-result = calibrated(np.random.default_rng(), sensitive_df)
+seed = 42
+result = calibrated(np.random.default_rng(seed), sensitive_df)
 synthetic_df = result.synthetic_data
 
 # 5. Save the synthetic dataframe
