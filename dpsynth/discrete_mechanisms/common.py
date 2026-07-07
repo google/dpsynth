@@ -40,7 +40,6 @@ class MechanismDiagnostics:
 
   Attributes:
     phase_times: Wall-clock time in seconds for each named phase.
-    num_rounds: Number of select-measure rounds (iterative mechanisms only).
     num_cliques: Number of cliques in the fitted model.
     max_clique_size: Size of the largest clique.
     total_clique_size: Sum of all clique sizes.
@@ -49,7 +48,6 @@ class MechanismDiagnostics:
   """
 
   phase_times: dict[str, float] = dataclasses.field(default_factory=dict)
-  num_rounds: int = 0
   num_cliques: int = 0
   max_clique_size: int = 0
   total_clique_size: int = 0
@@ -138,7 +136,7 @@ class DiscreteMechanismResult:
 def compression_mappings(
     one_way_measurements: list[mbi.LinearMeasurement],
     compress_columns: bool | Sequence[str | int] = False,
-    constraints: tuple[mbi.Constraint, ...] = (),
+    constraints: Sequence[mbi.Constraint] = (),
 ) -> dict[str | int, np.ndarray]:
   """Computes mappings that merge rare domain values for compression."""
   if not compress_columns:

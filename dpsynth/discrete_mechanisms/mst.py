@@ -16,15 +16,14 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 import dataclasses
 import itertools
 import typing
 
 from absl import logging
 import dp_accounting
-from dpsynth import api
-from dpsynth.discrete_mechanisms import accounting
+from dpsynth.discrete_mechanisms import base
 from dpsynth.discrete_mechanisms import common
 import mbi
 import networkx as nx
@@ -150,7 +149,7 @@ def _select_two_way_marginal_queries(
 
 
 @dataclasses.dataclass
-class MSTMechanism(api.DPMechanism):
+class MSTMechanism(base.DiscreteMechanism):
   """Configuration for the maximum spanning tree mechanism.
 
   Details are described in the paper:
@@ -158,26 +157,15 @@ class MSTMechanism(api.DPMechanism):
   private synthetic data](https://arxiv.org/abs/2108.04978)
 
   Attributes:
-    pgm_iters: The number of iterations for the mirror descent algorithm.
+    select_budget_fraction: The fraction of the remaining budget (after one-way
+      measurements) to use for selecting two-way marginal queries.
     maximum_marginal_size: The maximum size of a marginal query.
-    marginal_oracle: The marginal oracle to use for the mirror descent
-      algorithm.
-    one_way_budget_fraction: The fraction of the total budget to use for one-way
-      marginal queries.
-    compress_columns: Controls domain compression. True compresses all columns,
-      False disables compression, or a sequence of column names to compress
-      selectively.
-    select_budget_fraction: The fraction of the total budget to use for
-      selecting two-way marginal queries.
+    _select_rho: zCDP budget for the exponential mechanism (set by configure).
   """
 
-  pgm_iters: int = 5000
-  maximum_marginal_size: int = 10_000_000
-  marginal_oracle: mbi.MarginalOracle | None = None
-  one_way_budget_fraction: float = 1 / 3
-  compress_columns: bool | Sequence[str] = False
   select_budget_fraction: float = 1 / 3
-  zcdp_rho: float | None = None
+  maximum_marginal_size: int = 10_000_000
+  _select_rho: float | None = dataclasses.field(default=None, repr=False)
 
   def supporting_cliques(self, domain: mbi.Domain) -> list[mbi.Clique]:
     """Returns all pairwise marginals within the size limit."""
@@ -187,9 +175,13 @@ class MSTMechanism(api.DPMechanism):
         self.maximum_marginal_size,
     )
 
-  def configure(self, *, zcdp_rho: float, delta: float = 0.0) -> MSTMechanism:
-    """Returns a copy calibrated to the given zCDP budget."""
-    return dataclasses.replace(self, zcdp_rho=zcdp_rho)
+  def _allocate_budget(self, remaining_rho: float) -> Mapping[str, float]:
+    """Splits the remaining budget between selection and measurement."""
+    select_rho = remaining_rho * self.select_budget_fraction
+    return {
+        '_select_rho': select_rho,
+        'measurement_rho': remaining_rho - select_rho,
+    }
 
   @property
   def dp_event(self) -> dp_accounting.DpEvent:
@@ -199,107 +191,12 @@ class MSTMechanism(api.DPMechanism):
     # exponential mechanisms and (d-1) Gaussian mechanisms.
     return dp_accounting.ZCDpEvent(self.zcdp_rho)
 
-  def __call__(
-      self,
-      rng: np.random.Generator,
-      data: mbi.Dataset | mbi.CliqueVector,
-      *,
-      initial_measurements: list[mbi.LinearMeasurement] | None = None,
-      constraints: tuple[mbi.Constraint, ...] = (),
-  ) -> common.DiscreteMechanismResult:
-    """Runs the MST mechanism on the given data.
-
-    Args:
-      rng: A numpy random number generator.
-      data: The sensitive dataset. Must be an mbi.Dataset for domain
-        compression; mbi.CliqueVector is supported but compression will be
-        skipped.
-      initial_measurements: Optional pre-existing one-way measurements.
-      constraints: Structural constraints for the estimation.
-
-    Returns:
-      A DiscreteMechanismResult containing the estimated data distribution.
-
-    Raises:
-      ValueError: If calibrate() has not been called.
-    """
-    if self.zcdp_rho is None:
-      raise ValueError('Must call calibrate() before using the mechanism.')
-    logging.info('[MST]: Starting MST mechanism.')
-    phase_times = {}
-    budget_remaining = self.zcdp_rho
-
-    with common.timed(phase_times, 'measurement'):
-      if initial_measurements is None:
-        budget_remaining -= self.one_way_budget_fraction * self.zcdp_rho
-        one_way_rho = self.zcdp_rho * self.one_way_budget_fraction
-        one_way_sigma = accounting.zcdp_gaussian_sigma(one_way_rho)
-        one_way_measurements = common.measure_marginals_with_noise(
-            rng,
-            data,
-            marginal_queries=[(a,) for a in data.domain],
-            gdp_sigma=one_way_sigma,
-        )
-      else:
-        one_way_measurements = initial_measurements
-
-    mappings = common.compression_mappings(
-        one_way_measurements, self.compress_columns, constraints
-    )
-    if mappings:
-      data = data.compress(mappings)
-      one_way_measurements = [
-          m.compress(mappings, data.domain) for m in one_way_measurements
-      ]
-
-    exponential_rho = self.select_budget_fraction * self.zcdp_rho
-    budget_remaining -= exponential_rho
-    # Select and measure 2-way marginals using rho/3 budget for each step.
+  def _select(self, rng, data, measurements, phase_times):
     with common.timed(phase_times, 'selection'):
-      two_way_marginal_queries = _select_two_way_marginal_queries(
+      return _select_two_way_marginal_queries(
           rng,
           data,
-          exponential_rho,
-          one_way_measurements,
+          self._select_rho,
+          measurements,
           maximum_marginal_size=self.maximum_marginal_size,
       )
-      logging.info('[MST]: Selected two-way marginal queries.')
-    with common.timed(phase_times, 'measurement'):
-      gaussian_rho = budget_remaining
-      sigma = accounting.zcdp_gaussian_sigma(gaussian_rho)
-      two_way_measurements = common.measure_marginals_with_noise(
-          rng, data, two_way_marginal_queries, sigma
-      )
-      logging.info('[MST]: Measured two-way marginals.')
-    all_measurements = one_way_measurements + two_way_measurements
-    # Fit a distribution to the noisy measurements using Private-PGM.
-    model_size = mbi.junction_tree.hypothetical_model_size(
-        data.domain, [m.clique for m in all_measurements]
-    )
-    logging.info('[MST]: Model size: %d MB', model_size)
-    logging.info(
-        '[MST]:\n%s',
-        mbi.summarize(data.domain, [m.clique for m in all_measurements]),
-    )
-    with common.timed(phase_times, 'estimation'):
-      estimator = mbi.estimation.MirrorDescent(self.marginal_oracle)
-      model = estimator.estimate(
-          data.domain,
-          all_measurements,
-          iters=self.pgm_iters,
-          callback_fn=mbi.callbacks.default(all_measurements, data.domain),
-          constraints=constraints,
-      )
-      logging.info('[MST]: Fit distribution to the noisy measurements.')
-    diagnostics = common.clique_stats(model)
-    diagnostics.phase_times = phase_times
-    synthetic_data = model.synthetic_data()
-    if mappings:
-      synthetic_data = synthetic_data.decompress(mappings)
-    return common.DiscreteMechanismResult(
-        model=model,
-        synthetic_data=synthetic_data,
-        measurements=all_measurements,
-        diagnostics=diagnostics,
-        mappings=mappings,
-    )
