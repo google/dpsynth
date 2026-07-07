@@ -104,15 +104,18 @@ class TabularSynthesizer(primitives.DPMechanism):
   Usage::
 
       synth = TabularSynthesizer(domains=domains)
-      calibrated = synth.calibrate(zcdp_rho=1.0)
+      calibrated = synth.configure(zcdp_rho=1.0)
       result = calibrated(rng, df)
       synthetic_df = result.synthetic_data
 
   Attributes:
     domains: Mapping from column names to attribute domain specifications.
     discrete_mechanism: The mechanism to run on the discretized data.
+    numerical_bins: Number of bins for numerical attribute discretization.
+    init_budget_fraction: Fraction of total zCDP budget allocated to per-column
+      initialization (the rest goes to the discrete mechanism).
     initializers: Per-column initializer mechanisms. If None, created
-      automatically from ``domains`` during ``calibrate()``.
+      automatically from ``domains`` during ``configure()``.
     skip_compression: Whether to skip domain compression.
     cross_attribute_constraints: Constraints to enforce on generated data.
   """
@@ -121,190 +124,81 @@ class TabularSynthesizer(primitives.DPMechanism):
   discrete_mechanism: discrete_mechanisms.DiscreteMechanism = dataclasses.field(
       default_factory=discrete_mechanisms.MSTMechanism
   )
+  numerical_bins: int = 32
+  init_budget_fraction: float = 0.1
   initializers: dict[str, primitives.DPMechanism] | None = None
   total_count_mechanism: primitives.DPGaussianCount | None = None
   cross_attribute_constraints: Sequence[constraints.Constraint] = ()
 
-  def calibrate(
+  def configure(
       self,
       *,
-      zcdp_rho: float | None = None,
-      epsilon: float | None = None,
-      delta: float | None = None,
-      numerical_bins: int = 32,
-      init_budget_fraction: float = 0.1,
+      zcdp_rho: float,
+      delta: float = 0.0,
   ) -> TabularSynthesizer:
-    """Returns a calibrated copy of this mechanism.
+    """Returns a copy configured with the given privacy budget.
 
-    Supports two calibration modes:
+    Splits the budget additively, just as it does for ``zcdp_rho``:
 
-    1. **zCDP mode** (``zcdp_rho``): Simple additive budget split between
-       initialization and the discrete mechanism. If the domain contains
-       open-set categorical attributes, ``delta`` must also be provided and
-       is used entirely for partition-selection thresholding.
-    2. **Approximate DP mode** (``epsilon`` and ``delta``): Two-stage
-       calibration. Reserves ``init_budget_fraction * delta`` for open-set
-       thresholding, converts ``(epsilon, remaining_delta)`` to zCDP, then
-       uses PLD accounting to find the tightest discrete mechanism budget.
+    - ``init_budget_fraction`` of ``zcdp_rho`` goes to per-column initializers
+      (split evenly, including a total-count mechanism); the remainder goes to
+      the discrete mechanism.
+    - ``init_budget_fraction`` of ``delta`` is reserved for open-set partition
+      selection (split evenly across open-set columns); the remaining delta is
+      unused by pure-zCDP sub-mechanisms.
+
+    When ``calibrate(epsilon, delta)`` is called, the base class binary search
+    passes the guarantee delta here. Because the thresholding delta is honestly
+    reported in the composite ``dp_event``, the binary search automatically
+    ensures the overall (epsilon, delta) guarantee is tight.
 
     Args:
-      zcdp_rho: The zCDP privacy budget. Mutually exclusive with epsilon.
-      epsilon: The epsilon privacy parameter. Must be provided with delta.
-      delta: The delta privacy parameter. Required with epsilon, and also
-        required with zcdp_rho when open-set categorical attributes exist.
-      numerical_bins: Number of bins for numerical discretization.
-      init_budget_fraction: Fraction of total budget for initialization.
+      zcdp_rho: The zCDP privacy budget.
+      delta: Overall approximate DP delta for the mechanism. A fraction
+        (``init_budget_fraction``) is allocated to partition selection for
+        open-set columns. Must be positive when open-set categorical attributes
+        are present.
 
     Returns:
-      A new TabularSynthesizer instance with calibrated sub-mechanisms.
+      A new TabularSynthesizer with calibrated sub-mechanisms.
 
     Raises:
-      ValueError: If arguments are invalid or delta is missing when required.
+      ValueError: If open-set attributes exist but delta is 0.
     """
-    has_zcdp = zcdp_rho is not None
-    has_approx = epsilon is not None
-    if has_zcdp == has_approx:
-      raise ValueError('Specify exactly one of zcdp_rho or (epsilon, delta).')
-    if has_approx and delta is None:
-      raise ValueError('delta must be provided when epsilon is specified.')
-
     num_open_set = sum(
         isinstance(attr, domain.OpenSetCategoricalAttribute)
         for attr in self.domains.values()
     )
-
-    if has_zcdp:
-      if num_open_set > 0 and delta is None:
-        raise ValueError(
-            'delta is required when open-set categorical attributes are'
-            ' present.'
-        )
-      init_delta = delta / num_open_set if num_open_set > 0 else 0.0
-      return self._calibrate_zcdp(
-          zcdp_rho, numerical_bins, init_delta, init_budget_fraction
+    if num_open_set > 0 and delta <= 0:
+      raise ValueError(
+          'delta must be positive when open-set categorical attributes are'
+          ' present. It is used for Gaussian partition selection.'
       )
-
-    # Approximate DP: reserve init_budget_fraction * delta for thresholding.
-    thresholding_delta = init_budget_fraction * delta if num_open_set > 0 else 0
-    init_delta = thresholding_delta / num_open_set if num_open_set > 0 else 0.0
-    remaining_delta = delta - thresholding_delta
-    return self._calibrate_approx_dp(
-        epsilon,
-        delta,
-        remaining_delta,
-        numerical_bins,
-        init_delta,
-        init_budget_fraction,
+    # Split delta across open-set columns, analogous to splitting zcdp_rho.
+    # Under calibrate(), any delta not consumed here is automatically
+    # available for the zCDP-to-(epsilon, delta) conversion, so this
+    # simple additive split is tight.
+    thresholding_delta = self.init_budget_fraction * delta
+    per_col_delta = (
+        thresholding_delta / num_open_set if num_open_set > 0 else 0.0
     )
 
-  def _calibrate_zcdp(
-      self, zcdp_rho, numerical_bins, init_delta, init_budget_fraction
-  ):
-    """Simple additive zCDP budget split."""
     inits = self.initializers or _create_initializers(
-        self.domains, numerical_bins, init_delta
+        self.domains, self.numerical_bins, per_col_delta
     )
-    init_rho = init_budget_fraction * zcdp_rho
+    init_rho = self.init_budget_fraction * zcdp_rho
     # +1 for the DPGaussianCount that always measures the total.
     per_col_rho = init_rho / (len(inits) + 1)
     discrete_rho = zcdp_rho - init_rho
 
     calibrated_inits = {
-        col: init.calibrate(zcdp_rho=per_col_rho) for col, init in inits.items()
+        col: init.configure(zcdp_rho=per_col_rho) for col, init in inits.items()
     }
-    calibrated_total = primitives.DPGaussianCount().calibrate(
+    calibrated_total = primitives.DPGaussianCount().configure(
         zcdp_rho=per_col_rho
     )
-    calibrated_discrete = self.discrete_mechanism.calibrate(
+    calibrated_discrete = self.discrete_mechanism.configure(
         zcdp_rho=discrete_rho
-    )
-    return dataclasses.replace(
-        self,
-        initializers=calibrated_inits,
-        discrete_mechanism=calibrated_discrete,
-        total_count_mechanism=calibrated_total,
-    )
-
-  def _calibrate_approx_dp(
-      self,
-      epsilon,
-      delta,
-      remaining_delta,
-      numerical_bins,
-      init_delta,
-      init_budget_fraction,
-  ):
-    """Two-stage calibration for (epsilon, delta).
-
-    Stage 1: Convert (epsilon, remaining_delta) to zCDP and calibrate
-    initializers with a fraction of that budget. Open-set categoricals emit
-    ApproximateDpEvents so the accountant tracks thresholding delta.
-
-    Stage 2: With initializer dp_events now fixed, use PLD accounting to find
-    the tightest discrete mechanism budget such that the full composition fits
-    within (epsilon, delta).
-
-    Args:
-      epsilon: The epsilon privacy parameter.
-      delta: The full delta privacy parameter.
-      remaining_delta: Delta after reserving thresholding budget.
-      numerical_bins: Number of bins for numerical discretization.
-      init_delta: Per-column delta for open-set partition selection.
-      init_budget_fraction: Fraction of zCDP budget for initialization.
-
-    Returns:
-      A new TabularSynthesizer instance with calibrated sub-mechanisms.
-    """
-    inits = self.initializers or _create_initializers(
-        self.domains, numerical_bins, init_delta
-    )
-    # +1 for the DPGaussianCount that always measures the total.
-    num_shares = len(inits) + 1
-
-    # Stage 1: Convert (epsilon, remaining_delta) to zCDP and calibrate
-    # initializers with init_budget_fraction of that budget.
-    total_rho = dp_accounting.calibrate_dp_mechanism(
-        make_event_from_param=dp_accounting.ZCDpEvent,
-        target_epsilon=epsilon,
-        target_delta=remaining_delta,
-        make_fresh_accountant=dp_accounting.rdp.RdpAccountant,
-    )
-    init_rho = init_budget_fraction * total_rho
-    per_col_rho = init_rho / num_shares
-    calibrated_inits = {
-        col: init.calibrate(zcdp_rho=per_col_rho) for col, init in inits.items()
-    }
-    calibrated_total = primitives.DPGaussianCount().calibrate(
-        zcdp_rho=per_col_rho
-    )
-    # Stage 2: With init dp_events fixed, find the tightest discrete budget.
-    # The accountant handles ApproximateDpEvent deltas from open-set
-    # initializers automatically.
-    init_events = [init.dp_event for init in calibrated_inits.values()]
-    init_events.append(calibrated_total.dp_event)
-
-    # Determine accountant type based on discrete mechanism's dp_event.
-    probe_event = self.discrete_mechanism.calibrate(zcdp_rho=1.0).dp_event
-    if isinstance(probe_event, dp_accounting.ZCDpEvent):
-      make_fresh_accountant = dp_accounting.rdp.RdpAccountant
-    else:
-      make_fresh_accountant = dp_accounting.pld.PLDAccountant
-
-    def make_event_from_param(discrete_rho):
-      discrete_event = self.discrete_mechanism.calibrate(
-          zcdp_rho=discrete_rho
-      ).dp_event
-      return dp_accounting.ComposedDpEvent(init_events + [discrete_event])
-
-    optimal_discrete_rho = dp_accounting.calibrate_dp_mechanism(
-        make_event_from_param=make_event_from_param,
-        target_epsilon=epsilon,
-        target_delta=delta,
-        make_fresh_accountant=make_fresh_accountant,
-    )
-
-    calibrated_discrete = self.discrete_mechanism.calibrate(
-        zcdp_rho=optimal_discrete_rho
     )
     return dataclasses.replace(
         self,
@@ -321,10 +215,12 @@ class TabularSynthesizer(primitives.DPMechanism):
       A ComposedDpEvent combining all initializer and discrete mechanism events.
 
     Raises:
-      ValueError: If calibrate() has not been called.
+      ValueError: If configure() has not been called.
     """
     if self.initializers is None or self.total_count_mechanism is None:
-      raise ValueError('Must call calibrate() before accessing dp_event.')
+      raise ValueError(
+          'Must call configure() or calibrate() before accessing dp_event.'
+      )
     events = [init.dp_event for init in self.initializers.values()]
     events.append(self.total_count_mechanism.dp_event)
     events.append(self.discrete_mechanism.dp_event)
@@ -344,11 +240,13 @@ class TabularSynthesizer(primitives.DPMechanism):
       A DataGenerationResult containing the synthetic DataFrame.
 
     Raises:
-      ValueError: If calibrate() has not been called or if required columns are
+      ValueError: If configure() has not been called or if required columns are
         missing from the input data.
     """
     if self.initializers is None or self.total_count_mechanism is None:
-      raise ValueError('Must call calibrate() before running the mechanism.')
+      raise ValueError(
+          'Must call configure() or calibrate() before running the mechanism.'
+      )
     for col in self.domains:
       if col not in data.columns:
         raise ValueError(

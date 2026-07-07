@@ -29,7 +29,7 @@ class DirectTest(absltest.TestCase):
         prespecified_marginal_queries=prespecified_queries,
         pgm_iters=500,
     )
-    result = config.calibrate(zcdp_rho=10000)(np.random.default_rng(0), data)
+    result = config.configure(zcdp_rho=10000)(np.random.default_rng(0), data)
 
     self.assertIsInstance(result, common.DiscreteMechanismResult)
     self.assertLen(result.measurements, len(prespecified_queries))

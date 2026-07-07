@@ -54,11 +54,11 @@ def generate(
       domains=domains,
       discrete_mechanism=discrete_config,
       cross_attribute_constraints=cross_attribute_constraints,
+      numerical_bins=numerical_bins,
+      init_budget_fraction=one_way_marginal_budget_fraction,
   )
   result = synth.calibrate(
       epsilon=epsilon,
       delta=delta,
-      numerical_bins=numerical_bins,
-      init_budget_fraction=one_way_marginal_budget_fraction,
   )(np.random.default_rng(), data)
   return result.synthetic_data

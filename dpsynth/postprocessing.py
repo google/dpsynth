@@ -227,9 +227,9 @@ def generate_synthetic_data_from_marginals(
     for x in exact_encoded:
       factors[x.domain.attributes] = x
     duck_typed_exact_data = mbi.CliqueVector(
-        domain=mbi_domain,
-        cliques=list(factors.keys()),
-        arrays=factors,
+        mbi_domain,
+        list(factors.keys()),
+        factors,
     )
 
   mbi_constraints = tuple(c.to_mbi() for c in cross_attribute_constraints)

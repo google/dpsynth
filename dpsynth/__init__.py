@@ -16,6 +16,7 @@
 
 # pylint: disable=g-importing-member
 __version__ = '0.2.0'
+from dpsynth import api
 from dpsynth import discrete_mechanisms
 from dpsynth import domain
 from dpsynth.data_generation_v3 import TabularSynthesizer

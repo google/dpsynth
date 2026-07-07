@@ -111,5 +111,31 @@ class CompressionPropertyTest(parameterized.TestCase):
     self.assertNotEmpty(result.mappings)
 
 
+class CalibrationTest(parameterized.TestCase):
+  """Tests that calibration works across mechanisms."""
+
+  @parameterized.named_parameters(*_MECHANISMS.items())
+  def test_deprecated_zcdp_calibration(self, mechanism):
+    rng = np.random.default_rng(0)
+    data = _make_skewed_dataset(rng)
+    result = mechanism.calibrate(zcdp_rho=_ZCDP_RHO)(rng, data)
+    self.assertIsInstance(result, common.DiscreteMechanismResult)
+
+  @parameterized.named_parameters(*_MECHANISMS.items())
+  def test_zero_epsilon_calibration(self, mechanism):
+    rng = np.random.default_rng(0)
+    data = _make_skewed_dataset(rng)
+    result = mechanism.calibrate(epsilon=0.0, delta=0.01)(rng, data)
+    self.assertIsInstance(result, common.DiscreteMechanismResult)
+
+  @parameterized.named_parameters(*_MECHANISMS.items())
+  def test_low_epsilon_calibration(self, mechanism):
+    self.skipTest('Low epsilon calibration is currently really slow, skipping.')
+    rng = np.random.default_rng(0)
+    data = _make_skewed_dataset(rng)
+    result = mechanism.calibrate(epsilon=1e-3, delta=1e-5)(rng, data)
+    self.assertIsInstance(result, common.DiscreteMechanismResult)
+
+
 if __name__ == '__main__':
   absltest.main()

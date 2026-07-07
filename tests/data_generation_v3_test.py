@@ -38,7 +38,7 @@ class DataGenerationV3Test(parameterized.TestCase):
     }
     df = pd.DataFrame({'A': ['a', 'b', 'c'], 'B': ['x', 'y', 'z']})
     rng = np.random.default_rng(0)
-    calibrated = TabularSynthesizer(domains=domains).calibrate(zcdp_rho=100.0)
+    calibrated = TabularSynthesizer(domains=domains).configure(zcdp_rho=100.0)
     synthetic_df = calibrated(rng, df).synthetic_data
     self.assertIsInstance(synthetic_df, pd.DataFrame)
     self.assertListEqual(synthetic_df.columns.tolist(), ['A', 'B'])
@@ -50,7 +50,7 @@ class DataGenerationV3Test(parameterized.TestCase):
     }
     df = pd.DataFrame({'A': [5, 5, 0], 'B': [5, -10, -5]}, dtype=float)
     rng = np.random.default_rng(0)
-    calibrated = TabularSynthesizer(domains=domains).calibrate(zcdp_rho=100.0)
+    calibrated = TabularSynthesizer(domains=domains).configure(zcdp_rho=100.0)
     synthetic_df = calibrated(rng, df).synthetic_data
     self.assertListEqual(synthetic_df.columns.tolist(), ['A', 'B'])
     for col, attr in domains.items():
@@ -65,7 +65,7 @@ class DataGenerationV3Test(parameterized.TestCase):
     }
     df = pd.DataFrame({'A': ['a', 'b', 'c'], 'B': [1.0, 5.0, 10.0]})
     rng = np.random.default_rng(0)
-    calibrated = TabularSynthesizer(domains=domains).calibrate(
+    calibrated = TabularSynthesizer(domains=domains).configure(
         zcdp_rho=100.0, delta=1e-5
     )
     synthetic_df = calibrated(rng, df).synthetic_data
@@ -98,7 +98,7 @@ class DataGenerationV3Test(parameterized.TestCase):
     }
     v3 = TabularSynthesizer(domains=domains)
     with self.assertRaises(ValueError):
-      v3.calibrate(zcdp_rho=1.0)
+      v3.configure(zcdp_rho=1.0)
 
   def test_raises_when_not_calibrated(self):
     domains = {
@@ -118,7 +118,7 @@ class DataGenerationV3Test(parameterized.TestCase):
             possible_values=['a', 'b', 'c'], out_of_domain_index=0
         ),
     }
-    calibrated = TabularSynthesizer(domains=domains).calibrate(zcdp_rho=100.0)
+    calibrated = TabularSynthesizer(domains=domains).configure(zcdp_rho=100.0)
     self.assertIsInstance(calibrated.dp_event, dp_accounting.ComposedDpEvent)
 
   def test_calibrate_raises_on_conflicting_params(self):
@@ -158,7 +158,7 @@ class DataGenerationV3Test(parameterized.TestCase):
     }
     df = pd.DataFrame({'A': [5, 5, 0], 'B': [5, -10, -5]}, dtype=float)
     rng = np.random.default_rng(0)
-    calibrated = TabularSynthesizer(domains=domains).calibrate(zcdp_rho=100.0)
+    calibrated = TabularSynthesizer(domains=domains).configure(zcdp_rho=100.0)
 
     # total_count_mechanism should be set for numerical-only domains.
     self.assertIsNotNone(calibrated.total_count_mechanism)
@@ -175,7 +175,7 @@ class DataGenerationV3Test(parameterized.TestCase):
     }
     df = pd.DataFrame({'A': ['a', 'b', 'c'], 'B': [1.0, 5.0, 10.0]})
     rng = np.random.default_rng(0)
-    calibrated = TabularSynthesizer(domains=domains).calibrate(zcdp_rho=100.0)
+    calibrated = TabularSynthesizer(domains=domains).configure(zcdp_rho=100.0)
 
     # DPGaussianCount is always allocated.
     self.assertIsNotNone(calibrated.total_count_mechanism)
@@ -204,7 +204,7 @@ class DataGenerationV3Test(parameterized.TestCase):
         'B': ['x', 'y', 'x'],
     })
     rng = np.random.default_rng(0)
-    calibrated = TabularSynthesizer(domains=domains).calibrate(zcdp_rho=100.0)
+    calibrated = TabularSynthesizer(domains=domains).configure(zcdp_rho=100.0)
     result = calibrated(rng, df)
     self.assertIsInstance(result.synthetic_data, pd.DataFrame)
     self.assertListEqual(result.synthetic_data.columns.tolist(), ['A', 'B'])

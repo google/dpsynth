@@ -27,7 +27,7 @@ class AIMTest(absltest.TestCase):
     workload = [("a",), ("b",), ("c",)]
     config = aim.AIMMechanism(workload=workload, max_rounds=4, pgm_iters=500)
 
-    calibrated = config.calibrate(zcdp_rho=10000)
+    calibrated = config.configure(zcdp_rho=10000)
     result = calibrated(np.random.default_rng(0), data)
 
     self.assertIsInstance(result, common.DiscreteMechanismResult)
@@ -44,7 +44,7 @@ class AIMTest(absltest.TestCase):
     config = aim_gdp.AIMGDPMechanism(
         workload=workload, max_rounds=4, pgm_iters=500
     )
-    calibrated = config.calibrate(zcdp_rho=10000)
+    calibrated = config.configure(zcdp_rho=10000)
     result = calibrated(np.random.default_rng(0), data)
 
     self.assertIsInstance(result, common.DiscreteMechanismResult)

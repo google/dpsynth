@@ -35,18 +35,18 @@ import typing
 
 from absl import logging
 import dp_accounting
+from dpsynth import api
 from dpsynth.discrete_mechanisms import accounting
 from dpsynth.discrete_mechanisms import clique_tree
 from dpsynth.discrete_mechanisms import common
 from dpsynth.discrete_mechanisms import swift_utils
-from dpsynth.local_mode import primitives
 import mbi
 import networkx as nx
 import numpy as np
 
 
 @dataclasses.dataclass
-class SWIFTMechanism(primitives.DPMechanism):
+class SWIFTMechanism(api.DPMechanism):
   """Configuration for the SWIFT mechanism.
 
   Attributes:
@@ -84,7 +84,7 @@ class SWIFTMechanism(primitives.DPMechanism):
         domain, self.workload, self.max_marginal_size
     )
 
-  def calibrate(self, *, zcdp_rho: float) -> SWIFTMechanism:
+  def configure(self, *, zcdp_rho: float, delta: float = 0.0) -> SWIFTMechanism:
     """Returns a copy calibrated to the given zCDP budget."""
     return dataclasses.replace(
         self, gdp_sigma=accounting.zcdp_gaussian_sigma(zcdp_rho)

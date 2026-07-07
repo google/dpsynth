@@ -77,7 +77,7 @@ class MSTTest(absltest.TestCase):
   def test_fits_one_way_marginals(self):
     data = mbi.Dataset.synthetic(mbi.Domain(['a', 'b', 'c'], [3, 4, 5]), N=1000)
 
-    config = mst.MSTMechanism(pgm_iters=500).calibrate(zcdp_rho=10000)
+    config = mst.MSTMechanism(pgm_iters=500).configure(zcdp_rho=10000)
 
     result = config(np.random.default_rng(0), data)
 
@@ -100,7 +100,7 @@ class MSTTest(absltest.TestCase):
       _ = config.dp_event
 
   def test_dp_event_returns_zcdp(self):
-    config = mst.MSTMechanism().calibrate(zcdp_rho=1.0)
+    config = mst.MSTMechanism().configure(zcdp_rho=1.0)
     event = config.dp_event
     self.assertIsInstance(event, dp_accounting.ZCDpEvent)
 

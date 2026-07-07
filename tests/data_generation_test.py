@@ -328,9 +328,9 @@ class DataGenerationTest(parameterized.TestCase):
     clique = (0,)
     factor = mbi.Factor(domain=domain_mrf, values=jnp.array([1.0, 1.0, 1.0]))
     clique_vector = mbi.CliqueVector(
-        domain=domain_mrf,
-        cliques=[clique],
-        arrays={clique: factor},
+        domain_mrf,
+        [clique],
+        {clique: factor},
     )
     model = mbi.MarkovRandomField(
         potentials=clique_vector, marginals=clique_vector, total=10.0
@@ -381,9 +381,9 @@ class DataGenerationTest(parameterized.TestCase):
     clique = (0,)
     factor = mbi.Factor(domain=domain_mrf, values=jnp.array([1.0, 1.0, 1.0]))
     clique_vector = mbi.CliqueVector(
-        domain=domain_mrf,
-        cliques=[clique],
-        arrays={clique: factor},
+        domain_mrf,
+        [clique],
+        {clique: factor},
     )
     model = mbi.MarkovRandomField(
         potentials=clique_vector, marginals=clique_vector, total=10.0

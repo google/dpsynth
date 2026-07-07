@@ -20,15 +20,16 @@ operations for efficiency in single-machine environments.
 
 from __future__ import annotations
 
-import abc
 import dataclasses
 import math
-from typing import Any
 
 import dp_accounting
+from dpsynth import api
 from dpsynth.local_mode import _quantiles
 import numpy as np
 import scipy.stats
+
+DPMechanism = api.DPMechanism
 
 
 @dataclasses.dataclass
@@ -44,72 +45,6 @@ class PartitionSelectionResult:
 
   selected_partitions: np.ndarray
   estimated_counts: np.ndarray
-
-
-class DPMechanism(abc.ABC):
-  """Abstract base class for differentially private mechanisms.
-
-  A DPMechanism encapsulates a randomized algorithm that satisfies differential
-  privacy. Usage follows a three-phase pattern:
-
-  1. **Configure**: Create the mechanism with algorithm-specific parameters by
-     calling the mechanism's class constructor.
-  2. **Calibrate**: Call ``calibrate(zcdp_rho=...)`` to bind a privacy budget,
-     returning a new mechanism instance whose natural privacy parameter (e.g.,
-     Gaussian sigma, exponential mechanism epsilon) has been set accordingly.
-  3. **Run**: Call the calibrated mechanism on data via ``__call__``.
-
-  Subclasses should be parameterized by their **natural** privacy parameter
-  (e.g., ``sigma`` for the Gaussian mechanism, ``epsilon`` for the exponential
-  mechanism). The ``calibrate`` method converts from the universal zCDP budget
-  to the mechanism's natural parameter.
-
-  **Why zCDP for calibration.** Calibrating to zCDP rho makes it easy to split
-  a privacy budget across a heterogeneous composition of mechanisms: simply
-  divide rho in any ratio and each share is a valid zCDP guarantee.
-
-  **Tight accounting via DpEvents.** For tight privacy accounting, do not rely
-  on the zCDP guarantee directly. Instead, use the ``dp_event`` property, which
-  precisely characterizes the exact DP properties of the underlying mechanism.
-  Compose the raw ``DpEvent`` objects using ``dp_accounting`` for tight
-  PLD-based accounting.
-
-  **Typical pattern.** Calibrate early mechanisms to zCDP fractions of the
-  total budget. For the last mechanism, perform a tight PLD-based calibration
-  of its privacy parameters to target whatever overall privacy guarantee is
-  desired (which may or may not be zCDP).
-  """
-
-  @abc.abstractmethod
-  def calibrate(self, *, zcdp_rho: float) -> DPMechanism:
-    """Returns a new mechanism calibrated to the given zCDP budget.
-
-    Converts the zCDP budget ``rho`` into the mechanism's natural privacy
-    parameter and returns a new instance with that parameter set.
-
-    Args:
-      zcdp_rho: The zCDP privacy budget (rho).
-
-    Returns:
-      A new DPMechanism instance calibrated to the given budget.
-    """
-
-  @property
-  @abc.abstractmethod
-  def dp_event(self) -> dp_accounting.DpEvent:
-    """The DpEvent characterizing the privacy cost of this mechanism."""
-
-  @abc.abstractmethod
-  def __call__(self, *args: Any, **kwargs: Any) -> Any:
-    """Runs the mechanism on the given data.
-
-    Subclass signatures vary, but typically accept at least the data to operate
-    on and a source of randomness.
-
-    Args:
-      *args: Positional arguments (subclass-specific).
-      **kwargs: Keyword arguments (subclass-specific).
-    """
 
 
 _UNCALIBRATED_MSG = (
@@ -364,13 +299,14 @@ class DPQuantiles(DPMechanism):
       raise ValueError(_UNCALIBRATED_MSG.format(param='_epsilon_levels'))
     return sum(e**2 / 8.0 for e in self._epsilon_levels)
 
-  def calibrate(
-      self, *, zcdp_rho: float, epsilon_ratio: float = 2.0
+  def configure(
+      self, *, zcdp_rho: float, delta: float = 0.0, epsilon_ratio: float = 2.0
   ) -> DPQuantiles:
     """Returns a copy calibrated to the given zCDP budget.
 
     Args:
       zcdp_rho: The zCDP privacy budget (rho).
+      delta: Unused. Accepted for interface compatibility.
       epsilon_ratio: Factor by which epsilon grows at each deeper level.
     """
     if zcdp_rho <= 0:
@@ -419,13 +355,15 @@ class DPGaussianHistogram(DPMechanism):
 
   Attributes:
     domain_size: Number of categories in the histogram domain.
-    sigma: Gaussian noise standard deviation. Set directly or via ``calibrate``.
+    sigma: Gaussian noise standard deviation. Set directly or via ``configure``.
   """
 
   domain_size: int
   sigma: float | None = None
 
-  def calibrate(self, *, zcdp_rho: float) -> DPGaussianHistogram:
+  def configure(
+      self, *, zcdp_rho: float, delta: float = 0.0
+  ) -> DPGaussianHistogram:
     """Returns a copy with sigma derived from the zCDP budget."""
     return dataclasses.replace(self, sigma=math.sqrt(0.5 / zcdp_rho))
 
@@ -452,7 +390,9 @@ class DPGaussianCount(DPMechanism):
 
   sigma: float | None = None
 
-  def calibrate(self, *, zcdp_rho: float) -> DPGaussianCount:
+  def configure(
+      self, *, zcdp_rho: float, delta: float = 0.0
+  ) -> DPGaussianCount:
     """Returns a copy with sigma derived from the zCDP budget."""
     return dataclasses.replace(self, sigma=math.sqrt(0.5 / zcdp_rho))
 
@@ -481,14 +421,16 @@ class DPPartitionSelection(DPMechanism):
   Attributes:
     delta: Failure probability for the thresholding step.
     min_count: Minimum true count for a partition to be returned.
-    sigma: Gaussian noise standard deviation. Set directly or via ``calibrate``.
+    sigma: Gaussian noise standard deviation. Set directly or via ``configure``.
   """
 
   delta: float
   min_count: int = 1
   sigma: float | None = None
 
-  def calibrate(self, *, zcdp_rho: float) -> DPPartitionSelection:
+  def configure(
+      self, *, zcdp_rho: float, delta: float = 0.0
+  ) -> DPPartitionSelection:
     """Returns a copy with sigma derived from the zCDP budget."""
     return dataclasses.replace(self, sigma=math.sqrt(0.5 / zcdp_rho))
 

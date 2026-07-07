@@ -28,7 +28,7 @@ class InitializationTest(absltest.TestCase):
     initializer = initialization.NumericalInitializer(
         name='test', num_partitions=4, attribute=attr
     )
-    event = initializer.calibrate(zcdp_rho=1.0).dp_event
+    event = initializer.configure(zcdp_rho=1.0).dp_event
     self.assertIsInstance(event, dp_accounting.ComposedDpEvent)
     self.assertLen(event.events, 2)
     for e in event.events:
@@ -42,7 +42,7 @@ class InitializationTest(absltest.TestCase):
     )
 
     data = np.array([1, 2, 3, 4, 5, 6, 7, 8, 9])
-    measurement = initializer.calibrate(zcdp_rho=np.inf)(rng, data)
+    measurement = initializer.configure(zcdp_rho=np.inf)(rng, data)
 
     self.assertIsInstance(measurement, initialization.ColumnMeasurement)
     self.assertEqual(measurement.categorical_attribute.size, 4)
@@ -66,7 +66,7 @@ class InitializationTest(absltest.TestCase):
     )
     # Data is heavily concentrated at 50.
     data = np.array([50] * 100 + [1, 99])
-    result = initializer.calibrate(zcdp_rho=1.0)(rng, data)
+    result = initializer.configure(zcdp_rho=1.0)(rng, data)
 
     # After dedup, bin_edges should be strictly increasing.
     edges = result.bin_edges
@@ -87,7 +87,7 @@ class InitializationTest(absltest.TestCase):
     )
     # Only 3 distinct values but 8 partitions requested.
     data = np.array([3, 3, 3, 3, 5, 5, 5, 7])
-    result = initializer.calibrate(zcdp_rho=1.0)(rng, data)
+    result = initializer.configure(zcdp_rho=1.0)(rng, data)
 
     edges = result.bin_edges
     self.assertTrue(
@@ -105,7 +105,7 @@ class InitializationTest(absltest.TestCase):
         name='test', num_partitions=4, attribute=attr
     )
     data = np.arange(100)
-    result = initializer.calibrate(zcdp_rho=100.0)(rng, data)
+    result = initializer.configure(zcdp_rho=100.0)(rng, data)
     # All edges should be integers (floor was applied).
     np.testing.assert_array_equal(result.bin_edges, np.floor(result.bin_edges))
     # Edges must be within [min_value, max_value - 1].
@@ -121,7 +121,7 @@ class InitializationTest(absltest.TestCase):
     )
     # Concentrated data will cause edge collisions after floor.
     data = np.array([50] * 100 + [1, 99])
-    result = initializer.calibrate(zcdp_rho=1.0)(
+    result = initializer.configure(zcdp_rho=1.0)(
         rng, data, estimated_total=100.0
     )
     self.assertIsNotNone(result.measurement)
@@ -137,7 +137,7 @@ class InitializationTest(absltest.TestCase):
         name='num_col', num_partitions=4, attribute=attr
     )
     data = np.array([1, 2, 3, 4, 5, 6, 7, 8, 9])
-    result = initializer.calibrate(zcdp_rho=1.0)(
+    result = initializer.configure(zcdp_rho=1.0)(
         rng, data, estimated_total=100.0
     )
 
@@ -160,7 +160,7 @@ class InitializationTest(absltest.TestCase):
         name='test', num_partitions=4, attribute=attr
     )
     data = np.array([1, 2, 3, 4, 5, 6, 7, 8, 9])
-    result = initializer.calibrate(zcdp_rho=1.0)(rng, data)
+    result = initializer.configure(zcdp_rho=1.0)(rng, data)
     self.assertIsNone(result.measurement)
 
   def test_integer_edges_at_max_value_absorbed_into_last_bin(self):
@@ -172,7 +172,7 @@ class InitializationTest(absltest.TestCase):
     )
     # All data at max_value: all edges should land at or near max_value.
     data = np.array([10] * 100)
-    result = initializer.calibrate(zcdp_rho=100.0)(
+    result = initializer.configure(zcdp_rho=100.0)(
         rng, data, estimated_total=100.0
     )
     # No edge should equal max_value (they get absorbed).
@@ -196,7 +196,7 @@ class InitializationTest(absltest.TestCase):
           name='test', num_partitions=8, attribute=attr
       )
       data = np.array([5] * 50 + [15] * 50)
-      result = initializer.calibrate(zcdp_rho=1.0)(
+      result = initializer.configure(zcdp_rho=1.0)(
           rng, data, estimated_total=100.0
       )
       # Sum of measurement probabilities = 1.0.
@@ -216,7 +216,7 @@ class InitializationTest(absltest.TestCase):
     )
     # Uniform data: with high budget, edges should land at 25, 50, 75.
     data = np.arange(101)
-    result = initializer.calibrate(zcdp_rho=1000.0)(rng, data)
+    result = initializer.configure(zcdp_rho=1000.0)(rng, data)
     # With 4 partitions and 3 edges, no dedup should be needed.
     self.assertLen(result.bin_edges, 3)
     # All edges should be integers.
@@ -231,7 +231,7 @@ class InitializationTest(absltest.TestCase):
     )
     # Deliberately lumpy distribution: 45 points across 4 distinct values.
     data = np.array([0] * 10 + [3] * 10 + [5] * 17 + [6] * 8)
-    result = initializer.calibrate(zcdp_rho=np.inf)(
+    result = initializer.configure(zcdp_rho=np.inf)(
         rng, data, estimated_total=len(data)
     )
     # Edges should be integers strictly inside [min_value, max_value).
@@ -357,7 +357,7 @@ class MeasurementApproximationTest(parameterized.TestCase):
     initializer = initialization.NumericalInitializer(
         name='x', num_partitions=num_partitions, attribute=attr
     )
-    result = initializer.calibrate(zcdp_rho=rho)(
+    result = initializer.configure(zcdp_rho=rho)(
         rng, data, estimated_total=len(data)
     )
     # -- Structural checks (must always hold) --
@@ -427,7 +427,7 @@ class MeasurementApproximationTest(parameterized.TestCase):
         initializer = initialization.NumericalInitializer(
             name='x', num_partitions=num_partitions, attribute=attr
         )
-        result = initializer.calibrate(zcdp_rho=rho)(
+        result = initializer.configure(zcdp_rho=rho)(
             rng, data, estimated_total=len(data)
         )
 
@@ -472,7 +472,7 @@ class CategoricalInitializerTest(absltest.TestCase):
     initializer = initialization.CategoricalInitializer(
         name='test', attribute=attr
     )
-    event = initializer.calibrate(zcdp_rho=0.5).dp_event
+    event = initializer.configure(zcdp_rho=0.5).dp_event
     self.assertIsInstance(event, dp_accounting.GaussianDpEvent)
     # rho = 0.5 => sigma = 1/sqrt(2*0.5) = 1.0
     self.assertEqual(event.noise_multiplier, 1.0)
@@ -484,7 +484,7 @@ class CategoricalInitializerTest(absltest.TestCase):
         name='col', attribute=attr
     )
     data = np.array(['A', 'A', 'B', 'C', 'C', 'C'])
-    result = initializer.calibrate(zcdp_rho=np.inf)(rng, data)
+    result = initializer.configure(zcdp_rho=np.inf)(rng, data)
 
     self.assertIsInstance(result, initialization.ColumnMeasurement)
     self.assertEqual(result.categorical_attribute, attr)
@@ -504,7 +504,7 @@ class CategoricalInitializerTest(absltest.TestCase):
         name='col', attribute=attr
     )
     data = np.array(['X', 'Y', 'Z', 'W'])
-    result = initializer.calibrate(zcdp_rho=np.inf)(rng, data)
+    result = initializer.configure(zcdp_rho=np.inf)(rng, data)
 
     # 'Z' and 'W' are OOD, mapped to index 0 (None).
     np.testing.assert_array_equal(
@@ -519,7 +519,7 @@ class OpenSetCategoricalInitializerTest(absltest.TestCase):
     initializer = initialization.OpenSetCategoricalInitializer(
         name='test', attribute=attr, delta=1e-5
     )
-    event = initializer.calibrate(zcdp_rho=0.5).dp_event
+    event = initializer.configure(zcdp_rho=0.5).dp_event
     self.assertIsInstance(event, dp_accounting.ComposedDpEvent)
     self.assertLen(event.events, 2)
     self.assertIsInstance(event.events[0], dp_accounting.GaussianDpEvent)
@@ -536,7 +536,7 @@ class OpenSetCategoricalInitializerTest(absltest.TestCase):
     )
     # 'A' appears 100 times, 'B' 50, 'C' 1 (rare).
     data = np.array(['A'] * 100 + ['B'] * 50 + ['C'] * 1)
-    result = initializer.calibrate(zcdp_rho=np.inf)(rng, data)
+    result = initializer.configure(zcdp_rho=np.inf)(rng, data)
 
     self.assertIsInstance(result, initialization.ColumnMeasurement)
     self.assertIsNotNone(result.measurement)
@@ -556,7 +556,7 @@ class OpenSetCategoricalInitializerTest(absltest.TestCase):
         name='col', attribute=attr, delta=1e-5
     )
     data = np.array(['A'] * 100 + ['B'] * 50)
-    result = initializer.calibrate(zcdp_rho=np.inf)(rng, data)
+    result = initializer.configure(zcdp_rho=np.inf)(rng, data)
 
     cat_attr = result.categorical_attribute
     # Discovered values map to valid indices.
@@ -574,7 +574,7 @@ class OpenSetCategoricalInitializerTest(absltest.TestCase):
         name='col', attribute=attr, delta=1e-5
     )
     data = np.array([], dtype=str)
-    result = initializer.calibrate(zcdp_rho=np.inf)(rng, data)
+    result = initializer.configure(zcdp_rho=np.inf)(rng, data)
 
     # Only the default value should be in the domain.
     self.assertEqual(result.categorical_attribute.possible_values, [None])
@@ -591,7 +591,7 @@ class NumericalInitializerFromSummaryTest(absltest.TestCase):
         num_partitions=4,
         grid_size=10001,
         attribute=attr,
-    ).calibrate(zcdp_rho=1.0)
+    ).configure(zcdp_rho=1.0)
     event = init.dp_event
     self.assertIsInstance(event, dp_accounting.ComposedDpEvent)
     # 4 partitions = 2 levels.
@@ -617,7 +617,7 @@ class NumericalInitializerFromSummaryTest(absltest.TestCase):
         num_partitions=4,
         attribute=attr,
         grid_size=grid_size,
-    ).calibrate(zcdp_rho=1.0)
+    ).configure(zcdp_rho=1.0)
     cm = init.from_summary(rng, counts)
     for edge in cm.bin_edges:
       self.assertEqual(edge, int(edge))
@@ -632,7 +632,7 @@ class NumericalInitializerFromSummaryTest(absltest.TestCase):
         num_partitions=4,
         attribute=attr,
         grid_size=grid_size,
-    ).calibrate(zcdp_rho=1.0)
+    ).configure(zcdp_rho=1.0)
 
     data = np.linspace(0.0, 100.0, 500)
     cm_call = init(rng, data, estimated_total=500.0)

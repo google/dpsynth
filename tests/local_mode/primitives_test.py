@@ -260,7 +260,7 @@ class DPGaussianHistogramTest(absltest.TestCase):
 
   def test_calibrate_and_call(self):
     mech = primitives.DPGaussianHistogram(domain_size=4)
-    calibrated = mech.calibrate(zcdp_rho=0.5)
+    calibrated = mech.configure(zcdp_rho=0.5)
     counts = np.array([2, 3, 1, 0])
     result = calibrated(self.rng, counts)
     self.assertLen(result.counts, 4)
@@ -282,7 +282,7 @@ class DPGaussianHistogramTest(absltest.TestCase):
       mech(self.rng, np.array([0, 0, 1, 0]))
 
   def test_dp_event_type(self):
-    mech = primitives.DPGaussianHistogram(domain_size=4).calibrate(zcdp_rho=0.5)
+    mech = primitives.DPGaussianHistogram(domain_size=4).configure(zcdp_rho=0.5)
     event = mech.dp_event
     self.assertIsInstance(event, dp_accounting.GaussianDpEvent)
     self.assertAlmostEqual(event.noise_multiplier, 1.0)
@@ -296,7 +296,7 @@ class DPGaussianCountTest(absltest.TestCase):
 
   def test_calibrate_and_call(self):
     mech = primitives.DPGaussianCount()
-    calibrated = mech.calibrate(zcdp_rho=0.5)
+    calibrated = mech.configure(zcdp_rho=0.5)
     data = np.array([1, 2, 3, 4, 5])
     result = calibrated(self.rng, data)
     self.assertIsInstance(result, float)
@@ -313,7 +313,7 @@ class DPGaussianCountTest(absltest.TestCase):
       _ = mech.dp_event
 
   def test_dp_event_type(self):
-    mech = primitives.DPGaussianCount().calibrate(zcdp_rho=0.5)
+    mech = primitives.DPGaussianCount().configure(zcdp_rho=0.5)
     event = mech.dp_event
     self.assertIsInstance(event, dp_accounting.GaussianDpEvent)
     self.assertAlmostEqual(event.noise_multiplier, 1.0)

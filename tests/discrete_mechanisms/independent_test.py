@@ -25,7 +25,7 @@ class IndependentTest(absltest.TestCase):
     data = mbi.Dataset.synthetic(mbi.Domain(['a', 'b', 'c'], [3, 4, 5]), N=1000)
 
     config = independent.IndependentMechanism(pgm_iters=500)
-    result = config.calibrate(zcdp_rho=10000)(np.random.default_rng(0), data)
+    result = config.configure(zcdp_rho=10000)(np.random.default_rng(0), data)
 
     self.assertIsInstance(result, common.DiscreteMechanismResult)
     self.assertLen(result.measurements, len(data.domain))
@@ -43,7 +43,7 @@ class IndependentTest(absltest.TestCase):
 
     config = independent.IndependentMechanism(pgm_iters=500)
     # This should not raise 'Cliques must be unique'.
-    model = config.calibrate(zcdp_rho=100.0)(
+    model = config.configure(zcdp_rho=100.0)(
         np.random.default_rng(0), data, initial_measurements=initial
     )
     self.assertIsNotNone(model)

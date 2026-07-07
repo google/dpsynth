@@ -146,9 +146,9 @@ class InputOutputTest(absltest.TestCase):
     clique = (0,)
     factor = mbi.Factor(domain=domain_mrf, values=np.array([1, 2]))
     clique_vector = mbi.CliqueVector(
-        domain=domain_mrf,
-        cliques=[clique],
-        arrays={clique: factor},
+        domain_mrf,
+        [clique],
+        {clique: factor},
     )
     model = mbi.MarkovRandomField(
         potentials=clique_vector, marginals=clique_vector, total=10
@@ -179,9 +179,9 @@ class InputOutputTest(absltest.TestCase):
     clique = (0,)
     factor = mbi.Factor(domain=domain_mrf, values=np.array([1, 2]))
     clique_vector = mbi.CliqueVector(
-        domain=domain_mrf,
-        cliques=[clique],
-        arrays={clique: factor},
+        domain_mrf,
+        [clique],
+        {clique: factor},
     )
     model = mbi.MarkovRandomField(
         potentials=clique_vector, marginals=clique_vector, total=10

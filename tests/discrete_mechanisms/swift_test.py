@@ -123,7 +123,7 @@ class SWIFTTest(absltest.TestCase):
   def test_fits_one_way_marginals(self):
     data = mbi.Dataset.synthetic(mbi.Domain(['a', 'b', 'c'], [3, 4, 5]), N=1000)
 
-    config = swift.SWIFTMechanism(pgm_iters=500).calibrate(zcdp_rho=10000)
+    config = swift.SWIFTMechanism(pgm_iters=500).configure(zcdp_rho=10000)
 
     result = config(np.random.default_rng(0), data)
 
@@ -146,7 +146,7 @@ class SWIFTTest(absltest.TestCase):
       _ = config.dp_event
 
   def test_dp_event_returns_gaussian(self):
-    config = swift.SWIFTMechanism().calibrate(zcdp_rho=1.0)
+    config = swift.SWIFTMechanism().configure(zcdp_rho=1.0)
     event = config.dp_event
     self.assertIsInstance(event, dp_accounting.GaussianDpEvent)
 

@@ -20,9 +20,9 @@ import typing
 
 from absl import logging
 import dp_accounting
+from dpsynth import api
 from dpsynth.discrete_mechanisms import accounting
 from dpsynth.discrete_mechanisms import common
-from dpsynth.local_mode import primitives
 import jax.numpy as jnp
 import mbi
 import mbi.junction_tree
@@ -124,7 +124,7 @@ def _worst_approximated(
 
 
 @dataclasses.dataclass
-class AIMGDPMechanism(primitives.DPMechanism):
+class AIMGDPMechanism(api.DPMechanism):
   """Configuration for the AIM mechanism with Gaussian DP.
 
   Details are described in the paper:
@@ -186,7 +186,9 @@ class AIMGDPMechanism(primitives.DPMechanism):
         domain, self.workload, self.max_marginal_size
     )
 
-  def calibrate(self, *, zcdp_rho: float) -> 'AIMGDPMechanism':
+  def configure(
+      self, *, zcdp_rho: float, delta: float = 0.0
+  ) -> 'AIMGDPMechanism':
     """Returns a new instance calibrated to the given zCDP budget."""
     return dataclasses.replace(
         self, gdp_sigma=accounting.zcdp_gaussian_sigma(zcdp_rho)
