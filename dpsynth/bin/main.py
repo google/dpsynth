@@ -109,7 +109,7 @@ def main(_):
       domains=attribute_domains,
       discrete_mechanism=mechanism_config,
   ).calibrate(epsilon=_EPSILON.value, delta=_DELTA.value)
-  result = mechanism(np.random.default_rng(_SEED.value), df)
+  result = mechanism(np.random.default_rng(_SEED.value), df)  # pyrefly: ignore[bad-argument-type]
   result.synthetic_data.to_csv(_OUTPUT_PATH.value, index=False)
 
 

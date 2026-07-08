@@ -171,7 +171,7 @@ def compute_one_way_dp_marginals(
     for value, count, stddev in value_count_pairs:
       result[value] = count
       count_noise_stddev = stddev
-    return mbi.LinearMeasurement(result, (column_index,), count_noise_stddev)
+    return mbi.LinearMeasurement(result, (column_index,), count_noise_stddev)  # pyrefly: ignore[bad-argument-type]
 
   linear_measurements = backend.map_with_side_inputs(
       marginals,
@@ -294,7 +294,7 @@ def compute_errors(
     marginals = [one_way_dp_marginals[a].noisy_measurement for a in clique]
 
     # Compute outer product of all marginals
-    marginal_of_independent = functools.reduce(np.multiply.outer, marginals)
+    marginal_of_independent = functools.reduce(np.multiply.outer, marginals)  # pyrefly: ignore[incompatible-overload-residual]
     # Scale back
     marginal_of_independent = marginal_of_independent / (
         estimated_dataset_size ** (len(clique) - 1)

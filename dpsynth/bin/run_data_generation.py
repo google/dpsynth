@@ -269,11 +269,11 @@ def main_local(config: data_generation.DataGenerationConfig):
         _MODEL_SAVE_PATH.value, list(model_collection)[0], list(descriptor)[0]
     )
   input_output.save_data_local(
-      _OUTPUT_PATH.value, synthetic_data, config.output_format, attributes
+      _OUTPUT_PATH.value, synthetic_data, config.output_format, attributes  # pyrefly: ignore[bad-argument-type]
   )
 
   if _DIAGNOSTIC_INFORMATION_PATH.value:
-    diagnostic_info = list(additional_output.diagnostic_info)[0]
+    diagnostic_info = list(additional_output.diagnostic_info)[0]  # pyrefly: ignore[bad-argument-type]
     input_output.save_diagnostic_info_local(
         _DIAGNOSTIC_INFORMATION_PATH.value, diagnostic_info
     )

@@ -29,7 +29,7 @@ R, T, S = TypeVar('R'), TypeVar('T'), TypeVar('S')
 
 
 @attr.define(frozen=True)
-class DataTransformation(Generic[R, T]):
+class DataTransformation(Generic[R, T]):  # pyrefly: ignore[not-a-type]
   """Dataclass for transforming data from one domain to another.
 
   DataTransformations are both reversible (via inverse) and composable (via @).
@@ -48,22 +48,22 @@ class DataTransformation(Generic[R, T]):
   1
   """
 
-  transform: Callable[[R], T] | Mapping[R, T] = attr.field()
-  inverse_transform: Callable[[T], R] | Mapping[T, R] = attr.field()
+  transform: Callable[[R], T] | Mapping[R, T] = attr.field()  # pyrefly: ignore[not-a-type]
+  inverse_transform: Callable[[T], R] | Mapping[T, R] = attr.field()  # pyrefly: ignore[not-a-type]
 
-  def __call__(self, value: R) -> T:
+  def __call__(self, value: R) -> T:  # pyrefly: ignore[not-a-type]
     if isinstance(self.transform, Mapping):
       return self.transform[value]
     return self.transform(value)
 
   @property
-  def inverse(self) -> 'DataTransformation[T, R]':
+  def inverse(self) -> 'DataTransformation[T, R]':  # pyrefly: ignore[not-a-type]
     """The reverse transformation of this instance."""
-    return DataTransformation(self.inverse_transform, self.transform)
+    return DataTransformation(self.inverse_transform, self.transform)  # pyrefly: ignore[bad-argument-count]
 
   def __matmul__(
-      self, other: 'DataTransformation[T, S]'
-  ) -> 'DataTransformation[R, S]':
+      self, other: 'DataTransformation[T, S]'  # pyrefly: ignore[not-a-type]
+  ) -> 'DataTransformation[R, S]':  # pyrefly: ignore[not-a-type]
     """Returns a DataTransformation that composes this instance with other.
 
     Example Usage:
@@ -82,7 +82,7 @@ class DataTransformation(Generic[R, T]):
       A DataTransformation that composes this instance with other.
     """
     return DataTransformation(
-        lambda x: self(other(x)),
+        lambda x: self(other(x)),  # pyrefly: ignore[bad-argument-count]
         lambda x: other.inverse(self.inverse(x)),
     )
 
@@ -124,7 +124,7 @@ def discrete_encoder(
       {value: i for i, value in enumerate(attribute_domain.possible_values)},
   )
   reverse = dict(enumerate(attribute_domain.possible_values))
-  return DataTransformation(transform, reverse)
+  return DataTransformation(transform, reverse)  # pyrefly: ignore[bad-argument-count]
 
 
 def create_discretize_transformation(
@@ -209,8 +209,8 @@ def create_discretize_transformation(
       return math.ceil(result)
     return result
 
-  new_domain = domain.CategoricalAttribute(possible_values)
-  transformation = DiscretizeTransformation(transform, reverse)
+  new_domain = domain.CategoricalAttribute(possible_values)  # pyrefly: ignore[bad-argument-count]
+  transformation = DiscretizeTransformation(transform, reverse)  # pyrefly: ignore[bad-argument-count]
   return new_domain, transformation
 
 
@@ -307,7 +307,7 @@ def create_rare_value_merging_transformation(
       return np.random.choice(rare_values)
     return inv_mapping[value]
 
-  return size, DataTransformation(mapping, reverse)
+  return size, DataTransformation(mapping, reverse)  # pyrefly: ignore[bad-argument-count]
 
 
 def apply(

@@ -31,12 +31,12 @@ _M = TypeVar('_M')
 
 def _numerical_datavector(f: mbi.Factor) -> np.ndarray:
   """Returns the L1-normalized datavector (sums to 1)."""
-  return f.normalize(1.0).datavector()
+  return f.normalize(1.0).datavector()  # pyrefly: ignore[bad-return]
 
 
 def _openset_datavector(x: mbi.Factor) -> np.ndarray:
   """Returns the datavector with the unmeasured default slot (index 0) removed."""
-  return x.datavector()[1:]
+  return x.datavector()[1:]  # pyrefly: ignore[bad-return]
 
 
 @dataclasses.dataclass
@@ -209,7 +209,7 @@ def edges_to_column_measurement(
         normalized,
         (name,),
         stddev=stddev,
-        query=_numerical_datavector,
+        query=_numerical_datavector,  # pyrefly: ignore[bad-argument-type]
     )
 
   return ColumnMeasurement(cat_attr, bin_edges, measurement=measurement)
@@ -262,7 +262,7 @@ class CategoricalInitializer(primitives.DPMechanism):
     mechanism = _validate_mechanism(self.mechanism)
     result = mechanism(rng, counts)
     measurement = mbi.LinearMeasurement(
-        result.counts, (self.name,), stddev=mechanism.sigma
+        result.counts, (self.name,), stddev=mechanism.sigma  # pyrefly: ignore[bad-argument-type]
     )
     return ColumnMeasurement(self.attribute, measurement=measurement)
 
@@ -329,16 +329,16 @@ class OpenSetCategoricalInitializer(primitives.DPMechanism):
     # Build the discovered domain: default first, then selected values.
     possible_values = [self.attribute.default_value] + selected_values
     cat_attr = domain.CategoricalAttribute(
-        possible_values=possible_values,
-        out_of_domain_index=0,
+        possible_values=possible_values,  # pyrefly: ignore[unexpected-keyword]
+        out_of_domain_index=0,  # pyrefly: ignore[unexpected-keyword]
     )
 
     # The measurement covers only the discovered partitions (indices 1:),
     # not the unmeasured default at index 0.
     measurement = mbi.LinearMeasurement(
-        result.estimated_counts,
+        result.estimated_counts,  # pyrefly: ignore[bad-argument-type]
         (self.name,),
-        stddev=mechanism.sigma,
-        query=_openset_datavector,
+        stddev=mechanism.sigma,  # pyrefly: ignore[bad-argument-type]
+        query=_openset_datavector,  # pyrefly: ignore[bad-argument-type]
     )
     return ColumnMeasurement(cat_attr, measurement=measurement)

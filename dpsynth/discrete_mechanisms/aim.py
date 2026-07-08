@@ -188,7 +188,7 @@ class AIMMechanism(api.DPMechanism):
       measurements = common.measure_marginals_with_noise(
           rng,
           data,
-          marginal_queries=marginal_queries,
+          marginal_queries=marginal_queries,  # pyrefly: ignore[bad-argument-type]
           gdp_sigma=accounting.zcdp_gaussian_sigma(
               zcdp_rho * self.one_way_budget_fraction
           ),
@@ -238,7 +238,7 @@ class AIMMechanism(api.DPMechanism):
         small_candidates = _filter_candidates(candidates, model, size_limit)
 
         estimates = mbi.marginal_oracles.bulk_variable_elimination(
-            model.potentials, list(small_candidates), total=model.total
+            model.potentials, list(small_candidates), total=model.total  # pyrefly: ignore[bad-argument-type]
         )
         marginal_query = _worst_approximated(
             rng,

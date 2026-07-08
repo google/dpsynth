@@ -163,7 +163,7 @@ class SWIFTMechanism(api.DPMechanism):
     logging.info('[SWIFT] %d candidates.', len(candidates))
 
     with common.timed(phase_times, 'from_projectable'):
-      answers = mbi.CliqueVector.from_projectable(data, candidates)
+      answers = mbi.CliqueVector.from_projectable(data, candidates)  # pyrefly: ignore[bad-argument-type]
     domain = data.domain
 
     with common.timed(phase_times, 'initial_mirror_descent'):
@@ -183,7 +183,7 @@ class SWIFTMechanism(api.DPMechanism):
 
       with common.timed(phase_times, 'compute_initial_errors'):
         errors = _compute_initial_errors(
-            rng, answers, model, list(candidates), l1_error_budget
+            rng, answers, model, list(candidates), l1_error_budget  # pyrefly: ignore[bad-argument-type]
         )
 
       with common.timed(phase_times, 'select_queries'):
@@ -219,7 +219,7 @@ class SWIFTMechanism(api.DPMechanism):
     with common.timed(phase_times, 'measurement'):
       logging.info('[SWIFT] Starting measurements.')
       new_measurements, _ = _measure_selected_marginals(
-          rng, answers, selected, budget_remaining
+          rng, answers, selected, budget_remaining  # pyrefly: ignore[bad-argument-type]
       )
       measurements.extend(new_measurements)
       logging.info('[SWIFT] Finished measurements.')

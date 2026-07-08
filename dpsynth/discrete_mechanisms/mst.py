@@ -85,7 +85,7 @@ def dp_maximum_spanning_tree(
   candidates = list(weights.keys())
   r = len(list(nx.connected_components(tree)))
   if exponential_mechanism_epsilon is None:
-    exponential_mechanism_epsilon = np.sqrt(8 * zcdp_rho / (r - 1))
+    exponential_mechanism_epsilon = np.sqrt(8 * zcdp_rho / (r - 1))  # pyrefly: ignore[unsupported-operation]
   for _ in range(r - 1):
     candidates = [e for e in candidates if not ds.connected(*e)]
     wgts = np.array([weights[e] for e in candidates])
@@ -141,11 +141,11 @@ def _select_two_way_marginal_queries(
       data, independent_model, candidates
   )
 
-  return dp_maximum_spanning_tree(
+  return dp_maximum_spanning_tree(  # pyrefly: ignore[bad-return]
       rng,
-      weights,
+      weights,  # pyrefly: ignore[bad-argument-type]
       zcdp_rho=zcdp_rho,
-      initial_marginal_queries=initial_marginal_queries,
+      initial_marginal_queries=initial_marginal_queries,  # pyrefly: ignore[bad-argument-type]
   )
 
 

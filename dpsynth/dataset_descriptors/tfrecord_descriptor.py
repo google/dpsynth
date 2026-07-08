@@ -118,7 +118,7 @@ def read_tfrecords_sample(
     path: str, sample_size: int = 1000
 ) -> list[tf.train.Example]:
   """Reads a sample of TFRecords from a file."""
-  dataset = tf.data.TFRecordDataset(glob_func(path))
+  dataset = tf.data.TFRecordDataset(glob_func(path))  # pyrefly: ignore[bad-instantiation]
   return [
       tf.train.Example.FromString(record.numpy())
       for record in dataset.take(sample_size)
@@ -155,7 +155,7 @@ def get_dataset_descriptor_for_tfrecord(
 
   attributes_dict = dict()
   attributes = (
-      None if attributes is None else set(attributes)
+      None if attributes is None else set(attributes)  # pyrefly: ignore[bad-assignment]
   )  # for faster lookup
 
   for feature in sample_records[0].features.feature:

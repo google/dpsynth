@@ -74,7 +74,7 @@ def infer_categorical_domain(
 
   return {
       col: domain.CategoricalAttribute(
-          possible_values=list(possible_values[col]),
+          possible_values=list(possible_values[col]),  # pyrefly: ignore[unexpected-keyword]
       )
       for col in possible_values.keys()
   }
@@ -128,7 +128,7 @@ def encode_marginals(
       marginal[*indices] = counts
 
     marginal = mbi.Factor(
-        domain=mbi_domain.project(attributes), values=marginal
+        domain=mbi_domain.project(attributes), values=marginal  # pyrefly: ignore[bad-argument-type]
     )
 
     encoded.append(marginal)
@@ -236,7 +236,7 @@ def generate_synthetic_data_from_marginals(
 
   if log:
     callback_fn = mbi.callbacks.default(
-        measurements, mbi_domain, data=duck_typed_exact_data
+        measurements, mbi_domain, data=duck_typed_exact_data  # pyrefly: ignore[bad-argument-type]
     )
   else:
     callback_fn = lambda _: None

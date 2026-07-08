@@ -122,7 +122,7 @@ class GenAIBackend:
     kwargs = {'http_options': types.HttpOptions(api_version='v1alpha')}
 
     if self.api_key:
-      kwargs['api_key'] = self.api_key
+      kwargs['api_key'] = self.api_key  # pyrefly: ignore[bad-assignment]
     return genai.Client(**kwargs)
 
   def _parse_job_responses(
@@ -201,7 +201,7 @@ class GenAIBackend:
     while not job.done:
       time.sleep(self.poll_interval_seconds)
       job = _call_with_retry(
-          lambda: self.client.batches.get(name=job.name), 'get'
+          lambda: self.client.batches.get(name=job.name), 'get'  # pyrefly: ignore[bad-argument-type]
       )
 
     logging.info(
@@ -317,7 +317,7 @@ def _call_with_retry(
     op_name: str,
     max_retries: int = 10,
     initial_delay: float = 5.0,
-) -> T:
+) -> T:  # pyrefly: ignore[bad-return]
   """Calls `func` with exponential backoff on exceptions."""
   delay = initial_delay
   for attempt in range(1, max_retries + 1):

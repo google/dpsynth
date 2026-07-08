@@ -195,7 +195,7 @@ def _find_worst_approximated_marginal(
       return False
     new_cliques = [*model.cliques, clique]
     return (
-        mbi.junction_tree.hypothetical_model_size(model.domain, new_cliques)
+        mbi.junction_tree.hypothetical_model_size(model.domain, new_cliques)  # pyrefly: ignore[bad-argument-type]
         <= max_model_size
     )
 
@@ -317,7 +317,7 @@ def _add_dp_noise(
       mechanism_spec, sensitivities
   )
   return mbi.LinearMeasurement(
-      gaussian_mechanism.add_noise(marginal), clique, gaussian_mechanism.std
+      gaussian_mechanism.add_noise(marginal), clique, gaussian_mechanism.std  # pyrefly: ignore[bad-argument-type]
   )
 
 

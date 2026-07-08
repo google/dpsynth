@@ -267,7 +267,7 @@ def compression_transformation(
   """Returns a domain compression transformation for the given measurement."""
   mask = measurement.noisy_measurement < 3 * measurement.stddev
   size, transform_fn = transformations.create_rare_value_merging_transformation(
-      mask
+      mask  # pyrefly: ignore[bad-argument-type]
   )
   return size, transform_fn
 
@@ -281,7 +281,7 @@ def convert_to_total_measurement(
   # measurements.
   total = mbi.estimation.minimum_variance_unbiased_total(measurements)
   return mbi.LinearMeasurement(
-      noisy_measurement=total,
+      noisy_measurement=total,  # pyrefly: ignore[bad-argument-type]
       clique=(),
       stddev=1.0,  # ideally we'd get this from minimum_variance_unbiased_total.
   )
@@ -341,7 +341,7 @@ def downward_closure(
   ans = set()
   for proj in marginal_queries:
     ans.update(more_itertools.powerset(proj))
-  return list(sorted(ans - {()}, key=len))
+  return list(sorted(ans - {()}, key=len))  # pyrefly: ignore[bad-return]
 
 
 Workload: TypeAlias = Mapping[mbi.Clique, float]

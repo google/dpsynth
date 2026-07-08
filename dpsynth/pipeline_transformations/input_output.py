@@ -63,7 +63,7 @@ def load_data_local(
       all_files = glob.glob(path)
       if not all_files:
         raise ValueError(f'No files found matching path {path}')
-      return pd.concat([pd.read_csv(file) for file in all_files]).iterrows()
+      return pd.concat([pd.read_csv(file) for file in all_files]).iterrows()  # pyrefly: ignore[bad-return]
     case _:
       raise ValueError(f'Unsupported data format: {data_format}')
 

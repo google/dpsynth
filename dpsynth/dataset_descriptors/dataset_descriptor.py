@@ -275,7 +275,7 @@ class DatasetDescriptor:
     # needed.
     attributes_indices = tuple(range(len(self.attributes)))
     return mbi.Domain(
-        attributes=attributes_indices,
+        attributes=attributes_indices,  # pyrefly: ignore[bad-argument-type]
         shape=self.encoded_shape,
     )
 
@@ -288,7 +288,7 @@ class DatasetDescriptor:
     # needed.
     attributes_indices = tuple(range(len(self.attributes)))
     return mbi.Domain(
-        attributes=attributes_indices,
+        attributes=attributes_indices,  # pyrefly: ignore[bad-argument-type]
         shape=self.compressed_shape,
     )
 

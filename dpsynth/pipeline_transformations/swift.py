@@ -56,7 +56,7 @@ def fit_model(
   domain = backend.map(descriptor, lambda x: x.compressed_domain, 'Get domain')
 
   def compile_workload_fn(dom):
-    return common.compiled_workload(dom, workload, parameters.max_marginal_size)
+    return common.compiled_workload(dom, workload, parameters.max_marginal_size)  # pyrefly: ignore[bad-argument-type]
 
   candidates = backend.map(domain, compile_workload_fn, 'Compile workload')
   # candidates: singleton collection of dict[mbi.Clique, float]
@@ -202,4 +202,4 @@ def _add_noise_fn(
       spec, sensitivities
   )
   noised_marginal = mechanism.add_noise(marginal)
-  return mbi.LinearMeasurement(noised_marginal, clique, sigma)
+  return mbi.LinearMeasurement(noised_marginal, clique, sigma)  # pyrefly: ignore[bad-argument-type]

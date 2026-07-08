@@ -64,7 +64,7 @@ class CSVConverter(dataset_descriptor.DataRecordConverter):
         getattr(row_data, attribute) for attribute in self._attributes.keys()
     )
 
-  def from_tuple(self, tuple_row: tuple[Any, ...]) -> tuple[Any, ...]:
+  def from_tuple(self, tuple_row: tuple[Any, ...]) -> tuple[Any, ...]:  # pyrefly: ignore[bad-override]
     return tuple_row
 
 

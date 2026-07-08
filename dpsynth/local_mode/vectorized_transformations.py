@@ -111,7 +111,7 @@ def categorical_attribute_from_edges(
     intervals = [f'({l}, {r}]' for l, r in zip(full_edges[:-1], full_edges[1:])]
   if not attribute_domain.clip_to_range:
     intervals = ['OUT_OF_DOMAIN'] + intervals
-  return domain.CategoricalAttribute(intervals)
+  return domain.CategoricalAttribute(intervals)  # pyrefly: ignore[bad-argument-count]
 
 
 def discretize(

@@ -339,7 +339,7 @@ def generate_and_return_model(
           budget_accountant,
           compressed_data,
           compressed_descriptor,
-          config.aim_parameters,
+          config.aim_parameters,  # pyrefly: ignore[bad-argument-type]
           additional_output=additional_output,
       )
     case Mechanism.SWIFT:
@@ -348,7 +348,7 @@ def generate_and_return_model(
           budget_accountant,
           compressed_data,
           compressed_descriptor,
-          config.swift_parameters,
+          config.swift_parameters,  # pyrefly: ignore[bad-argument-type]
           additional_output=additional_output,
       )
     case _:
@@ -404,7 +404,7 @@ def generate_and_return_model(
   output_data = _format_output_data(
       decoded_data,
       input_data=input_data,
-      output_format=config.output_format,
+      output_format=config.output_format,  # pyrefly: ignore[bad-argument-type]
       backend=backend,
       descriptor_col=compressed_descriptor,
   )
