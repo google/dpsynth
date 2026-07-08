@@ -95,10 +95,8 @@ def derive_categorical_values(
 
   def to_categorical_attribute(values) -> domain.CategoricalAttribute:
     values = sorted(values, key=str)  # to make sure the order is deterministic
-    # Derived values might not cover all values from the domain. Let us add
-    # None as out of domain value.
-    values = [None] + values
-    return domain.CategoricalAttribute(values)
+    # Cast to str for homogeneity with the '<OOD>' sentinel.
+    return domain.CategoricalAttribute(['<OOD>'] + [str(v) for v in values])
 
   categorical_attributes = backend.map_values(
       selected_categorical_values,
@@ -112,7 +110,7 @@ def derive_categorical_values(
     res = dict(attributes)
     for key in attribute_keys_to_derive:
       if key not in res:
-        res[key] = domain.CategoricalAttribute([None])
+        res[key] = domain.CategoricalAttribute(['<OOD>'])
     return res
 
   return backend.map(

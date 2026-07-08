@@ -113,7 +113,7 @@ class CategoricalCountsTest(absltest.TestCase):
 class OpenSetCountsTest(absltest.TestCase):
 
   def test_basic_counts(self):
-    attr = domain.OpenSetCategoricalAttribute(default_value=None)
+    attr = domain.OpenSetCategoricalAttribute(default_value='<OOD>')
     init = initialization.OpenSetCategoricalInitializer(
         name='col', attribute=attr, delta=0.01, min_count=1
     ).calibrate(zcdp_rho=np.inf)
@@ -145,7 +145,7 @@ class BeamInitializeTest(absltest.TestCase):
   def test_end_to_end_mixed(self):
     num_attr = domain.NumericalAttribute(min_value=0, max_value=100)
     cat_attr = domain.CategoricalAttribute(possible_values=['a', 'b'])
-    open_attr = domain.OpenSetCategoricalAttribute(default_value=None)
+    open_attr = domain.OpenSetCategoricalAttribute(default_value='<OOD>')
 
     initializers = {
         'score': (

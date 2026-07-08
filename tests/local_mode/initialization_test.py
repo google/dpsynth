@@ -525,7 +525,7 @@ class CategoricalInitializerTest(absltest.TestCase):
 
   def test_out_of_domain_values(self):
     attr = domain.CategoricalAttribute(
-        possible_values=[None, 'X', 'Y'], out_of_domain_index=0
+        possible_values=['<OOD>', 'X', 'Y'], out_of_domain_index=0
     )
     rng = np.random.default_rng(0)
     initializer = initialization.CategoricalInitializer(
@@ -543,7 +543,7 @@ class CategoricalInitializerTest(absltest.TestCase):
 class OpenSetCategoricalInitializerTest(absltest.TestCase):
 
   def test_dp_event(self):
-    attr = domain.OpenSetCategoricalAttribute(default_value=None)
+    attr = domain.OpenSetCategoricalAttribute(default_value='<OOD>')
     initializer = initialization.OpenSetCategoricalInitializer(
         name='test', attribute=attr, delta=1e-5
     )
@@ -557,7 +557,7 @@ class OpenSetCategoricalInitializerTest(absltest.TestCase):
     self.assertEqual(event.events[1].delta, 1e-5)
 
   def test_call_noiseless(self):
-    attr = domain.OpenSetCategoricalAttribute(default_value=None)
+    attr = domain.OpenSetCategoricalAttribute(default_value='<OOD>')
     rng = np.random.default_rng(42)
     initializer = initialization.OpenSetCategoricalInitializer(
         name='col', attribute=attr, delta=1e-5
@@ -572,9 +572,9 @@ class OpenSetCategoricalInitializerTest(absltest.TestCase):
     discovered = set(result.categorical_attribute.possible_values)
     self.assertIn('A', discovered)
     self.assertIn('B', discovered)
-    self.assertIn(None, discovered)  # default value always present
+    self.assertIn('<OOD>', discovered)  # default value always present
     # Default value is always first.
-    self.assertIsNone(result.categorical_attribute.possible_values[0])
+    self.assertEqual(result.categorical_attribute.possible_values[0], '<OOD>')
     self.assertEqual(result.categorical_attribute.out_of_domain_index, 0)
 
   def test_undiscovered_values_map_to_default(self):
@@ -596,7 +596,7 @@ class OpenSetCategoricalInitializerTest(absltest.TestCase):
     self.assertEqual(encoded_z[0], 0)
 
   def test_empty_data(self):
-    attr = domain.OpenSetCategoricalAttribute(default_value=None)
+    attr = domain.OpenSetCategoricalAttribute(default_value='<OOD>')
     rng = np.random.default_rng(0)
     initializer = initialization.OpenSetCategoricalInitializer(
         name='col', attribute=attr, delta=1e-5
@@ -605,7 +605,7 @@ class OpenSetCategoricalInitializerTest(absltest.TestCase):
     result = initializer.configure(zcdp_rho=np.inf)(rng, data)
 
     # Only the default value should be in the domain.
-    self.assertEqual(result.categorical_attribute.possible_values, [None])
+    self.assertEqual(result.categorical_attribute.possible_values, ['<OOD>'])
     self.assertEqual(result.categorical_attribute.size, 1)
 
 

@@ -90,7 +90,7 @@ message DataType {
 
 // Represents domain.CategoricalAttribute
 message CategoricalAttribute {
-  // Corresponds to list[None | bool | int | str]
+  // Corresponds to list[bool | int | str]
   google.protobuf.ListValue possible_values = 1;
   int32 out_of_domain_index = 2;
 }

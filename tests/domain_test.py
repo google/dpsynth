@@ -44,6 +44,12 @@ class TestDomain(absltest.TestCase):
           possible_values=['a', 'b'], out_of_domain_index=2
       )
 
+  def test_mixed_types_rejected(self):
+    with self.assertRaises(ValueError):
+      domain.CategoricalAttribute(possible_values=['a', 1])
+    with self.assertRaises(ValueError):
+      domain.CategoricalAttribute(possible_values=[None, 'a'])
+
   def test_invalid_range(self):
     with self.assertRaises(ValueError):
       domain.NumericalAttribute(min_value=10, max_value=0)

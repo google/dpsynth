@@ -51,10 +51,10 @@ class DiscreteEncodeTest(absltest.TestCase):
 class DiscreteDecodeTest(absltest.TestCase):
 
   def test_basic_decoding(self):
-    attr = domain.CategoricalAttribute([None, 'a', 'b', 'c'])
+    attr = domain.CategoricalAttribute(['<OOD>', 'a', 'b', 'c'])
     encoded = np.array([0, 1, 2, 3, 1])
     result = vectorized_transformations.discrete_decode(encoded, attr)
-    expected = np.array([None, 'a', 'b', 'c', 'a'], dtype=object)
+    expected = np.array(['<OOD>', 'a', 'b', 'c', 'a'], dtype=object)
     np.testing.assert_array_equal(result, expected)
 
   def test_roundtrip(self):
@@ -238,7 +238,7 @@ class UndiscretizeTest(parameterized.TestCase):
     result = vectorized_transformations.undiscretize(
         bin_indices, np.array([5.0]), attr
     )
-    self.assertIn('(', result[0])
+    self.assertIn('[', result[0])  # First interval is closed: [min, edge]
     self.assertIn(']', result[0])
 
   def test_string_sentinel_interval(self):
@@ -253,7 +253,7 @@ class UndiscretizeTest(parameterized.TestCase):
         np.array([0, 1]), np.array([5.0]), attr
     )
     self.assertEqual(result[0], 'MISSING')
-    self.assertIn('(', result[1])
+    self.assertIn('[', result[1])  # First in-domain interval is closed
 
   def test_invalid_bin_edges_raises(self):
     attr = domain.NumericalAttribute(

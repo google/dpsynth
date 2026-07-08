@@ -102,7 +102,7 @@ class DatasetEncodingTest(absltest.TestCase):
     output_descriptor = list(output_descriptor)[0]
     self.assertEqual(
         output_descriptor.attributes[0].categorical_attribute.possible_values,
-        [None, 3, "A", True],
+        ["<OOD>", "3", "A", "True"],
     )
     self.assertEqual(
         output_descriptor.attributes[1].categorical_attribute.possible_values,
@@ -130,9 +130,9 @@ class DatasetEncodingTest(absltest.TestCase):
     # bin index 3 -> (7.0, 12.0] -> 9.5
     expected_decoded_data = [
         ("A", 1, np.float64(9.5)),
-        (3, 0, np.float64(5.0)),
-        (True, 1, np.float64(1.5)),
-    ] * 100 + [(None, 0, np.float64(5.0))]
+        ("3", 0, np.float64(5.0)),
+        ("True", 1, np.float64(1.5)),
+    ] * 100 + [("<OOD>", 0, np.float64(5.0))]
 
     self.assertEqual(decoded_data, expected_decoded_data)
 

@@ -14,7 +14,7 @@
 
 """Utilities for transforming data from one domain to another."""
 
-import collections
+import bisect
 from collections.abc import Callable, Mapping, Sequence
 import math
 from typing import Any, Generic, TypeAlias, TypeVar
@@ -24,7 +24,7 @@ from dpsynth import domain
 import numpy as np
 import pandas as pd
 
-CategoricalValue: TypeAlias = None | bool | int | str | pd.Interval
+CategoricalValue: TypeAlias = bool | int | float | str
 R, T, S = TypeVar('R'), TypeVar('T'), TypeVar('S')
 
 
@@ -87,8 +87,8 @@ class DataTransformation(Generic[R, T]):  # pyrefly: ignore[not-a-type]
     )
 
 
-# Non-float values allowed, but will be mapped to None or a default interval.
-DiscretizeTransformation = DataTransformation[Any, pd.Interval | None]
+# Non-float values allowed, but will be mapped to the OOD sentinel.
+DiscretizeTransformation = DataTransformation[Any, str]
 
 
 def discrete_encoder(
@@ -99,14 +99,14 @@ def discrete_encoder(
   Example Usage:
 
   ```
-  >>> grade = CategoricalAttribute([None, 'A', 'B', 'C', 'D', 'F'], 0)
+  >>> grade = CategoricalAttribute(['<OOD>', 'A', 'B', 'C', 'D', 'F'], 0)
   >>> transform_fn = discrete_encoder(grade)
-  >>> transform_fn(None)
+  >>> transform_fn('<OOD>')
   0
   >>> transform_fn('A')
   1
   >>> transform_fn.inverse(0)
-  None
+  '<OOD>'
   >>> transform_fn.inverse(3)
   'C'
   ```
@@ -118,13 +118,44 @@ def discrete_encoder(
     A DataTransformation that maps from possible values to their index in the
     list.
   """
-  # vs. other implementations in downstream pandas replace applications.
-  transform = collections.defaultdict(
-      lambda: attribute_domain.out_of_domain_index,
-      {value: i for i, value in enumerate(attribute_domain.possible_values)},
-  )
+  # Raw data may contain different types (e.g. int 3 for str key "3").
+  # A lambda is needed here rather than a plain dict because:
+  # (1) value_type coercion handles cross-type lookups, and
+  # (2) defaultdict.__missing__ is bypassed by pd.Series.map(.get()).
+  value_type = type(attribute_domain.possible_values[0])
+  index_map = {
+      value: i for i, value in enumerate(attribute_domain.possible_values)
+  }
+  ood = attribute_domain.out_of_domain_index
+  transform = lambda v: index_map.get(value_type(v), ood)
   reverse = dict(enumerate(attribute_domain.possible_values))
   return DataTransformation(transform, reverse)  # pyrefly: ignore[bad-argument-count]
+
+
+@attr.define(frozen=True)
+class _Interval:
+  """A numeric interval with a string representation."""
+
+  left: float
+  right: float
+  closed_left: bool = False
+
+  def __str__(self) -> str:
+    bracket = '[' if self.closed_left else '('
+    return f'{bracket}{self.left}, {self.right}]'
+
+  @property
+  def midpoint(self) -> float:
+    """Returns the midpoint, handling infinite endpoints."""
+    if math.isfinite(self.left) and math.isfinite(self.right):
+      return (self.left + self.right) / 2.0
+    return self.left if math.isfinite(self.left) else self.right
+
+  def sample(self) -> float:
+    """Returns a uniform sample, handling infinite endpoints."""
+    if math.isfinite(self.left) and math.isfinite(self.right):
+      return np.random.uniform(self.left, self.right)
+    return self.left if math.isfinite(self.left) else self.right
 
 
 def create_discretize_transformation(
@@ -163,48 +194,39 @@ def create_discretize_transformation(
     )
 
   bin_edges = np.r_[
-      attribute_domain.exclusive_min_value,
+      attribute_domain.min_value,
       bin_edges,
       attribute_domain.max_value,
   ]
-  intervals = pd.IntervalIndex.from_breaks(bin_edges)
-  maybe_none = [] if attribute_domain.clip_to_range else [None]
+  intervals = [
+      _Interval(left, right, closed_left=(i == 0))
+      for i, (left, right) in enumerate(zip(bin_edges[:-1], bin_edges[1:]))
+  ]
+  interval_strs = [str(iv) for iv in intervals]
+  inner_edges = list(bin_edges[1:-1])
+  ood_sentinel = '<OOD>'
+  maybe_ood = [] if attribute_domain.clip_to_range else [ood_sentinel]
   sentinel = attribute_domain.resolved_sentinel
-  possible_values = maybe_none + list(intervals)
+  possible_values = maybe_ood + interval_strs
 
-  def transform(value: Any) -> pd.Interval | None:
+  def transform(value: Any) -> str:
     value = attribute_domain.standardize(value)
     if value is None or (isinstance(value, float) and math.isnan(value)):
-      return None
-    return intervals[intervals.get_loc(value)]
+      return ood_sentinel
+    idx = bisect.bisect_left(inner_edges, value)
+    return interval_strs[idx]
 
-  def _resolve_finite(interval: pd.Interval) -> float:
-    """Returns the midpoint, handling infinite endpoints."""
-    left_finite = math.isfinite(interval.left)
-    right_finite = math.isfinite(interval.right)
-    if left_finite and right_finite:
-      return interval.mid
-    elif left_finite:
-      return interval.left
-    else:
-      return interval.right
-
-  def reverse(value: pd.Interval | None) -> float | pd.Interval | None:
-    if value is None:
+  def reverse(value: str) -> float | str:
+    if value == ood_sentinel:
       return sentinel
+    idx = interval_strs.index(value)
+    iv = intervals[idx]
     if attribute_domain.interval_handling == 'interval':
       return value
     if attribute_domain.interval_handling == 'sample':
-      left_finite = math.isfinite(value.left)
-      right_finite = math.isfinite(value.right)
-      if left_finite and right_finite:
-        result = np.random.uniform(value.left, value.right)
-      elif left_finite:
-        result = value.left
-      else:
-        result = value.right
+      result = iv.sample()
     else:
-      result = _resolve_finite(value)
+      result = iv.midpoint
     if attribute_domain.dtype == 'int':
       return math.ceil(result)
     return result
@@ -225,11 +247,11 @@ def create_uniform_discretize_transformation(
   >>> age = NumericalAttribute(min_value=0, max_value=100, clip_to_range=True)
   >>> _,transform_fn = create_uniform_discretize_transformation(age, num_bins=5)
   >>> transform_fn(50)
-  Interval(40, 60, closed='right')
+  '(40.0, 60.0]'
   >>> transform_fn(40)
-  Interval(20, 40, closed='right')
+  '(20.0, 40.0]'
   >>> transform_fn(105)
-  Interval(80, 100, closed='right')
+  '(80.0, 100.0]'
   ```
 
   Args:
@@ -244,12 +266,14 @@ def create_uniform_discretize_transformation(
     interval in the CategoricalAttribute and vice versa.
   """
   bin_edges = np.linspace(
-      attribute_domain.exclusive_min_value,
+      attribute_domain.min_value,
       attribute_domain.max_value,
       num_bins + 1,
   )
   if attribute_domain.dtype == 'int':
-    bin_edges = np.sort(np.unique(bin_edges.astype(int)))
+    int_edges = np.sort(np.unique(bin_edges.astype(int)))
+    if len(int_edges) >= 3:
+      bin_edges = int_edges
   return create_discretize_transformation(
       attribute_domain, list(bin_edges[1:-1])
   )

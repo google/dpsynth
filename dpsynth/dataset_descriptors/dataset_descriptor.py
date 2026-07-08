@@ -69,7 +69,7 @@ class DataRecordConverter(abc.ABC):
     """
 
 
-CategoricalValue = None | bool | int | str
+CategoricalValue = bool | int | str
 
 
 @dataclasses.dataclass
@@ -163,10 +163,8 @@ class AttributeDescriptor:
           )
       )
       encoder = transformations.discrete_encoder(categorical_attr)
-      # Create a combined transformation.
-      # 1. Discretize (float -> interval)
-      # 2. Encode (interval -> int)
-      return encoder @ discretize_transform
+      # Discretize then encode: float -> str interval -> int.
+      return encoder @ discretize_transform  # pytype: disable=bad-return-type
 
     raise ValueError(
         '`encoding_transform` is called before values are derived.'

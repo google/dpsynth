@@ -41,8 +41,8 @@ class DeriveCategoricalValuesTest(absltest.TestCase):
     self.assertEqual(
         got[0],
         {
-            0: domain.CategoricalAttribute((None, 3, "A", True)),
-            2: domain.CategoricalAttribute((None, 10, 2, 5)),
+            0: domain.CategoricalAttribute(("<OOD>", "3", "A", "True")),
+            2: domain.CategoricalAttribute(("<OOD>", "10", "2", "5")),
         },
     )
 

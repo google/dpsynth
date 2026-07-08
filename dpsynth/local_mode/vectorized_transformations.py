@@ -133,10 +133,10 @@ def discretize(
   Returns:
     A 1-D integer array of 0-based bin indices.  When
     ``attribute_domain.clip_to_range`` is ``False``, index 0 represents the
-    out-of-domain (``None``) bin and in-domain bins start at 1.
+    out-of-domain (``'<OOD>'``) bin and in-domain bins start at 1.
   """
   min_, max_ = attribute_domain.min_value, attribute_domain.max_value
-  # Coerce to float64 so object-typed arrays (e.g. containing None) work
+  # Coerce to float64 so object-typed arrays (e.g. containing '<OOD>') work
   # with np.clip / np.isnan without TypeError.
   data = np.asarray(data, dtype=float)
   _validate_bin_edges(bin_edges, attribute_domain)
@@ -179,7 +179,7 @@ def undiscretize(
     ``attribute_domain.resolved_sentinel``.
   """
   rng = np.random.default_rng(rng)
-  min_, max_ = attribute_domain.exclusive_min_value, attribute_domain.max_value
+  min_, max_ = attribute_domain.min_value, attribute_domain.max_value
   _validate_bin_edges(bin_edges, attribute_domain)
 
   if bin_edges.size == 0:
@@ -195,7 +195,11 @@ def undiscretize(
   sentinel = attribute_domain.resolved_sentinel
 
   if handling == 'interval':
-    values = np.array([f'({l}, {r}]' for l, r in zip(lefts, rights)], dtype=str)
+    # First interval is closed on both sides; the rest are half-open.
+    strs = [f'[{lefts[0]}, {rights[0]}]'] + [
+        f'({l}, {r}]' for l, r in zip(lefts[1:], rights[1:])
+    ]
+    values = np.array(strs, dtype=str)
     if not attribute_domain.clip_to_range:
       values = np.r_[np.array(sentinel, dtype=str), values]
     return values[bin_indices]

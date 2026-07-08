@@ -335,7 +335,9 @@ class OpenSetCategoricalInitializer(primitives.DPMechanism):
     """Returns a ColumnMeasurement from pre-aggregated value counts."""
     mechanism = _validate_mechanism(self.mechanism)
     result = mechanism.from_summary(rng, counts)
-    selected_values = list(unique_values[result.selected_partitions])
+    selected_values = [
+        str(v) for v in unique_values[result.selected_partitions]
+    ]
 
     # Build the discovered domain: default first, then selected values.
     possible_values = [self.attribute.default_value] + selected_values

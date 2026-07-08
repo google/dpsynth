@@ -27,11 +27,12 @@ them or (2) map them to an element of the domain.
 
 Values from categorical attributes that are not in the list of possible values
 are mapped to some value in the list (default is the first element).
-For safety, it's best practice to add a `None` value as the first entry in the
-list of possible values for categorical attributes if you are unsure if there
-are out-of-domain values.  If you know there are not any out-of-domain values,
-then you can (and should) ignore this advice, so that downstream mechanisms
-don't generate out-of-domain values when none should exist.
+For safety, it's best practice to add a typed sentinel (e.g. ``"Unknown"`` for
+strings, ``-1`` for ints) as the first entry in the list of possible values for
+categorical attributes if you are unsure if there are out-of-domain values.
+If you know there are not any out-of-domain values, then you can (and should)
+ignore this advice, so that downstream mechanisms don't generate out-of-domain
+values when none should exist.
 
 Similarly, values from numerical attributes that are outside of the range
 [min_value, max_value] (or not even a numerical type) are clipped to this range
@@ -55,7 +56,7 @@ import yaml
 
 PathType = pathlib.Path
 
-CategoricalValue: TypeAlias = None | bool | int | str
+CategoricalValue: TypeAlias = bool | int | str
 
 IntervalHandling = Literal['midpoint', 'sample', 'interval']
 
@@ -65,17 +66,20 @@ class CategoricalAttribute:
   """Dataclass for storing metadata about a categorical attribute.
 
   If the set of possible values is known in advance, this should be be
-  specified via the `possible_values` attribute. If a value does not exist
-  in this list, it will be mapped to possible_values[out_of_domain_index].
+  specified via the ``possible_values`` attribute. If a value does not exist
+  in this list, it will be mapped to ``possible_values[out_of_domain_index]``.
   If your data does not contain out-of-domain values, this will be a no-op.
-  If you are unsure, we recommend you include a `None` or other special
-  value as the first entry of the `possible_values` list.
 
-  If the set of possible is not known in advance, use the
+  All values in ``possible_values`` must share the same type, which must be one
+  of ``bool``, ``int``, ``float``, or ``str``.  ``None`` is not allowed; use a
+  typed sentinel instead (e.g. ``"Unknown"`` for strings, ``-1`` for ints).
+
+  If the set of possible values is not known in advance, use the
   OpenSetCategoricalAttribute class instead.
 
   Attributes:
-    possible_values: A list of possible values for this attribute.
+    possible_values: A homogeneous list of possible values for this attribute.
+      All values must share the same type (one of bool, int, float, or str).
     out_of_domain_index: The index into possible_values that out-of-domain
       values should be mapped to.
     description: An optional semantic description of the attribute.
@@ -92,6 +96,13 @@ class CategoricalAttribute:
       raise ValueError(
           f'out_of_domain_index must be in [0, {self.size-1}], got'
           f' {self.out_of_domain_index}.'
+      )
+    _allowed_types = (bool, int, float, str)
+    types = {type(v) for v in self.possible_values}
+    if len(types) != 1 or next(iter(types)) not in _allowed_types:
+      raise ValueError(
+          'possible_values must be homogeneous and all bool, int, float, or'
+          f' str, got types {types}.'
       )
 
   @functools.cached_property
@@ -114,12 +125,14 @@ class OpenSetCategoricalAttribute:
   infer the set of possible values from the data in a DP manner. Values that
   do not appear frequently enough will be mapped to a default value.
 
+  Discovered values are always represented as strings.
+
   Attributes:
-    default_value: The default value for out-of-domain entries.
+    default_value: The default string value for out-of-domain entries.
     description: An optional semantic description of the attribute.
   """
 
-  default_value: CategoricalValue | None = None
+  default_value: str = '<OOD>'
   description: str | None = None
 
 

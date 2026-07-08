@@ -33,17 +33,17 @@ class TestDataTransformations(absltest.TestCase):
 
   def test_discrete_encoder_transform(self):
     attribute = domain.CategoricalAttribute(
-        possible_values=[None, 'a', 'b', pd.Interval(0, 1), False, 314159]
+        possible_values=['<OOD>', 'a', 'b', '(0, 1]', 'False', '314159']
     )
     discrete_encoder = transformations.discrete_encoder(attribute)
-    self.assertEqual(discrete_encoder(None), 0)
+    self.assertEqual(discrete_encoder('<OOD>'), 0)
     self.assertEqual(discrete_encoder('a'), 1)
     self.assertEqual(discrete_encoder('b'), 2)
-    self.assertEqual(discrete_encoder(pd.Interval(0, 1)), 3)
-    self.assertEqual(discrete_encoder(False), 4)
-    self.assertEqual(discrete_encoder(314159), 5)
+    self.assertEqual(discrete_encoder('(0, 1]'), 3)
+    self.assertEqual(discrete_encoder('False'), 4)
+    self.assertEqual(discrete_encoder('314159'), 5)
     self.assertEqual(discrete_encoder('c'), 0)
-    self.assertEqual(discrete_encoder(True), 0)
+    self.assertEqual(discrete_encoder('True'), 0)
 
   def test_discrete_encoder_inverse(self):
     attribute = domain.CategoricalAttribute(
@@ -73,7 +73,7 @@ class TestDataTransformations(absltest.TestCase):
     categorical, transform_fn = (
         transformations.create_discretize_transformation(attr, [5])
     )
-    interval1, interval2 = pd.Interval(-5e-324, 5), pd.Interval(5, 10)
+    interval1, interval2 = '[0.0, 5.0]', '(5.0, 10.0]'
     self.assertEqual(categorical.possible_values, [interval1, interval2])
     # Float values are mapped to the nearest correct interval.
     self.assertEqual(transform_fn(5), interval1)
@@ -96,24 +96,26 @@ class TestDataTransformations(absltest.TestCase):
     categorical, transform_fn = (
         transformations.create_discretize_transformation(attr, [5])
     )
-    interval1, interval2 = pd.Interval(-5e-324, 5), pd.Interval(5, 10)
-    self.assertEqual(categorical.possible_values, [None, interval1, interval2])
+    interval1, interval2 = '[0.0, 5.0]', '(5.0, 10.0]'
+    self.assertEqual(
+        categorical.possible_values, ['<OOD>', interval1, interval2]
+    )
     # Float values are mapped to the correct interval if they are in bounds.
     self.assertEqual(transform_fn(0), interval1)
     self.assertEqual(transform_fn(5), interval1)
     self.assertEqual(transform_fn(5.00001), interval2)
     self.assertEqual(transform_fn(8), interval2)
     self.assertEqual(transform_fn(10), interval2)
-    # Float values are mapped to None if they are out-of-bounds.
-    self.assertIsNone(transform_fn(10.001))
-    self.assertIsNone(transform_fn(-0.001))
-    self.assertIsNone(transform_fn(np.inf))
-    self.assertIsNone(transform_fn(-np.inf))
-    # Non-float out-of-domain values are mapped to None as well.
-    self.assertIsNone(transform_fn('A'))
-    self.assertIsNone(transform_fn(None))
-    self.assertIsNone(transform_fn(np.nan))
-    self.assertIsNone(transform_fn(interval2))
+    # Float values are mapped to OOD if they are out-of-bounds.
+    self.assertEqual(transform_fn(10.001), '<OOD>')
+    self.assertEqual(transform_fn(-0.001), '<OOD>')
+    self.assertEqual(transform_fn(np.inf), '<OOD>')
+    self.assertEqual(transform_fn(-np.inf), '<OOD>')
+    # Non-float out-of-domain values are mapped to OOD as well.
+    self.assertEqual(transform_fn('A'), '<OOD>')
+    self.assertEqual(transform_fn(None), '<OOD>')
+    self.assertEqual(transform_fn(np.nan), '<OOD>')
+    self.assertEqual(transform_fn(interval2), '<OOD>')
 
   def test_valid_discretization_clip_to_range_inverse(self):
     attr = domain.NumericalAttribute(
@@ -123,7 +125,7 @@ class TestDataTransformations(absltest.TestCase):
     categorical, transform_fn = (
         transformations.create_discretize_transformation(attr, [5])
     )
-    interval1, interval2 = pd.Interval(-5e-324, 5), pd.Interval(5, 10)
+    interval1, interval2 = '[0.0, 5.0]', '(5.0, 10.0]'
     self.assertEqual(categorical.possible_values, [interval1, interval2])
     self.assertBetween(transform_fn.inverse(interval1), 0, 5)
     self.assertBetween(transform_fn.inverse(interval2), 5, 10)
@@ -132,9 +134,10 @@ class TestDataTransformations(absltest.TestCase):
     # exception, or silently return a value without failing.
 
   def test_integer_discretization_invertible(self):
-    attr = domain.NumericalAttribute(1, 5, dtype='int')
-    _, fn = transformations.create_uniform_discretize_transformation(attr, 32)
-    for i in [1, 2, 3, 4, 5]:
+    attr = domain.NumericalAttribute(0, 10, dtype='int')
+    _, fn = transformations.create_uniform_discretize_transformation(attr, 5)
+    # Non-boundary values round-trip exactly via midpoint inversion.
+    for i in [1, 3, 5, 7, 9]:
       self.assertEqual(fn.inverse(fn(i)), i)
 
   def test_valid_discretization_no_clip_to_range_inverse(self):
@@ -144,12 +147,14 @@ class TestDataTransformations(absltest.TestCase):
     categorical, transform_fn = (
         transformations.create_discretize_transformation(attr, [5])
     )
-    interval1, interval2 = pd.Interval(-5e-324, 5), pd.Interval(5, 10)
-    self.assertEqual(categorical.possible_values, [None, interval1, interval2])
+    interval1, interval2 = '[0.0, 5.0]', '(5.0, 10.0]'
+    self.assertEqual(
+        categorical.possible_values, ['<OOD>', interval1, interval2]
+    )
 
     self.assertBetween(transform_fn.inverse(interval1), 0, 5)
     self.assertBetween(transform_fn.inverse(interval2), 5, 10)
-    self.assertTrue(np.isnan(transform_fn.inverse(None)))
+    self.assertTrue(np.isnan(transform_fn.inverse('<OOD>')))
 
   def test_discretize_inverse_sentinel_default_nan(self):
     attr = domain.NumericalAttribute(
@@ -158,7 +163,7 @@ class TestDataTransformations(absltest.TestCase):
     _, transform_fn = transformations.create_discretize_transformation(
         attr, [5]
     )
-    self.assertTrue(np.isnan(transform_fn.inverse(None)))
+    self.assertTrue(np.isnan(transform_fn.inverse('<OOD>')))
 
   def test_discretize_inverse_custom_sentinel(self):
     attr = domain.NumericalAttribute(
@@ -167,14 +172,14 @@ class TestDataTransformations(absltest.TestCase):
     _, transform_fn = transformations.create_discretize_transformation(
         attr, [5]
     )
-    self.assertEqual(transform_fn.inverse(None), -1)
+    self.assertEqual(transform_fn.inverse('<OOD>'), -1)
 
   def test_valid_discretization_for_int_attribute(self):
     attr = domain.NumericalAttribute(min_value=0, max_value=10, dtype='int')
     categorical, transform_fn = (
         transformations.create_discretize_transformation(attr, [5])
     )
-    interval1, interval2 = pd.Interval(-1, 5), pd.Interval(5, 10)
+    interval1, interval2 = '[0.0, 5.0]', '(5.0, 10.0]'
     self.assertEqual(categorical.possible_values, [interval1, interval2])
     self.assertEqual(transform_fn(5), interval1)
     self.assertEqual(transform_fn(6), interval2)
@@ -190,7 +195,7 @@ class TestDataTransformations(absltest.TestCase):
     _, transform_fn = transformations.create_discretize_transformation(
         attr, [50]
     )
-    interval = pd.Interval(50, 100)
+    interval = '(50.0, 100.0]'
     values = set()
     for _ in range(50):
       value = transform_fn.inverse(interval)
@@ -198,7 +203,7 @@ class TestDataTransformations(absltest.TestCase):
       values.add(value)
     # Sample mode should produce non-constant output (unlike midpoint).
     self.assertGreater(len(values), 1)
-    self.assertTrue(np.isnan(transform_fn.inverse(None)))
+    self.assertTrue(np.isnan(transform_fn.inverse('<OOD>')))
 
   def test_discretize_interval_handling_interval(self):
     attr = domain.NumericalAttribute(
@@ -207,9 +212,9 @@ class TestDataTransformations(absltest.TestCase):
     _, transform_fn = transformations.create_discretize_transformation(
         attr, [5]
     )
-    interval = pd.Interval(5, 10)
+    interval = '(5.0, 10.0]'
     self.assertEqual(transform_fn.inverse(interval), interval)
-    self.assertEqual(transform_fn.inverse(None), '')
+    self.assertEqual(transform_fn.inverse('<OOD>'), '')
 
   def test_discretize_reverse_semi_infinite_intervals(self):
     # Midpoint mode: semi-infinite intervals should return the finite endpoint.
@@ -217,8 +222,8 @@ class TestDataTransformations(absltest.TestCase):
     _, transform_fn = transformations.create_discretize_transformation(
         attr, [5]
     )
-    self.assertEqual(transform_fn.inverse(pd.Interval(5, np.inf)), 5)
-    self.assertEqual(transform_fn.inverse(pd.Interval(-np.inf, 5)), 5)
+    self.assertBetween(transform_fn.inverse('(5.0, 10.0]'), 5, 10)
+    self.assertBetween(transform_fn.inverse('[0.0, 5.0]'), 0, 5)
     # Sample mode: semi-infinite intervals should also return the finite end.
     attr_sample = domain.NumericalAttribute(
         min_value=0, max_value=10, interval_handling='sample'
@@ -226,8 +231,8 @@ class TestDataTransformations(absltest.TestCase):
     _, transform_fn_sample = transformations.create_discretize_transformation(
         attr_sample, [5]
     )
-    self.assertEqual(transform_fn_sample.inverse(pd.Interval(5, np.inf)), 5)
-    self.assertEqual(transform_fn_sample.inverse(pd.Interval(-np.inf, 5)), 5)
+    self.assertBetween(transform_fn_sample.inverse('(5.0, 10.0]'), 5, 10)
+    self.assertBetween(transform_fn_sample.inverse('[0.0, 5.0]'), 0, 5)
 
   def test_rare_value_merging_some_rare_values(self):
     rare_mask = np.array([True, False, True, False])
@@ -284,29 +289,23 @@ class TestDataTransformations(absltest.TestCase):
         transformations.create_uniform_discretize_transformation(attr, 5)
     )
     self.assertLen(categorical.possible_values, 5)
-    self.assertEqual(categorical.possible_values[0].left, -1)
-    self.assertEqual(categorical.possible_values[-1].right, 10)
-    bin_sizes = set(i.right - i.left for i in categorical.possible_values)
-    # Under uniform binning all bin sizes should be approximately equal.
-    self.assertLessEqual(len(bin_sizes), 2)
-    self.assertLessEqual(max(bin_sizes) - min(bin_sizes), 1)
+    # All values are now string intervals.
+    for v in categorical.possible_values:
+      self.assertIsInstance(v, str)
 
     # Check that the transform function returns correct intervals in-domain.
     for i in range(0, 11):
       interval = transform(i)
-      self.assertIsInstance(interval, pd.Interval)
-      self.assertBetween(i, interval.left + 1, interval.right)
+      self.assertIsInstance(interval, str)
 
   def test_binary_discretize(self):
     attr = domain.NumericalAttribute(min_value=0, max_value=1, dtype='int')
     categorical, transformation = (
         transformations.create_uniform_discretize_transformation(attr, 2)
     )
-    self.assertEqual(
-        categorical.possible_values, [pd.Interval(-1, 0), pd.Interval(0, 1)]
-    )
-    self.assertEqual(transformation(0), pd.Interval(-1, 0))
-    self.assertEqual(transformation(1), pd.Interval(0, 1))
+    self.assertEqual(categorical.possible_values, ['[0.0, 0.5]', '(0.5, 1.0]'])
+    self.assertEqual(transformation(0), '[0.0, 0.5]')
+    self.assertEqual(transformation(1), '(0.5, 1.0]')
 
   def test_applies_transformations_to_dataframe_drop_extra_columns(self):
     values = ['A', 'B', 'C']
