@@ -106,7 +106,7 @@ class InitializationTest(absltest.TestCase):
     )
     data = np.arange(100)
     result = initializer.configure(zcdp_rho=100.0)(rng, data)
-    # All edges should be integers (floor was applied).
+    # All edges should be integers (integer grid produces exact integer edges).
     np.testing.assert_array_equal(result.bin_edges, np.floor(result.bin_edges))
     # Edges must be within [min_value, max_value - 1].
     self.assertGreaterEqual(result.bin_edges[0], 0)
@@ -119,7 +119,7 @@ class InitializationTest(absltest.TestCase):
     initializer = initialization.NumericalInitializer(
         name='test', num_partitions=8, attribute=attr
     )
-    # Concentrated data will cause edge collisions after floor.
+    # Concentrated data will cause edge collisions.
     data = np.array([50] * 100 + [1, 99])
     result = initializer.configure(zcdp_rho=1.0)(
         rng, data, estimated_total=100.0
@@ -129,6 +129,34 @@ class InitializationTest(absltest.TestCase):
     np.testing.assert_allclose(
         result.measurement.noisy_measurement.sum(), 1.0, atol=1e-10
     )
+
+  def test_max_grid_size_below_two_raises(self):
+    attr = domain.NumericalAttribute(min_value=0, max_value=10)
+    for bad in (0, 1):
+      with self.assertRaises(ValueError):
+        initialization.NumericalInitializer(
+            name='x', num_partitions=1, attribute=attr, max_grid_size=bad
+        )
+
+  def test_max_grid_size_two_int(self):
+    rng = np.random.default_rng(42)
+    attr = domain.NumericalAttribute(min_value=0, max_value=100, dtype='int')
+    init = initialization.NumericalInitializer(
+        name='x', num_partitions=1, attribute=attr, max_grid_size=2
+    ).configure(zcdp_rho=1.0)
+    self.assertEqual(init.grid_size, 2)
+    result = init(rng, np.arange(100))
+    self.assertIsNotNone(result.categorical_attribute)
+
+  def test_max_grid_size_two_float(self):
+    rng = np.random.default_rng(42)
+    attr = domain.NumericalAttribute(min_value=0.0, max_value=100.0)
+    init = initialization.NumericalInitializer(
+        name='x', num_partitions=1, attribute=attr, max_grid_size=2
+    ).configure(zcdp_rho=1.0)
+    self.assertEqual(init.grid_size, 2)
+    result = init(rng, np.linspace(0, 100, 100))
+    self.assertIsNotNone(result.categorical_attribute)
 
   def test_numerical_initializer_measurement_with_estimated_total(self):
     attr = domain.NumericalAttribute(min_value=0, max_value=10)
@@ -589,7 +617,7 @@ class NumericalInitializerFromSummaryTest(absltest.TestCase):
     init = initialization.NumericalInitializer(
         name='age',
         num_partitions=4,
-        grid_size=10001,
+        max_grid_size=10001,
         attribute=attr,
     ).configure(zcdp_rho=1.0)
     event = init.dp_event
@@ -610,14 +638,13 @@ class NumericalInitializerFromSummaryTest(absltest.TestCase):
   def test_integer_attribute_snaps_edges(self):
     rng = np.random.default_rng(42)
     attr = domain.NumericalAttribute(min_value=0, max_value=10, dtype='int')
-    grid_size = 10001
-    counts = rng.integers(0, 30, size=grid_size)
     init = initialization.NumericalInitializer(
         name='count',
         num_partitions=4,
         attribute=attr,
-        grid_size=grid_size,
     ).configure(zcdp_rho=1.0)
+    # Integer grid: grid_size = 11 (one bin per integer 0..10).
+    counts = rng.integers(0, 30, size=init.grid_size)
     cm = init.from_summary(rng, counts)
     for edge in cm.bin_edges:
       self.assertEqual(edge, int(edge))
@@ -626,12 +653,12 @@ class NumericalInitializerFromSummaryTest(absltest.TestCase):
     """Both entry points should produce valid ColumnMeasurements."""
     rng = np.random.default_rng(42)
     attr = domain.NumericalAttribute(min_value=0.0, max_value=100.0)
-    grid_size = 10001
+    max_grid_size = 10001
     init = initialization.NumericalInitializer(
         name='x',
         num_partitions=4,
         attribute=attr,
-        grid_size=grid_size,
+        max_grid_size=max_grid_size,
     ).configure(zcdp_rho=1.0)
 
     data = np.linspace(0.0, 100.0, 500)
@@ -640,7 +667,7 @@ class NumericalInitializerFromSummaryTest(absltest.TestCase):
     self.assertIsNotNone(cm_call.measurement)
 
     rng2 = np.random.default_rng(42)
-    counts = np.random.randint(0, 100, size=grid_size)
+    counts = np.random.randint(0, 100, size=max_grid_size)
     cm_summary = init.from_summary(rng2, counts, estimated_total=500.0)
     self.assertIsNotNone(cm_summary.bin_edges)
     self.assertIsNotNone(cm_summary.measurement)

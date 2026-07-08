@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import dataclasses
+import math
 from typing import TypeVar
 
 import dp_accounting
@@ -80,20 +81,41 @@ class NumericalInitializer(primitives.DPMechanism):
   name: str
   num_partitions: int
   attribute: domain.NumericalAttribute
-  grid_size: int = 10_000_000
+  max_grid_size: int = 10_000_000
   mechanism: primitives.DPQuantiles | None = dataclasses.field(
       default=None, repr=False
   )
+
+  def __post_init__(self):
+    if self.max_grid_size < 2:
+      raise ValueError(f'max_grid_size must be >= 2, got {self.max_grid_size}.')
+
+  @property
+  def _grid_spec(self) -> tuple[float, float, int]:
+    """Returns (lower, upper, grid_size) for the quantile candidate grid."""
+    attr = self.attribute
+    if attr.dtype == 'int':
+      int_range = int(attr.max_value - attr.min_value + 1)
+      step = max(1, math.ceil(int_range / self.max_grid_size))
+      gs = math.ceil(int_range / step)
+      return (attr.min_value, attr.min_value + (gs - 1) * step, gs)
+    return (attr.min_value, attr.exclusive_max_value, self.max_grid_size)
+
+  @property
+  def grid_size(self) -> int:
+    """Grid size used for histogram construction."""
+    return self._grid_spec[2]
 
   def configure(
       self, *, zcdp_rho: float, delta: float = 0.0, epsilon_ratio: float = 2.0
   ) -> NumericalInitializer:
     """Returns a copy calibrated to the given zCDP budget."""
+    lower, upper, gs = self._grid_spec
     mechanism = primitives.DPQuantiles(
         num_partitions=self.num_partitions,
-        lower=self.attribute.min_value,
-        upper=self.attribute.exclusive_max_value,
-        grid_size=self.grid_size,
+        lower=lower,
+        upper=upper,
+        grid_size=gs,
     ).configure(zcdp_rho=zcdp_rho, epsilon_ratio=epsilon_ratio)
     return dataclasses.replace(self, mechanism=mechanism)
 
@@ -121,16 +143,13 @@ class NumericalInitializer(primitives.DPMechanism):
       A ColumnMeasurement with bin edges and optionally a heuristic measurement.
     """
     _validate_mechanism(self.mechanism)
-    lower = self.attribute.min_value
-    upper = self.attribute.exclusive_max_value
-    # Convert to float64 first so object-typed arrays (e.g. containing None)
-    # become proper float64 with NaN values.
+    lower, upper, gs = self._grid_spec
     float_data = np.asarray(data, dtype=float)
     finite_data = float_data[np.isfinite(float_data)]
     clamped = np.clip(finite_data, lower, upper)
-    delta = (upper - lower) / (self.grid_size - 1)
+    delta = (upper - lower) / (gs - 1)
     indices = np.round((clamped - lower) / delta).astype(np.int64)
-    counts = np.bincount(indices, minlength=self.grid_size)
+    counts = np.bincount(indices, minlength=gs)
     return self.from_summary(rng, counts, estimated_total=estimated_total)
 
   def from_summary(
@@ -161,8 +180,8 @@ def edges_to_column_measurement(
 ):
   """Converts raw quantile edges into a ColumnMeasurement.
 
-  Handles integer snapping, edge deduplication, degenerate-bin removal, and
-  categorical attribute construction.  Shared between the data-based
+  Handles edge deduplication, degenerate-bin removal, and categorical
+  attribute construction.  Shared between the data-based
   ``NumericalInitializer`` and the histogram-based
   ``HistogramNumericalInitializer``.
 
@@ -177,17 +196,9 @@ def edges_to_column_measurement(
     A ``ColumnMeasurement`` with bin edges and optionally a measurement.
   """
   raw_edges = np.asarray(raw_edges, dtype=float)
-  if attribute.dtype == 'int':
-    # Snap edges to the integer lattice.  Bins are right-closed (left,
-    # right] and discretize uses searchsorted with side='left', so
-    # floor preserves the partition: edge 4.7 → floor 4 gives the
-    # same integer split {≤4} | {≥5} via (…, 4] | (4, …].
-    raw_edges = np.floor(raw_edges)
   bin_edges, edge_counts = np.unique(raw_edges, return_counts=True)
-  # For integer data with upper=max_value+1, edges can land at max_value
-  # after floor.  Remove such edges and absorb their count into the last
-  # bin's weight so categorical_attribute_from_edges doesn't create a
-  # degenerate (max_value, max_value] tail bin.
+  # Edges at or above max_value produce a degenerate empty tail bin;
+  # absorb their weight into the last real bin.
   max_val = attribute.max_value
   if len(bin_edges) > 0 and bin_edges[-1] >= max_val:
     tail_count = edge_counts[-1]

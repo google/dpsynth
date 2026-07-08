@@ -57,8 +57,8 @@ class _EncodeColumns(beam.DoFn):
     for column, init in initializers.items():
       if isinstance(init, initialization.NumericalInitializer):
         attr = init.attribute
-        lower = attr.min_value
-        delta = (attr.exclusive_max_value - lower) / (init.grid_size - 1)
+        lower, upper, gs = init._grid_spec
+        delta = (upper - lower) / (gs - 1)
         meta = {'attribute': attr, 'lower': lower, 'delta': delta}
         self._specs.append((column, 'numerical', meta))
 

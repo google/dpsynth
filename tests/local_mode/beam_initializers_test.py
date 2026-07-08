@@ -31,9 +31,9 @@ def _store(x):
 
 class NumericalHistogramTest(absltest.TestCase):
 
-  def _run(self, rows, attr, grid_size=101):
+  def _run(self, rows, attr, max_grid_size=101):
     init = initialization.NumericalInitializer(
-        name='x', num_partitions=4, attribute=attr, grid_size=grid_size
+        name='x', num_partitions=4, attribute=attr, max_grid_size=max_grid_size
     ).calibrate(zcdp_rho=np.inf)
     _TEST_RESULTS.clear()
     with beam.Pipeline() as p:
