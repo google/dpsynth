@@ -14,21 +14,26 @@
 
 """Bulk LLM inference for synthetic text generation."""
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 import concurrent.futures
 import dataclasses
 import enum
 import functools
+import json
 import random
 import re
 import time
 from typing import Protocol, TypeVar
 
 from absl import logging
+from dpsynth import domain
 from google import genai
 from google.genai import types
 import pandas as pd
 import pydantic
+
+# Schema accepted by annotate(): either a pydantic model or a dpsynth Domain.
+AnnotationSchema = type[pydantic.BaseModel] | Mapping[str, domain.AttributeType]
 
 
 class ModelName(enum.StrEnum):
@@ -51,32 +56,28 @@ class TextGenerationBackend(Protocol):
      typically via constrained decoding with a pydantic response schema.
   2. **Generation**: producing free-form synthetic text conditioned on features.
 
-  **Index-alignment guarantee**: both methods return output that is
-  positionally aligned with the input sequence — ``len(output) == len(input)``
-  always holds.  Failed items are represented as null rows (annotation) or
-  empty strings (generation).
+  **Index-alignment guarantee**: both methods return output positionally
+  aligned with the input.  ``len(output) == len(input)`` always holds.
+  Annotation includes a ``_fields_decoded`` column (0 to ``len(schema)``).
+  Generation represents failures as empty strings.
   """
 
   def annotate(
       self,
       texts: Sequence[str],
-      schema: type[pydantic.BaseModel],
+      schema: AnnotationSchema,
       system_prompt: str,
   ) -> pd.DataFrame:
     """Extract structured features from texts using an LLM.
 
     Args:
       texts: Input texts to annotate.
-      schema: Pydantic model class defining the features to extract.  Fields may
-        use ``Literal`` type annotations for constrained decoding or plain types
-        such as ``str`` for open-ended annotation.  Field names and descriptions
-        guide the LLM.
-      system_prompt: System-level instructions for the LLM describing how to
-        annotate the texts.
+      schema: Pydantic ``BaseModel`` subclass or dpsynth ``Domain`` dict.
+      system_prompt: System-level instructions for the LLM.
 
     Returns:
-      A DataFrame with exactly ``len(texts)`` rows and one column per field
-      in ``schema``.  Rows where annotation failed contain ``None`` values.
+      DataFrame with ``len(texts)`` rows, one column per schema field,
+      plus ``_fields_decoded`` (int, 0 to ``len(schema)``).
     """
     ...
 
@@ -128,9 +129,9 @@ class GenAIBackend:
   def _parse_job_responses(
       self,
       batch_job: types.BatchJob,
-      schema: type[pydantic.BaseModel],
-  ) -> list[dict[str, str | None]]:
-    """Parses responses from a completed BatchJob."""
+      schema: AnnotationSchema,
+  ) -> list[tuple[dict[str, object], int]]:
+    """Parses responses; returns ``(row, fields_decoded)`` per response."""
     if batch_job.state != types.JobState.JOB_STATE_SUCCEEDED:
       error_msg = (
           f'Batch job {batch_job.name} ended with state={batch_job.state}.'
@@ -139,44 +140,27 @@ class GenAIBackend:
         error_msg += f' Error: {batch_job.error}'
       raise RuntimeError(error_msg)
 
-    null_row = {f: None for f in schema.model_fields.keys()}
-
     inlined_responses = (
         batch_job.dest.inlined_responses if batch_job.dest else []
     ) or []
 
-    chunk_rows = []
-    for i, inlined_resp in enumerate(inlined_responses):
-      row = dict(null_row)  # Default to null row
+    field_names = _schema_field_names(schema)
+    results: list[tuple[dict[str, object], int]] = []
+    for inlined_resp in inlined_responses:
       try:
         if inlined_resp.error:
-          logging.warning(
-              'Batch result %d in job %s had error: %s',
-              i,
-              batch_job.name,
-              inlined_resp.error,
-          )
+          raise ValueError('Item-level error from batch API.')
+        response_text = inlined_resp.response and inlined_resp.response.text
+        if not response_text:
+          raise ValueError('Empty response text.')
+        row, count = _parse_response(schema, response_text)
+        results.append((row, count))
+      except Exception:  # pylint: disable=broad-except
+        if isinstance(schema, Mapping):
+          results.append((_default_row(schema), 0))
         else:
-          response_text = inlined_resp.response and inlined_resp.response.text
-          if response_text:
-            row = schema.model_validate_json(
-                _strip_markdown_fences(response_text)
-            ).model_dump()
-          else:
-            logging.warning(
-                'Empty batch response in job %s for text %d.',
-                batch_job.name,
-                i,
-            )
-      except Exception as e:  # pylint: disable=broad-except
-        logging.warning(
-            'Failed to parse batch result %d in job %s: %s',
-            i,
-            batch_job.name,
-            e,
-        )
-      chunk_rows.append(row)
-    return chunk_rows
+          results.append(({f: None for f in field_names}, 0))
+    return results
 
   def _submit_and_poll_chunk(
       self,
@@ -214,21 +198,19 @@ class GenAIBackend:
   def annotate(
       self,
       texts: Sequence[str],
-      schema: type[pydantic.BaseModel],
+      schema: AnnotationSchema,
       system_prompt: str,
   ) -> pd.DataFrame:
     """Extract structured features via the GenAI Batch API.
 
-    Submits texts as inlined requests to the batch prediction endpoint,
-    polls for completion, and parses the inlined responses.
-
     Args:
       texts: Input texts to annotate.
-      schema: Pydantic model used as the ``response_schema``.
+      schema: Pydantic model or dpsynth Domain dict for constrained decoding.
       system_prompt: System-level instructions for the LLM.
 
     Returns:
-      DataFrame with exactly ``len(texts)`` rows.  Failed rows have ``None``.
+      DataFrame with ``len(texts)`` rows, one column per schema field,
+      plus ``_fields_decoded`` (int, 0 to ``len(schema)``).
 
     Raises:
       RuntimeError: If the batch job fails or is cancelled.
@@ -236,7 +218,7 @@ class GenAIBackend:
     config = types.GenerateContentConfig(
         system_instruction=system_prompt,
         response_mime_type='application/json',
-        response_schema=schema,
+        response_schema=_to_genai_schema(schema),
     )
 
     chunks = [
@@ -262,19 +244,24 @@ class GenAIBackend:
 
     logging.info('Batch annotate: all jobs completed. Parsing responses...')
 
-    all_rows = []
+    all_rows: list[dict[str, object]] = []
+    fields_decoded: list[int] = []
     for batch_job, chunk_texts in zip(completed_jobs, chunks, strict=True):
-      chunk_rows = self._parse_job_responses(batch_job, schema)
+      chunk_results = self._parse_job_responses(batch_job, schema)
 
-      if len(chunk_rows) != len(chunk_texts):
+      if len(chunk_results) != len(chunk_texts):
         raise ValueError(
-            f'Batch annotate: job {batch_job.name} got {len(chunk_rows)}'
+            f'Batch annotate: job {batch_job.name} got {len(chunk_results)}'
             f' results for {len(chunk_texts)} inputs.'
         )
 
-      all_rows.extend(chunk_rows)
+      for row, count in chunk_results:
+        all_rows.append(row)
+        fields_decoded.append(count)
 
-    return pd.DataFrame(all_rows)
+    df = pd.DataFrame(all_rows)
+    df['_fields_decoded'] = fields_decoded
+    return df
 
   def generate(self, prompts: Sequence[str]) -> list[str]:
     """Generate free-form text via google.genai.
@@ -307,6 +294,116 @@ def _strip_markdown_fences(text):
   regex = r'^\s*```(?:json)?\s*\n(.*?)\n\s*```\s*$'
   m = re.compile(regex, re.DOTALL).match(text)
   return m.group(1).strip() if m else text.strip()
+
+
+def _schema_field_names(schema: AnnotationSchema) -> list[str]:
+  """Returns field names for either schema type."""
+  if isinstance(schema, Mapping):
+    return list(schema.keys())
+  return list(schema.model_fields.keys())
+
+
+def _to_genai_schema(schema: AnnotationSchema):
+  """Converts an AnnotationSchema to the format GenAI expects."""
+  if isinstance(schema, Mapping):
+    return domain_to_json_schema(schema)
+  return schema
+
+
+def _default_value(attr: domain.AttributeType) -> object:
+  """Returns the default sentinel value for a domain attribute type."""
+  if isinstance(attr, domain.CategoricalAttribute):
+    return attr.possible_values[attr.out_of_domain_index]
+  if isinstance(attr, domain.OpenSetCategoricalAttribute):
+    return attr.default_value
+  if isinstance(attr, domain.NumericalAttribute):
+    return attr.min_value
+  if isinstance(attr, domain.FreeFormTextAttribute):
+    return ''
+  raise ValueError(f'Unsupported attribute type: {type(attr)}')
+
+
+def _default_row(
+    schema: Mapping[str, domain.AttributeType],
+) -> dict[str, object]:
+  """Returns a row with all fields set to their default sentinel values."""
+  return {name: _default_value(attr) for name, attr in schema.items()}
+
+
+def _parse_response(
+    schema: AnnotationSchema,
+    response_text: str,
+) -> tuple[dict[str, object], int]:
+  """Parses a JSON response, returning ``(row, fields_decoded)``."""
+  cleaned = _strip_markdown_fences(response_text)
+  if isinstance(schema, Mapping):
+    try:
+      parsed = json.loads(cleaned)
+    except json.JSONDecodeError:
+      return _default_row(schema), 0
+    if not isinstance(parsed, dict):
+      parsed = {}
+    row = {}
+    fields_decoded = 0
+    for name, attr in schema.items():
+      if name in parsed:
+        row[name] = parsed[name]
+        fields_decoded += 1
+      else:
+        row[name] = _default_value(attr)
+    return row, fields_decoded
+  result = schema.model_validate_json(cleaned).model_dump()
+  return result, len(result)
+
+
+_PYTHON_TO_JSON_TYPE: dict[type[object], str] = {
+    str: 'string',
+    int: 'integer',
+    float: 'number',
+    bool: 'boolean',
+}
+
+
+def _categorical_json_type(
+    possible_values: Sequence[domain.CategoricalValue],
+) -> str:
+  """Infers the JSON Schema type from homogeneous possible_values."""
+  if not possible_values:
+    return 'string'
+  value_type = type(possible_values[0])
+  return _PYTHON_TO_JSON_TYPE.get(value_type, 'string')
+
+
+def domain_to_json_schema(
+    domain_spec: Mapping[str, domain.AttributeType],
+) -> dict[str, object]:
+  """Converts a dpsynth Domain to a JSON schema dict for GenAI."""
+  properties = {}
+  for name, attr in domain_spec.items():
+    if isinstance(attr, domain.CategoricalAttribute):
+      json_type = _categorical_json_type(attr.possible_values)
+      prop = {'type': json_type, 'enum': attr.possible_values}
+    elif isinstance(attr, domain.OpenSetCategoricalAttribute):
+      prop = {'type': 'string'}
+    elif isinstance(attr, domain.NumericalAttribute):
+      prop = {
+          'type': 'number',
+          'minimum': attr.min_value,
+          'maximum': attr.max_value,
+      }
+    elif isinstance(attr, domain.FreeFormTextAttribute):
+      prop = {'type': 'string'}
+    else:
+      raise ValueError(f'Unsupported attribute type for {name!r}: {type(attr)}')
+    if attr.description:
+      prop['description'] = attr.description
+    properties[name] = prop
+
+  return {
+      'type': 'object',
+      'properties': properties,
+      'required': list(properties.keys()),
+  }
 
 
 T = TypeVar('T')
