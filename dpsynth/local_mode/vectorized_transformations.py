@@ -179,7 +179,7 @@ def undiscretize(
     ``attribute_domain.resolved_sentinel``.
   """
   rng = np.random.default_rng(rng)
-  min_, max_ = attribute_domain.min_value, attribute_domain.max_value
+  min_, max_ = attribute_domain.exclusive_min_value, attribute_domain.max_value
   _validate_bin_edges(bin_edges, attribute_domain)
 
   if bin_edges.size == 0:
@@ -195,8 +195,10 @@ def undiscretize(
   sentinel = attribute_domain.resolved_sentinel
 
   if handling == 'interval':
-    # First interval is closed on both sides; the rest are half-open.
-    strs = [f'[{lefts[0]}, {rights[0]}]'] + [
+    # First interval is closed on both sides (display uses min_value for
+    # readability); the rest are half-open (left, right].
+    display_min = attribute_domain.min_value
+    strs = [f'[{display_min}, {rights[0]}]'] + [
         f'({l}, {r}]' for l, r in zip(lefts[1:], rights[1:])
     ]
     values = np.array(strs, dtype=str)

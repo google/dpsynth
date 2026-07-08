@@ -56,7 +56,8 @@ import yaml
 
 PathType = pathlib.Path
 
-CategoricalValue: TypeAlias = bool | int | str
+CategoricalValue: TypeAlias = bool | int | float | str
+
 
 IntervalHandling = Literal['midpoint', 'sample', 'interval']
 

@@ -44,11 +44,17 @@ class TestDomain(absltest.TestCase):
           possible_values=['a', 'b'], out_of_domain_index=2
       )
 
-  def test_mixed_types_rejected(self):
-    with self.assertRaises(ValueError):
-      domain.CategoricalAttribute(possible_values=['a', 1])
+  def test_none_rejected(self):
     with self.assertRaises(ValueError):
       domain.CategoricalAttribute(possible_values=[None, 'a'])
+
+  def test_non_categorical_type_rejected(self):
+    with self.assertRaises(ValueError):
+      domain.CategoricalAttribute(possible_values=['a', b'bytes'])
+
+  def test_mixed_native_types_rejected(self):
+    with self.assertRaises(ValueError):
+      domain.CategoricalAttribute(possible_values=['<OOD>', 1, True])
 
   def test_invalid_range(self):
     with self.assertRaises(ValueError):

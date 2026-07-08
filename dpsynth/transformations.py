@@ -194,7 +194,7 @@ def create_discretize_transformation(
     )
 
   bin_edges = np.r_[
-      attribute_domain.min_value,
+      attribute_domain.exclusive_min_value,
       bin_edges,
       attribute_domain.max_value,
   ]
@@ -266,7 +266,7 @@ def create_uniform_discretize_transformation(
     interval in the CategoricalAttribute and vice versa.
   """
   bin_edges = np.linspace(
-      attribute_domain.min_value,
+      attribute_domain.exclusive_min_value,
       attribute_domain.max_value,
       num_bins + 1,
   )

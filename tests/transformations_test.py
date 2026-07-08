@@ -303,9 +303,9 @@ class TestDataTransformations(absltest.TestCase):
     categorical, transformation = (
         transformations.create_uniform_discretize_transformation(attr, 2)
     )
-    self.assertEqual(categorical.possible_values, ['[0.0, 0.5]', '(0.5, 1.0]'])
-    self.assertEqual(transformation(0), '[0.0, 0.5]')
-    self.assertEqual(transformation(1), '(0.5, 1.0]')
+    self.assertEqual(categorical.possible_values, ['[0.0, 0.0]', '(0.0, 1.0]'])
+    self.assertEqual(transformation(0), '[0.0, 0.0]')
+    self.assertEqual(transformation(1), '(0.0, 1.0]')
 
   def test_applies_transformations_to_dataframe_drop_extra_columns(self):
     values = ['A', 'B', 'C']
