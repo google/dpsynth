@@ -15,7 +15,6 @@
 """Primitive DP building blocks."""
 
 from collections.abc import Iterable
-import functools
 
 from dpsynth.pipeline_transformations import types
 import mbi
@@ -294,7 +293,9 @@ def compute_errors(
     marginals = [one_way_dp_marginals[a].noisy_measurement for a in clique]
 
     # Compute outer product of all marginals
-    marginal_of_independent = functools.reduce(np.multiply.outer, marginals)  # pyrefly: ignore[incompatible-overload-residual]
+    letters = 'abcdefghijklmnopqrstuvwxyz'[: len(clique)]
+    formula = ','.join(letters) + '->' + ''.join(letters)
+    marginal_of_independent = np.einsum(formula, *marginals)
     # Scale back
     marginal_of_independent = marginal_of_independent / (
         estimated_dataset_size ** (len(clique) - 1)

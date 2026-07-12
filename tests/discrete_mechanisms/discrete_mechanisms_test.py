@@ -90,7 +90,7 @@ class CompressionPropertyTest(parameterized.TestCase):
     data = _make_skewed_dataset(rng)
     original_domain = data.domain
 
-    result = config.calibrate(zcdp_rho=_ZCDP_RHO)(rng, data)
+    result = config.configure(zcdp_rho=_ZCDP_RHO)(rng, data)
 
     self.assertEqual(result.synthetic_data.domain, original_domain)
 
@@ -104,7 +104,7 @@ class CompressionPropertyTest(parameterized.TestCase):
         rng, data, [('a',), ('b',)], gdp_sigma=1.0
     )
 
-    mechanism = config.calibrate(zcdp_rho=_ZCDP_RHO)
+    mechanism = config.configure(zcdp_rho=_ZCDP_RHO)
     result = mechanism(rng, data, initial_measurements=initial_measurements)
 
     self.assertEqual(result.synthetic_data.domain, original_domain)

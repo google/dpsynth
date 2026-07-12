@@ -47,6 +47,12 @@ dev = [
     "pytest",
     "pytest-xdist",
 ]
+text = [
+    "flax",
+    "gemma",
+    "jax-privacy @ git+https://github.com/google-deepmind/jax_privacy.git",
+    "optax",
+]
 docs = [
     "sphinx",
     "sphinx-rtd-theme",

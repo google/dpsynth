@@ -19,6 +19,7 @@ from absl.testing import absltest
 from dpsynth import domain
 from dpsynth.text import bulk_inference
 from dpsynth.text import prompts
+import pandas as pd
 import pydantic
 
 Topic = Literal['Science', 'Technology', 'Other']
@@ -199,7 +200,7 @@ class GenAIBackendAnnotateTest(absltest.TestCase):
     self.assertLen(df, 2)
     self.assertEqual(df.iloc[0]['_fields_decoded'], 0)
     self.assertEqual(df.iloc[1]['_fields_decoded'], 2)
-    self.assertIsNone(df.iloc[0]['topic'])  # Pydantic fills None.
+    self.assertTrue(pd.isna(df.iloc[0]['topic']))  # NaN for failed row.
     self.assertEqual(df.iloc[1]['topic'], 'Science')
 
   def test_annotate_raises_on_failed_job(self, mock_client_cls):

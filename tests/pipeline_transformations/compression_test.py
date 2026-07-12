@@ -50,9 +50,6 @@ class DomainCompressionTest(absltest.TestCase):
     compression_transforms = compression.get_domain_compression_transforms(
         [linear_measurements], backend, 'Get compression transforms'
     )
-    compression_transforms = backend.to_multi_transformable_collection(
-        compression_transforms
-    )
 
     compressed_data = compression.apply_compression_transforms(
         [linear_measurements],

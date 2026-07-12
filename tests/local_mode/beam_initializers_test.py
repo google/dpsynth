@@ -116,7 +116,7 @@ class OpenSetCountsTest(absltest.TestCase):
     attr = domain.OpenSetCategoricalAttribute(default_value='<OOD>')
     init = initialization.OpenSetCategoricalInitializer(
         name='col', attribute=attr, delta=0.01, min_count=1
-    ).calibrate(zcdp_rho=np.inf)
+    ).configure(zcdp_rho=np.inf)
     rows = [
         {'col': 'apple'},
         {'col': 'apple'},
@@ -151,17 +151,17 @@ class BeamInitializeTest(absltest.TestCase):
         'score': (
             initialization.NumericalInitializer(
                 name='score', num_partitions=4, attribute=num_attr
-            ).calibrate(zcdp_rho=np.inf)
+            ).configure(zcdp_rho=np.inf)
         ),
         'grade': (
             initialization.CategoricalInitializer(
                 name='grade', attribute=cat_attr
-            ).calibrate(zcdp_rho=np.inf)
+            ).configure(zcdp_rho=np.inf)
         ),
         'tag': (
             initialization.OpenSetCategoricalInitializer(
                 name='tag', attribute=open_attr, delta=0.01, min_count=1
-            ).calibrate(zcdp_rho=np.inf)
+            ).configure(zcdp_rho=np.inf)
         ),
     }
 

@@ -130,14 +130,16 @@ class DiscreteMechanismResult:
       default_factory=list
   )
   diagnostics: MechanismDiagnostics | None = None
-  mappings: dict[str, np.ndarray] = dataclasses.field(default_factory=dict)
+  mappings: dict[str | int, np.ndarray] = dataclasses.field(
+      default_factory=dict
+  )
 
 
 def compression_mappings(
     one_way_measurements: list[mbi.LinearMeasurement],
-    compress_columns: bool | Sequence[str] = False,
+    compress_columns: bool | Sequence[str | int] = False,
     constraints: tuple[mbi.Constraint, ...] = (),
-) -> dict[str, np.ndarray]:
+) -> dict[str | int, np.ndarray]:
   """Computes mappings that merge rare domain values for compression."""
   if not compress_columns:
     return {}
@@ -156,7 +158,7 @@ def compression_mappings(
       )
     cols -= constrained
 
-  mappings: dict[str, np.ndarray] = {}
+  mappings: dict[str | int, np.ndarray] = {}
   for m in one_way_measurements:
     col = m.clique[0]
     if col not in cols:
@@ -249,7 +251,7 @@ def compressed_measurement(
         'The measurement must be defined with respect to a one-way marginal,'
         f' got {one_way_measurement.clique}.'
     )
-  y = one_way_measurement.noisy_measurement
+  y = np.asarray(one_way_measurement.noisy_measurement)
   mapping = np.array([transform_fn(i) for i in range(y.size)])
   y2 = np.bincount(mapping, weights=y, minlength=size)
   coefs = np.sqrt(np.bincount(mapping, minlength=size))
@@ -292,7 +294,7 @@ def get_domain_compression_transformations(
 ) -> tuple[
     mbi.Domain,
     list[mbi.LinearMeasurement],
-    dict[str, transformations.DataTransformation[int, int]],
+    dict[str | int, transformations.DataTransformation[int, int]],
 ]:
   """Returns a new domain and transformations for compressing the domain.
 
@@ -417,7 +419,7 @@ def compiled_workload(
 
   # Precompute per-attribute weights so we can score each candidate in
   # O(|candidate|) instead of O(|workload|).
-  attr_weight: dict[str, float] = {}
+  attr_weight: dict[str | int, float] = {}
   for workload_cl, weight in workload.items():
     for attr in workload_cl:
       attr_weight[attr] = attr_weight.get(attr, 0.0) + weight
