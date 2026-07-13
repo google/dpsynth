@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import dataclasses
 import math
+from typing import Literal
 
 import dp_accounting
 from dpsynth import api
@@ -274,13 +275,14 @@ class DPQuantiles(DPMechanism):
     num_partitions: Number of quantile partitions (must be a power of 2).
     lower: Lower bound of the data domain.
     upper: Upper bound of the data domain (exclusive).
-    grid_size: Number of uniformly spaced grid points.
+    jitter_strategy: Tie-breaking jitter passed to ``quantiles_from_histogram``:
+      ``'refine'`` for integer attributes, ``'symmetric'`` for continuous ones.
   """
 
   num_partitions: int
   lower: float
   upper: float
-  grid_size: int = 10_000_000
+  jitter_strategy: Literal['symmetric', 'refine'] = 'symmetric'
   _epsilon_levels: tuple[float, ...] | None = dataclasses.field(
       default=None, repr=False
   )
@@ -336,14 +338,16 @@ class DPQuantiles(DPMechanism):
     """Returns quantile edges from a dense histogram of counts."""
     if self._epsilon_levels is None:
       raise ValueError(_UNCALIBRATED_MSG.format(param='_epsilon_levels'))
-    return _quantiles.quantiles_from_histogram(
+    indices = _quantiles.quantiles_from_histogram(
         rng,
         counts,
-        self.lower,
-        self.upper,
         epsilon_levels=np.asarray(self._epsilon_levels),
-        grid_size=self.grid_size,
+        jitter_strategy=self.jitter_strategy,
     )
+    # Map cell indices back to domain values; delta is the grid step, which
+    # equals the integer step for integer attributes so edges stay integer.
+    delta = (self.upper - self.lower) / max(1, np.asarray(counts).size - 1)
+    return [self.lower + i * delta for i in indices]
 
 
 @dataclasses.dataclass

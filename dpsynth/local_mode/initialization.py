@@ -22,6 +22,7 @@ from typing import TypeVar
 
 import dp_accounting
 from dpsynth import domain
+from dpsynth.local_mode import _quantiles
 from dpsynth.local_mode import primitives
 from dpsynth.local_mode import vectorized_transformations as vtx
 import mbi
@@ -95,8 +96,11 @@ class NumericalInitializer(primitives.DPMechanism):
     """Returns (lower, upper, grid_size) for the quantile candidate grid."""
     attr = self.attribute
     if attr.dtype == 'int':
+      # Reserve budget for the m-fold refinement so the refined grid fits.
+      m = _quantiles.jitter_factor(self.num_partitions)
+      budget = max(2, self.max_grid_size // m)
       int_range = int(attr.max_value - attr.min_value + 1)
-      step = max(1, math.ceil(int_range / self.max_grid_size))
+      step = max(1, math.ceil(int_range / budget))
       gs = math.ceil(int_range / step)
       return (attr.min_value, attr.min_value + (gs - 1) * step, gs)
     return (attr.min_value, attr.exclusive_max_value, self.max_grid_size)
@@ -110,12 +114,14 @@ class NumericalInitializer(primitives.DPMechanism):
       self, *, zcdp_rho: float, delta: float = 0.0, epsilon_ratio: float = 2.0
   ) -> NumericalInitializer:
     """Returns a copy calibrated to the given zCDP budget."""
-    lower, upper, gs = self._grid_spec
+    lower, upper, _ = self._grid_spec
     mechanism = primitives.DPQuantiles(
         num_partitions=self.num_partitions,
         lower=lower,
         upper=upper,
-        grid_size=gs,
+        jitter_strategy=(
+            'refine' if self.attribute.dtype == 'int' else 'symmetric'
+        ),
     ).configure(zcdp_rho=zcdp_rho, epsilon_ratio=epsilon_ratio)
     return dataclasses.replace(self, mechanism=mechanism)
 

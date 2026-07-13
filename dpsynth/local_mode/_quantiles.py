@@ -15,16 +15,31 @@
 """DP quantiles from dense histograms via recursive median bisection.
 
 This module computes differentially private quantile edges from a dense
-histogram of counts, using the discrete exponential mechanism.  The primary
-use case is a two-pass pipeline: a first pass computes a dense histogram
-over a fine-grained grid, then ``quantiles_from_histogram`` finds DP
-quantiles from that histogram without touching individual records.
+histogram of counts, using the discrete exponential mechanism.  It works purely
+in index space -- ``quantiles_from_histogram`` returns cell indices into the
+histogram, and the caller maps those indices to domain values.  The primary use
+case is a two-pass pipeline: a first pass computes a dense histogram over a
+fine-grained grid, then ``quantiles_from_histogram`` finds DP quantile indices
+from that histogram without touching individual records.
 
-Public API:
-  - ``quantiles_from_histogram``: DP quantiles via recursive median splits.
+Tie handling via jitter
+-----------------------
+Recursive median bisection needs each record assigned to one side of every
+split independently.  A "spike" of records tied on one grid cell breaks this: a
+whole-cell split sends all that mass to one side, biasing the quantiles and
+collapsing sub-ranges (dropping edges).  We fix this by breaking ties directly
+in the histogram domain rather than over the raw data values -- each cell's
+count is redistributed to nearby cells as ``Multinomial(count, kernel)`` (one
+draw per non-empty cell), which is distributionally identical to independently
+perturbing each record and so needs no extra privacy budget.  The ``refine``
+strategy uses a strictly-positive kernel over refined sub-cells (value-
+preserving); the ``symmetric`` strategy uses a symmetric kernel over neighboring
+grid cells.
 """
 
 from __future__ import annotations
+
+from typing import Literal
 
 import numpy as np
 import scipy.special
@@ -64,51 +79,67 @@ def _median_from_histogram(
   return int(rng.choice(total_points, p=probs))
 
 
+def jitter_factor(num_partitions):
+  """Returns a data-independent jitter resolution m from num_partitions."""
+  # m >= num_partitions keeps each jittered cell below one partition's mass;
+  # the 4x absorbs multinomial fluctuation.
+  return max(1, 4 * num_partitions)
+
+
 def quantiles_from_histogram(
     rng: np.random.Generator,
     counts: np.ndarray,
-    lower: float,
-    upper: float,
     epsilon_levels: np.ndarray,
-    grid_size: int = 10_000_000,
-) -> list[float]:
-  """Computes DP quantiles from a dense histogram via recursive median splits.
+    jitter_strategy: Literal['symmetric', 'refine'],
+) -> list[int]:
+  """DP quantile edge indices into ``counts`` via jittered median bisection.
 
-  Uses the discrete exponential mechanism to recursively find medians,
-  splitting the histogram at each level to produce ``num_buckets - 1``
-  quantile edges.  The number of buckets is ``2 ** len(epsilon_levels)``.
+  Operates purely in index space: it returns cell indices into ``counts`` and
+  leaves the mapping from index to domain value to the caller.
 
   Args:
     rng: A numpy random number generator.
-    counts: Dense 1D histogram of shape ``(grid_size,)``.
-    lower: Lower bound of the data domain.
-    upper: Upper bound of the data domain (exclusive).
+    counts: Dense 1D histogram counts.
     epsilon_levels: Per-level exponential mechanism epsilons, ordered from the
       deepest (finest) level to the shallowest (coarsest).
-    grid_size: Number of uniformly spaced grid points spanning ``[lower,
-      upper]``.
+    jitter_strategy: Specifies the pre-processing jitter strategy, -
+      'symmetric': jitter mass to +/- m//2 neighbors on the same grid. -
+      'refine': jitter mass to m equivalent sub-cells.
 
   Returns:
-    A sorted list of ``2 ** len(epsilon_levels) - 1`` quantile edge values.
+    A sorted list of ``2 ** len(epsilon_levels) - 1`` cell indices.
   """
-  levels = len(epsilon_levels)
-  if levels == 0:
-    return []
+  counts = np.asarray(counts)
+  m = jitter_factor(2 ** len(epsilon_levels))
 
-  # Uniform grid: counts[i] corresponds to value lower + i * delta.
-  delta = (upper - lower) / (grid_size - 1)
+  if jitter_strategy == 'refine':
+    stride, offsets = m, np.arange(m)
+  else:
+    half = m // 2
+    stride, offsets = 1, np.arange(-half, half + 1)
+
+  # Scatter each cell's mass over its jittered targets: same law as perturbing
+  # each record, so it breaks ties without spending extra privacy budget.
+  num_cells = counts.size * stride
+  nz = np.flatnonzero(counts)
+  probas = np.full(offsets.size, 1.0 / offsets.size)
+  split = rng.multinomial(counts[nz].astype(np.int64), probas)
+  targets = np.clip(nz[:, None] * stride + offsets, 0, num_cells - 1)
+  jittered = np.bincount(
+      targets.flatten(), weights=split.flatten(), minlength=num_cells
+  )
 
   def _rec(lo_idx, hi_idx, depth):
-    if depth == 0 or lo_idx >= hi_idx:
+    if depth == 0:
       return []
-    sub_counts = counts[lo_idx:hi_idx]
-    median_local = _median_from_histogram(
-        rng, sub_counts, epsilon_levels[depth - 1]
+    median_idx = lo_idx + _median_from_histogram(
+        rng, jittered[lo_idx:hi_idx], epsilon_levels[depth - 1]
     )
-    median_global_idx = lo_idx + median_local
-    median_value = lower + median_global_idx * delta
-    left = _rec(lo_idx, median_global_idx, depth - 1)
-    right = _rec(median_global_idx, hi_idx, depth - 1)
-    return left + [median_value] + right
+    left = _rec(lo_idx, median_idx, depth - 1)
+    right = _rec(median_idx, hi_idx, depth - 1)
+    return left + [median_idx] + right
 
-  return _rec(0, len(counts), levels)
+  result = _rec(0, jittered.size, len(epsilon_levels))
+  if jitter_strategy == 'refine':
+    result = [idx // m for idx in result]
+  return result

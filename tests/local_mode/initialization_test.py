@@ -16,6 +16,7 @@ from absl.testing import absltest
 from absl.testing import parameterized
 import dp_accounting
 from dpsynth import domain
+from dpsynth.local_mode import _quantiles
 from dpsynth.local_mode import initialization
 from dpsynth.local_mode import vectorized_transformations as vtx
 import numpy as np
@@ -158,6 +159,19 @@ class InitializationTest(absltest.TestCase):
     result = init(rng, np.linspace(0, 100, 100))
     self.assertIsNotNone(result.categorical_attribute)
 
+  def test_int_grid_reserves_budget_for_jitter_refinement(self):
+    # A wide integer range with many partitions must not blow past
+    # max_grid_size once the m-fold jitter refinement is applied.
+    attr = domain.NumericalAttribute(
+        min_value=0, max_value=10_000_000, dtype='int'
+    )
+    max_grid_size = 100_000
+    init = initialization.NumericalInitializer(
+        name='x', num_partitions=64, attribute=attr, max_grid_size=max_grid_size
+    )
+    m = _quantiles.jitter_factor(init.num_partitions)
+    self.assertLessEqual(init.grid_size * m, max_grid_size)
+
   def test_numerical_initializer_measurement_with_estimated_total(self):
     attr = domain.NumericalAttribute(min_value=0, max_value=10)
     rng = np.random.default_rng(0)
@@ -198,10 +212,12 @@ class InitializationTest(absltest.TestCase):
     initializer = initialization.NumericalInitializer(
         name='test', num_partitions=8, attribute=attr
     )
-    # All data at max_value: all edges should land at or near max_value.
-    data = np.array([10] * 100)
+    # A spread of lower values carrying most of the mass, plus a moderate spike
+    # at max_value.  The lower values form genuine interior bins, while the top
+    # quantile edges land at max_value and must be absorbed into the last bin.
+    data = np.concatenate([np.repeat(np.arange(0, 10), 20), np.full(100, 10)])
     result = initializer.configure(zcdp_rho=100.0)(
-        rng, data, estimated_total=100.0
+        rng, data, estimated_total=len(data)
     )
     # No edge should equal max_value (they get absorbed).
     if len(result.bin_edges) > 0:
@@ -210,8 +226,7 @@ class InitializationTest(absltest.TestCase):
     np.testing.assert_allclose(
         result.measurement.noisy_measurement.sum(), 1.0, atol=1e-10
     )
-    # The bin containing max_value=10 should get the most mass (either the
-    # last bin, or a bin that absorbed all degenerate edges).
+    # The last bin absorbs the max_value spike, so it should dominate.
     counts = result.measurement.noisy_measurement
     self.assertGreater(counts.max(), 1.0 / len(counts))
 
