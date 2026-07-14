@@ -182,6 +182,10 @@ class DeriveNumericalValuesTest(absltest.TestCase):
         dp_engine=dp_engine,
         attribute_keys_to_derive=attribute_keys,
         num_quantile_buckets=num_buckets,
+        public_bounds={
+            "feat1": domain.NumericalAttribute(min_value=0, max_value=9),
+            "feat2": domain.NumericalAttribute(min_value=10, max_value=100),
+        },
     )
 
     accountant.compute_budgets()
@@ -191,7 +195,7 @@ class DeriveNumericalValuesTest(absltest.TestCase):
     self.assertIn("feat1", derived_attrs_dict)
     self.assertIn("feat2", derived_attrs_dict)
 
-    # Assert feat1 (Range [0, 9])
+    # Assert feat1 uses the provided public range.
     feat1_output = derived_attrs_dict["feat1"]
     self.assertEqual(feat1_output.attribute.min_value, 0)
     self.assertEqual(feat1_output.attribute.max_value, 9)
@@ -201,7 +205,7 @@ class DeriveNumericalValuesTest(absltest.TestCase):
         feat1_output.quantiles, expected_quantiles_feat1, delta=10
     )
 
-    # Assert F2 (Range [10, 100])
+    # Assert F2 uses the provided public range.
     f2_output = derived_attrs_dict["feat2"]
     self.assertEqual(f2_output.attribute.min_value, 10)
     self.assertEqual(f2_output.attribute.max_value, 100)
@@ -226,6 +230,9 @@ class DeriveNumericalValuesTest(absltest.TestCase):
         dp_engine=dp_engine,
         attribute_keys_to_derive=["field"],
         num_quantile_buckets=3,
+        public_bounds={
+            "field": domain.NumericalAttribute(min_value=0, max_value=1)
+        },
     )
     accountant.compute_budgets()
     derived_attrs_list = list(derived_attrs)
@@ -245,6 +252,9 @@ class DeriveNumericalValuesTest(absltest.TestCase):
         dp_engine=dp_engine,
         attribute_keys_to_derive=["field"],
         num_quantile_buckets=4,
+        public_bounds={
+            "field": domain.NumericalAttribute(min_value=10, max_value=11)
+        },
     )
 
     accountant.compute_budgets()
@@ -254,8 +264,7 @@ class DeriveNumericalValuesTest(absltest.TestCase):
     output = derived_attrs_list[0]
     self.assertEqual(output.key, "field")
     self.assertEqual(output.attribute.min_value, 10)
-    # Constant column: derivation pads max_value to min_value + 1.
-    self.assertEqual(output.attribute.max_value, 11.0)
+    self.assertEqual(output.attribute.max_value, 11)
     self.assertLen(output.quantiles, 3)
     self.assertSequenceAlmostEqual(
         output.quantiles, [10.0, 10.0, 10.0], delta=1.0

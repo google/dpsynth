@@ -60,7 +60,11 @@ class DatasetEncodingTest(absltest.TestCase):
             ),
             # numerical attribute
             dataset_descriptor.AttributeDescriptor(
-                name="col3", data_type=dataset_descriptor.DataType.FLOAT
+                name="col3",
+                data_type=dataset_descriptor.DataType.FLOAT,
+                numerical_attribute=domain.NumericalAttribute(
+                    min_value=0.0, max_value=12.0, clip_to_range=False
+                ),
             ),
         ],
         data_record_converter=FakeDataRecordConverter(),
@@ -137,8 +141,33 @@ class DatasetEncodingTest(absltest.TestCase):
     self.assertEqual(decoded_data, expected_decoded_data)
 
     mock_derive_numerical.assert_called_once_with(
-        data, backend, dp_engine, [2], num_quantiles
+        data,
+        backend,
+        dp_engine,
+        [2],
+        num_quantiles,
+        {2: mock_numerical_attribute},
     )
+
+  def test_encode_dataset_raises_for_numerical_attribute_missing_bounds(self):
+    backend = pipeline_dp.LocalBackend()
+    accountant = pipeline_dp.NaiveBudgetAccountant(
+        total_epsilon=5.0, total_delta=1e-10
+    )
+    dp_engine = pipeline_dp.DPEngine(accountant, backend)
+    descriptors = dataset_descriptor.DatasetDescriptor(
+        attributes=[
+            dataset_descriptor.AttributeDescriptor(
+                name="col1", data_type=dataset_descriptor.DataType.FLOAT
+            ),
+        ],
+        data_record_converter=FakeDataRecordConverter(),
+    )
+
+    with self.assertRaisesRegex(ValueError, "Missing bounds for"):
+      dataset_encoding.encode_dataset(
+          [(1.0,), (2.0,)], backend, dp_engine, descriptors
+      )
 
   def test_get_indices_to_discretisize(self):
     descriptors = dataset_descriptor.DatasetDescriptor(
