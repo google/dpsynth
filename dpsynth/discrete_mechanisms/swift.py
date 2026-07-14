@@ -197,8 +197,14 @@ class SWIFTMechanism(api.DPMechanism):
     ########################################################
     # Precompile MirrorDescent + synth while measuring.    #
     ########################################################
+    # Use implicit-factor message passing so peak memory is bounded by the
+    # largest single clique super-factor rather than the sum of all clique
+    # beliefs (as in the HUGIN oracle). einsum_materialized is numerically
+    # stable and the fastest contraction on GPU.
     closed_oracle = functools.partial(
-        mbi.marginal_oracles.message_passing_stable, jtree=jtree
+        mbi.marginal_oracles.message_passing_implicit,
+        jtree=jtree,
+        contraction=mbi.marginal_oracles.einsum_materialized,
     )
     estimator = mbi.estimation.MirrorDescent(marginal_oracle=closed_oracle)
     rows = int(mbi.estimation.minimum_variance_unbiased_total(measurements))
@@ -223,6 +229,15 @@ class SWIFTMechanism(api.DPMechanism):
       )
       measurements.extend(new_measurements)
       logging.info('[SWIFT] Finished measurements.')
+
+    # The precomputed candidate marginals (`answers`) and the workload
+    # intermediates are dead once measurement is done, but they hold a large
+    # amount of host RAM (all candidate marginals materialized by
+    # `from_projectable`).  Estimation and, especially, column-by-column
+    # generation run afterwards; on host-memory-constrained slices the residual
+    # `answers` is enough to push generation over the host RAM limit.  Free them
+    # now so the peak during estimation/generation is lower.
+    del answers, errors, candidates
 
     ########################################################
     # Estimate the model using all measurements            #
