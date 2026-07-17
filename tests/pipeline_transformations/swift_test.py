@@ -35,6 +35,24 @@ class DummyDataRecordConverter(dataset_descriptor.DataRecordConverter):
 
 class SwiftTest(absltest.TestCase):
 
+  def test_add_noise_to_errors(self):
+    mechanism_spec = pipeline_dp.budget_accounting.MechanismSpec(
+        mechanism_type=pipeline_dp.budget_accounting.MechanismType.GAUSSIAN,
+        name="Swift Select Queries",
+    )
+    mechanism_spec.set_noise_standard_deviation(1.0)
+    errors = {(0, 1): 2.0, (1, 2): 4.0}
+
+    samples = np.array([
+        [swift._add_noise_to_errors(errors, mechanism_spec)[cl] for cl in errors]
+        for _ in range(1000)
+    ])
+    noise = samples - np.array(list(errors.values()))
+
+    self.assertGreater(np.std(noise), 0.0)
+    self.assertAlmostEqual(np.mean(noise), 0.0, delta=0.25)
+    self.assertAlmostEqual(np.std(noise), np.sqrt(len(errors)), delta=0.25)
+
   def test_fit_model(self):
     backend = pipeline_dp.LocalBackend()
     data = [(0, 1), (0, 1), (1, 0), (1, 1)]
