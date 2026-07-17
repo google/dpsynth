@@ -31,16 +31,6 @@ import numpy as np
 _M = TypeVar('_M')
 
 
-def _numerical_datavector(f: mbi.Factor) -> np.ndarray:
-  """Returns the L1-normalized datavector (sums to 1)."""
-  return f.normalize(1.0).datavector()  # pyrefly: ignore[bad-return]
-
-
-def _openset_datavector(x: mbi.Factor) -> np.ndarray:
-  """Returns the datavector with the unmeasured default slot (index 0) removed."""
-  return x.datavector()[1:]  # pyrefly: ignore[bad-return]
-
-
 @dataclasses.dataclass
 class ColumnMeasurement:
   """Result of running a column initializer on raw data.
@@ -220,13 +210,13 @@ def edges_to_column_measurement(
     if not attribute.clip_to_range:
       # Prepend zero weight for the OUT_OF_DOMAIN slot at index 0.
       bin_weights = np.r_[0, bin_weights]
-    normalized = bin_weights / bin_weights.sum()
-    stddev = 1.0 / (np.sqrt(zcdp_rho) * estimated_total)
+    counts = estimated_total * bin_weights / bin_weights.sum()
+    stddev = 1.0 / np.sqrt(zcdp_rho)
     measurement = mbi.LinearMeasurement(
-        normalized,
+        counts,
         (name,),
         stddev=stddev,
-        query=_numerical_datavector,  # pyrefly: ignore[bad-argument-type]
+        query=mbi.DatavectorQuery(use_for_total_estimation=False),
     )
 
   return ColumnMeasurement(cat_attr, bin_edges, measurement=measurement)
@@ -358,6 +348,6 @@ class OpenSetCategoricalInitializer(primitives.DPMechanism):
         result.estimated_counts,  # pyrefly: ignore[bad-argument-type]
         (self.name,),
         stddev=mechanism.sigma,  # pyrefly: ignore[bad-argument-type]
-        query=_openset_datavector,  # pyrefly: ignore[bad-argument-type]
+        query=mbi.SlicedQuery(start=1),
     )
     return ColumnMeasurement(cat_attr, measurement=measurement)

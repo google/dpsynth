@@ -22,13 +22,11 @@ synthtetic data.
 
 import collections
 from collections.abc import Sequence
-import functools
 from typing import Any
 
 from dpsynth import constraints
 from dpsynth import domain
 from dpsynth import transformations
-import jax.numpy as jnp
 import mbi
 import numpy as np
 import pandas as pd
@@ -200,23 +198,21 @@ def generate_synthetic_data_from_marginals(
   estimated_total = 1
   for noisy in noisy_encoded:
 
-    # Unmeasured attribute combinations are set to zero here, ensuring they do
-    # not contribute to the loss.
-    mask = jnp.isnan(noisy.values.flatten())
-
-    def query(marginal, mask):
-      answer = marginal.values.flatten()
-      return jnp.where(mask, 0.0, answer)
+    # Unmeasured attribute combinations are set to zero (via zero weights),
+    # ensuring they do not contribute to the loss.
+    mask = np.isnan(noisy.values.flatten())
+    weights = np.where(mask, 0.0, 1.0)
+    answer = np.where(mask, 0.0, noisy.values.flatten())
 
     # Because we do not necessarily measure the entire marginal, mbi cannot
     # reliably estimate the number of records, so we use this heuristic instead.
-    estimated_total = max(estimated_total, float(query(noisy, mask).sum()))
+    estimated_total = max(estimated_total, float(answer.sum()))
 
     measurements.append(
         mbi.LinearMeasurement(
-            noisy_measurement=query(noisy, mask),
+            noisy_measurement=answer,
             clique=noisy.domain.attributes,
-            query=functools.partial(query, mask=mask),
+            query=mbi.WeightedQuery(weights),
         )
     )
 

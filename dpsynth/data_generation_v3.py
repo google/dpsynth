@@ -257,6 +257,9 @@ class TabularSynthesizer(primitives.DPMechanism):
     # Measure total count first, then run per-column initializers.
     any_col = next(iter(self.domains))
     total = max(1.0, self.total_count_mechanism(rng, data[any_col].values))
+    total_measurement = mbi.LinearMeasurement(
+        np.array([total]), (), stddev=self.total_count_mechanism.sigma
+    )
 
     results: dict[str, initialization.ColumnMeasurement] = {}
     for col, init in self.initializers.items():
@@ -267,7 +270,7 @@ class TabularSynthesizer(primitives.DPMechanism):
 
     # Phase 2: Encode data to discrete domain.
     discrete_data = {}
-    one_way_measurements = []
+    initial_measurements = [total_measurement]
     for col, result in results.items():
       if result.bin_edges is not None:
         discrete_data[col] = vtx.discretize(
@@ -278,7 +281,7 @@ class TabularSynthesizer(primitives.DPMechanism):
             data[col].values, result.categorical_attribute
         )
       if result.measurement is not None:
-        one_way_measurements.append(result.measurement)
+        initial_measurements.append(result.measurement)
 
     mbi_domain = _build_mbi_domain(results)
     discrete = mbi.Dataset(discrete_data, mbi_domain)
@@ -291,7 +294,7 @@ class TabularSynthesizer(primitives.DPMechanism):
     mechanism_result = self.discrete_mechanism(
         rng,
         data=discrete,
-        initial_measurements=one_way_measurements,
+        initial_measurements=initial_measurements,
         constraints=mbi_constraints,
     )
     synthetic_data = mechanism_result.synthetic_data

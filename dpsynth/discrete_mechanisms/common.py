@@ -226,11 +226,6 @@ def measure_marginals_with_noise(
   return measurements
 
 
-def _weighted_identity(weights, x: mbi.Factor):
-  # We make this a global function so that it can be pickle-serialized.
-  return x.datavector() * weights
-
-
 def compressed_measurement(
     one_way_measurement: mbi.LinearMeasurement,
     size: int,
@@ -259,7 +254,7 @@ def compressed_measurement(
       y2 / coefs,
       one_way_measurement.clique,
       one_way_measurement.stddev,
-      query=functools.partial(_weighted_identity, 1.0 / coefs),
+      query=mbi.WeightedQuery(1.0 / coefs),
   )
 
 
