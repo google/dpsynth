@@ -40,7 +40,7 @@ jobs:
         cache: pip
 
     - run: pip --version
-    - run: pip install -e .[dev]
+    - run: pip install -e .[dev,pipeline,text]
     - run: pip freeze
 
     - name: Run core tests
