@@ -45,10 +45,27 @@ import dp_accounting
 from dpsynth.local_mode import primitives
 from dpsynth.text import dp_trainer
 from dpsynth.text import model
+from gemma import gm
 from gemma import peft
 from jax_privacy import execution_plan
 from jax_privacy import training
 import optax
+
+
+@dataclasses.dataclass
+class FineTuneResult:
+  """Result of running ``DPFineTuner``.
+
+  Private training state (noise state, optimizer state) is intentionally
+  excluded.
+
+  Attributes:
+    model: The model architecture (LoRA-wrapped, with adapters folded in).
+    params: Pretrained + trained LoRA params, merged and ready for sampling.
+  """
+
+  model: gm.nn.TransformerLike
+  params: training.Params
 
 
 @dataclasses.dataclass
@@ -115,7 +132,7 @@ class DPFineTuner(primitives.DPMechanism):
       self,
       rng: int,
       data: Sequence[tuple[str, str]],
-  ) -> training.TrainingState:
+  ) -> FineTuneResult:
     """Tokenizes text, loads the model, and runs DP-SGD fine-tuning.
 
     Args:
@@ -123,8 +140,8 @@ class DPFineTuner(primitives.DPMechanism):
       data: Sequence of ``(prompt, response)`` string pairs.
 
     Returns:
-      Final ``TrainingState`` containing the trained LoRA parameters in
-      ``state.params``.
+      A ``FineTuneResult`` with the trained model and merged LoRA parameters.
+      Private training state (noise, optimizer) is not exposed.
     """
     dataset = model.tokenize_texts(
         data,
@@ -151,4 +168,7 @@ class DPFineTuner(primitives.DPMechanism):
         optimizer=self.optimizer,
         performance_flags=self.performance_flags,
     )
-    return trainer(rng=rng, data=dataset)
+    state = trainer(rng=rng, data=dataset)
+
+    merged = peft.merge_params(frozen_params, state.params)  # pytype: disable=wrong-arg-types
+    return FineTuneResult(model=module, params=merged)
