@@ -148,9 +148,13 @@ class DPTrainer(primitives.DPMechanism):
     d['strategy'] = self.mechanism_config.strategy.tolist()  # JSON/numpy hack.
     logging.info('DPTrainer config:\n%s', json.dumps(d, indent=2))
 
-    plan = self._make_plan()
     dp_trainer = training.DPTrainer(
-        plan=plan, loss_fn=self.loss_fn, optimizer=self.optimizer
+        config=self.mechanism_config,
+        performance_flags=(
+            self.performance_flags or execution_plan.PerformanceFlags()
+        ),
+        loss_fn=self.loss_fn,
+        optimizer=self.optimizer,
     )
     return dp_trainer.fit(
         data,
