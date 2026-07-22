@@ -36,6 +36,7 @@ import typing
 from absl import logging
 import dp_accounting
 from dpsynth import api
+from dpsynth import checkpoint as checkpoint_lib
 from dpsynth.discrete_mechanisms import accounting
 from dpsynth.discrete_mechanisms import clique_tree
 from dpsynth.discrete_mechanisms import common
@@ -66,6 +67,13 @@ class SWIFTMechanism(api.DPMechanism):
       False disables compression, or a list of column names to compress.
     gdp_sigma: The GDP sigma of the end-to-end mechanism. Privacy budget is
       split across measurement steps internally.
+    checkpointer: Optional checkpoint manager for saving and resuming
+      intermediate state. When its working_dir is set, SWIFT persists
+      intermediate results to disk and resumes from the latest completed phase
+      on restart. Sensitive data (exact marginals) is written under a
+      ``sensitive/`` subdirectory that must be given the same protections as the
+      input data; DP-safe outputs (noisy measurements, estimated model) are
+      written under ``public/``.
   """
 
   workload: Mapping[mbi.Clique, float] | Iterable[mbi.Clique] | None = None
@@ -77,6 +85,9 @@ class SWIFTMechanism(api.DPMechanism):
   one_way_budget_frac: float = 0.1
   compress_columns: bool | Sequence[str] = False
   gdp_sigma: float | None = None
+  checkpointer: checkpoint_lib.Checkpointer = dataclasses.field(
+      default_factory=checkpoint_lib.Checkpointer
+  )
 
   def supporting_cliques(self, domain: mbi.Domain) -> list[mbi.Clique]:
     """Returns the workload cliques filtered by max_marginal_size."""
@@ -126,6 +137,35 @@ class SWIFTMechanism(api.DPMechanism):
 
     logging.info('[SWIFT] Starting Mechanism.')
     phase_times = {}
+    ckpt = self.checkpointer
+    ckpt.setup('public', 'sensitive')
+
+    # If a completed run was checkpointed (model + noisy measurements), skip
+    # straight to synthesis. Both are DP-safe and live under public/.
+    cached_model = ckpt.load('public', 'model.npz')
+    cached_measurements = ckpt.load('public', 'measurements.npz')
+    if cached_model is not None and cached_measurements is not None:
+      logging.info('[SWIFT] Resuming from model + measurements checkpoint.')
+      final_model = typing.cast(mbi.MarkovRandomField, cached_model)
+      measurements = cached_measurements
+      rows = int(mbi.estimation.minimum_variance_unbiased_total(measurements))
+      mappings = common.compression_mappings(
+          measurements, self.compress_columns, constraints
+      )
+      syn = mbi.extensions.synthetic_data(final_model, rows)
+      if mappings:
+        syn = syn.decompress(mappings)
+      logging.info('[SWIFT] Generated %d synthetic records.', rows)
+      diagnostics = common.clique_stats(final_model)
+      diagnostics.phase_times = phase_times
+      ckpt.cleanup('sensitive', ['marginals.npz'])
+      return common.DiscreteMechanismResult(
+          model=final_model,
+          synthetic_data=syn,
+          measurements=measurements,
+          diagnostics=diagnostics,
+          mappings=mappings,
+      )
 
     # Convert end-to-end GDP sigma to budget for internal allocation.
     gdp_budget = 1.0 / self.gdp_sigma**2
@@ -162,8 +202,15 @@ class SWIFTMechanism(api.DPMechanism):
       )
     logging.info('[SWIFT] %d candidates.', len(candidates))
 
-    with common.timed(phase_times, 'from_projectable'):
-      answers = mbi.CliqueVector.from_projectable(data, candidates)  # pyrefly: ignore[bad-argument-type]
+    # Exact marginals are sensitive; checkpoint them under sensitive/ so a
+    # preempted run can skip the expensive recomputation on restart.
+    answers = ckpt.load('sensitive', 'marginals.npz')
+    if answers is None:
+      with common.timed(phase_times, 'from_projectable'):
+        answers = mbi.CliqueVector.from_projectable(data, candidates)  # pyrefly: ignore[bad-argument-type]
+      ckpt.save('sensitive', 'marginals.npz', answers)
+    else:
+      logging.info('[SWIFT] Loaded %d cached marginals.', len(answers.cliques))
     domain = data.domain
 
     with common.timed(phase_times, 'initial_mirror_descent'):
@@ -224,6 +271,11 @@ class SWIFTMechanism(api.DPMechanism):
       measurements.extend(new_measurements)
       logging.info('[SWIFT] Finished measurements.')
 
+    # Noisy measurements are DP-safe; checkpoint them under public/. The
+    # sensitive exact marginals are no longer needed once they are saved.
+    ckpt.save('public', 'measurements.npz', measurements)
+    ckpt.cleanup('sensitive', ['marginals.npz'])
+
     ########################################################
     # Estimate the model using all measurements            #
     ########################################################
@@ -246,6 +298,10 @@ class SWIFTMechanism(api.DPMechanism):
       )
       assert isinstance(final_model, mbi.MarkovRandomField)
       logging.info('[SWIFT] Estimated final model.')
+
+    # Estimated model is DP-safe; checkpoint under public/ so synthesis can
+    # resume without re-estimating.
+    ckpt.save('public', 'model.npz', final_model)
 
     if synth_future is not None:
       t0 = time.time()
