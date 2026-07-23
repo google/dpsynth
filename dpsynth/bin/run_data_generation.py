@@ -14,17 +14,12 @@
 
 """Main program to launch synthetic data generation Beam jobs."""
 
-from collections.abc import Mapping
-from typing import Any
-
 from absl import app
 from absl import flags
 import apache_beam as beam
 from dpsynth import data_generation
 from dpsynth import domain
-from dpsynth.bin import _proto_class_flag
 from dpsynth.dataset_descriptors import csv_descriptor
-from dpsynth.dataset_descriptors import proto_descriptors
 from dpsynth.dataset_descriptors import tfrecord_descriptor
 from dpsynth.pipeline_transformations import aim
 from dpsynth.pipeline_transformations import input_output

@@ -28,7 +28,6 @@ from absl import app
 from absl import flags
 import dpsynth
 from dpsynth.bin import _read_csv_args
-import fancyflags as ff
 import numpy as np
 import pandas as pd
 
@@ -80,16 +79,33 @@ _OUTPUT_PATH = flags.DEFINE_string(
     required=True,
 )
 
-_READ_CSV_ARGS = ff.DEFINE_auto(
-    'read_csv_args',
-    _read_csv_args.ReadCsvArgs,
-    _read_csv_args.FLAG_HELP,
+_CSV_FIELD_SEPARATOR = flags.DEFINE_enum(
+    'field_separator',
+    None,
+    ['tab', 'pipe', 'comma', 'semicolon', 'space'],
+    'Field separator for the input CSV.',
+)
+
+_CSV_COLUMN_NAMES = flags.DEFINE_list(
+    'column_names',
+    None,
+    'Column names to use when the input CSV does not have a header.',
+)
+
+_CSV_COLUMN_COUNT = flags.DEFINE_integer(
+    'column_count',
+    None,
+    'Number of columns when the input CSV does not have a header.',
 )
 
 
 def main(_):
   np.random.seed(_SEED.value)
-  read_csv_kwargs = _READ_CSV_ARGS.value().to_read_csv_kwargs()
+  read_csv_kwargs = _read_csv_args.ReadCsvArgs(
+      field_separator=_CSV_FIELD_SEPARATOR.value,
+      column_names=_CSV_COLUMN_NAMES.value,
+      column_count=_CSV_COLUMN_COUNT.value,
+  ).to_read_csv_kwargs()
   df = pd.read_csv(_DATASET_PATH.value, **read_csv_kwargs)
   attribute_domains = dpsynth.domain.from_yaml_file(_DOMAIN_PATH.value)
 
