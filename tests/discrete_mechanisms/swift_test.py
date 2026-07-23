@@ -97,6 +97,19 @@ class SWIFTTest(absltest.TestCase):
     self.assertAlmostEqual(selected[('a', 'c')], expected_budget_ac)
     self.assertAlmostEqual(selected[('b', 'c')], expected_budget_bc)
 
+  def test_select_queries_nonpositive_errors(self):
+    errors = {('a', 'b'): 0.0, ('b', 'c'): -1.0, ('a', 'c'): -2.0}
+    domain = mbi.Domain(['a', 'b', 'c'], [2, 3, 4])
+    candidates = {key: 1.0 for key in errors}
+    gdp_budget = 100.0
+
+    selected, jtree = swift.select_queries(
+        errors, candidates, domain, max_clique_size=100, gdp_budget=gdp_budget
+    )
+
+    self.assertNotEmpty(jtree.nodes)
+    self.assertAlmostEqual(sum(selected.values()), gdp_budget)
+
   def test_best_subset_and_allocation(self):
     candidates = [
         swift_utils.Candidate(id='a', error=1.0, size=1.0, weight=1.0),
