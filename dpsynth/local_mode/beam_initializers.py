@@ -49,11 +49,17 @@ However, it can be useful when:
 from __future__ import annotations
 
 import math
-from typing import Any
+import pickle
+import tempfile
+from typing import Any, Protocol, cast
 
+from absl import logging
 import apache_beam as beam
+from apache_beam.io.filesystems import FileSystems
+from dpsynth import data_generation_v3
 from dpsynth import domain
 from dpsynth.local_mode import initialization
+from dpsynth.local_mode import vectorized_transformations as vtx
 import mbi
 import numpy as np
 
@@ -67,6 +73,19 @@ Initializer = (
     | initialization.CategoricalInitializer
     | initialization.OpenSetCategoricalInitializer
 )
+
+
+class _SupportsSupportingCliques(Protocol):
+  """Structural type for discrete mechanisms exposing a clique workload.
+
+  Every concrete discrete mechanism (MST, AIM, SWIFT, Direct, Independent,
+  ...) implements ``supporting_cliques``, but the ``DPMechanism`` base class
+  does not declare it. This Protocol lets us call it in a typed way without
+  importing or branching on concrete mechanism classes.
+  """
+
+  def supporting_cliques(self, data_domain: mbi.Domain) -> list[mbi.Clique]:
+    ...
 
 
 class _EncodeColumns(beam.DoFn):
@@ -409,3 +428,183 @@ class ComputeMarginals(beam.PTransform):
         | 'ToList' >> beam.combiners.ToList()
         | 'BuildCliqueVector' >> beam.Map(_to_clique_vector)
     )
+
+
+# ---------------------------------------------------------------------------
+# End-to-end synthesis: two-pass Beam pipeline + local discrete mechanism.
+# ---------------------------------------------------------------------------
+
+
+def _write_singleton(value: Any, path: str) -> None:
+  """Pickles a single driver-bound pipeline result to ``path``."""
+  # Used to move small results (column measurements, row count, clique vector)
+  # off remote workers. Unlike a module-level collector, writing to a
+  # (possibly distributed) filesystem lets the driver read the value back after
+  # the pipeline finishes, so this works on distributed runners.
+  with FileSystems.create(path) as f:
+    f.write(pickle.dumps(value))
+
+
+def _read_singleton(path: str) -> Any:
+  """Reads a pickled result written by ``_write_singleton`` on the driver."""
+  with FileSystems.open(path) as f:
+    # Trusted input: only ever reads data this pipeline itself wrote.
+    return pickle.loads(f.read())  # pylint: disable=g-unsafe-pickle-load
+
+
+def generate_from_marginals(
+    synth: data_generation_v3.TabularSynthesizer,
+    rng: np.random.Generator,
+    column_measurements: dict[str, initialization.ColumnMeasurement],
+    marginals: mbi.CliqueVector,
+    total_measurement: mbi.LinearMeasurement,
+) -> data_generation_v3.DataGenerationResult:
+  """Runs the discrete mechanism and decoding from pre-computed marginals.
+
+  Args:
+    synth: A calibrated TabularSynthesizer.
+    rng: NumPy random generator for the discrete mechanism's DP noise.
+    column_measurements: Per-column results from pass 1 initialization.
+    marginals: The exact joint marginals computed by pass 2.
+    total_measurement: The DP-noised total-count measurement (clique ``()``).
+
+  Returns:
+    A DataGenerationResult containing the synthetic DataFrame.
+  """
+  # Mirror the local TabularSynthesizer: the discrete mechanism receives the
+  # noisy total (clique ``()``) followed by the one-way column measurements as
+  # its initial measurements, so it does not re-spend budget measuring them.
+  initial_measurements = [total_measurement] + [
+      cm.measurement
+      for cm in column_measurements.values()
+      if cm.measurement is not None
+  ]
+
+  mbi_constraints = tuple(c.to_mbi() for c in synth.cross_attribute_constraints)
+  logging.info('[DPSynth/Beam]: Running discrete mechanism.')
+  result = synth.discrete_mechanism(
+      rng,
+      data=marginals,
+      initial_measurements=initial_measurements,
+      constraints=mbi_constraints,
+  )
+  logging.info('[DPSynth/Beam]: Generated discrete synthetic data.')
+
+  synthetic_columns = {}
+  for col, cm in column_measurements.items():
+    col_data = result.synthetic_data.to_dict()[col]
+    if cm.bin_edges is not None:
+      synthetic_columns[col] = vtx.undiscretize(
+          col_data,
+          cm.bin_edges,
+          synth.domains[col],
+          rng=rng,
+      )
+    else:
+      synthetic_columns[col] = vtx.discrete_decode(
+          col_data,
+          cm.categorical_attribute,
+      )
+  logging.info('[DPSynth/Beam]: Decoded synthetic data.')
+
+  import pandas as pd  # pylint: disable=g-import-not-at-top
+
+  # Emit columns in domain-declaration order for deterministic output.
+  column_order = [c for c in synth.domains if c in synthetic_columns]
+  return data_generation_v3.DataGenerationResult(
+      synthetic_data=pd.DataFrame(synthetic_columns)[column_order],
+      discrete_mechanism_result=result,
+  )
+
+
+def run_two_pass(
+    synth: data_generation_v3.TabularSynthesizer,
+    rng: np.random.Generator,
+    create_rows_fn,
+    *,
+    temp_location: str | None = None,
+    pipeline_options=None,
+) -> data_generation_v3.DataGenerationResult:
+  """Runs the full two-pass Beam pipeline for DP synthetic data generation.
+
+  Pass 1: Computes per-column sufficient statistics and the total row count,
+  then runs DP initialization on the driver.
+  Pass 2: Integer-encodes rows and computes the marginal workload required by
+  the configured discrete mechanism.
+  Finally, runs the discrete mechanism and decoding locally on the driver.
+
+  Args:
+    synth: A calibrated TabularSynthesizer.
+    rng: NumPy random generator.
+    create_rows_fn: A callable that takes a beam.Pipeline and returns a
+      PCollection[Row]. Called twice (once per pass).
+    temp_location: Directory used to pass small singleton results (column
+      measurements, row count, clique vector) from the pipeline back to the
+      driver. Must be readable and writable by all workers -- i.e. a shared
+      distributed filesystem when using a distributed runner. Defaults to a
+      local temp directory, which is only valid for in-process runners (e.g. the
+      local DirectRunner).
+    pipeline_options: Optional Beam pipeline options.
+
+  Returns:
+    A DataGenerationResult containing the synthetic DataFrame.
+
+  Raises:
+    ValueError: If the synthesizer has not been calibrated.
+  """
+  total_count_mechanism = synth.total_count_mechanism
+  if synth.initializers is None or total_count_mechanism is None:
+    raise ValueError('TabularSynthesizer must be calibrated.')
+  sigma = total_count_mechanism.sigma
+  if sigma is None:
+    raise ValueError('TabularSynthesizer must be calibrated.')
+
+  inits: dict[str, Initializer] = synth.initializers  # type: ignore
+
+  temp_dir = temp_location or tempfile.mkdtemp(prefix='dpsynth_beam_')
+  cms_path = FileSystems.join(temp_dir, 'column_measurements.pickle')
+  count_path = FileSystems.join(temp_dir, 'row_count.pickle')
+  marginals_path = FileSystems.join(temp_dir, 'clique_vector.pickle')
+
+  # Pass 1: per-column initialization plus the total row count. Both are
+  # written to ``temp_dir`` and read back on the driver.
+  with beam.Pipeline(options=pipeline_options) as p:
+    rows = create_rows_fn(p)
+    cms = rows | BeamInitialize(inits, rng)
+    _ = cms | 'WriteColumnMeasurements' >> beam.Map(
+        _write_singleton, path=cms_path
+    )
+    count = rows | 'CountRows' >> beam.combiners.Count.Globally()
+    _ = count | 'WriteRowCount' >> beam.Map(_write_singleton, path=count_path)
+  column_measurements = _read_singleton(cms_path)
+  num_rows = _read_singleton(count_path)
+  logging.info('[DPSynth/Beam]: Pass 1 complete.')
+
+  # Add DP noise to the total row count on the driver, matching the local
+  # TabularSynthesizer's DPGaussianCount (noisy count, clamped to >= 1).
+  total = max(1.0, num_rows + rng.normal(scale=sigma))
+  total_measurement = mbi.LinearMeasurement(np.array([total]), (), stddev=sigma)
+
+  # Ask the configured discrete mechanism which marginals it needs, so the
+  # pipeline works for any mechanism (MST, AIM, SWIFT, Direct, Independent).
+  mbi_domain = _build_mbi_domain(column_measurements)
+  mechanism = cast(_SupportsSupportingCliques, synth.discrete_mechanism)
+  workload = mechanism.supporting_cliques(mbi_domain)
+
+  # Pass 2: compute the marginal workload.
+  with beam.Pipeline(options=pipeline_options) as p:
+    rows = create_rows_fn(p)
+    marginals = rows | ComputeMarginals(
+        column_measurements,
+        dict(synth.domains),
+        workload,
+    )
+    _ = marginals | 'WriteCliqueVector' >> beam.Map(
+        _write_singleton, path=marginals_path
+    )
+  clique_vector = _read_singleton(marginals_path)
+  logging.info('[DPSynth/Beam]: Pass 2 complete.')
+
+  return generate_from_marginals(
+      synth, rng, column_measurements, clique_vector, total_measurement
+  )
