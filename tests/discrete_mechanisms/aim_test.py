@@ -13,11 +13,46 @@
 # limitations under the License.
 
 from absl.testing import absltest
+from dpsynth.discrete_mechanisms import independent
 from dpsynth.discrete_mechanisms import aim
 from dpsynth.discrete_mechanisms import aim_gdp
 from dpsynth.discrete_mechanisms import common
 import mbi
 import numpy as np
+ 
+
+def _make_correlated_dataset(rng, n=1000):
+  domain = mbi.Domain(["a", "b", "c"], [3, 3, 3])
+  a = rng.integers(0, 3, size=n)
+  b = np.where(rng.random(n) < 0.75, a, rng.integers(0, 3, size=n))
+  c = (a + b + rng.integers(0, 2, size=n)) % 3
+  return mbi.Dataset({"a": a, "b": b, "c": c}, domain)
+
+
+def _normalized_l1(data, model, clique):
+  expected = data.project(clique).datavector()
+  actual = model.project(clique).datavector()
+  expected /= expected.sum()
+  actual /= actual.sum()
+  return np.abs(expected - actual).sum() / 2.0
+
+
+def _correlated_workload_mechanism_baseline_errors(
+    config, baseline_config, workload, zcdp_rho=5.0
+):
+  rng = np.random.default_rng(0)
+  data = _make_correlated_dataset(rng)
+
+  mechanism_result = config.configure(zcdp_rho=zcdp_rho)(rng, data)
+  baseline_result = baseline_config.configure(zcdp_rho=zcdp_rho)(rng, data)
+
+  mechanism_error = np.mean(
+      [_normalized_l1(data, mechanism_result.model, clique) for clique in workload]
+  )
+  baseline_error = np.mean(
+      [_normalized_l1(data, baseline_result.model, clique) for clique in workload]
+  )
+  return mechanism_error, baseline_error
 
 
 class AIMTest(absltest.TestCase):
@@ -69,6 +104,30 @@ class AIMTest(absltest.TestCase):
     data = mbi.Dataset.synthetic(mbi.Domain(["a"], [3]), N=10)
     with self.assertRaisesRegex(ValueError, "calibrate"):
       config(np.random.default_rng(0), data)
+
+  def test_correlated_workload_regression_with_aim(self):
+    workload = [("a",), ("b",), ("c",), ("a", "b"), ("a", "c"), ("b", "c")]
+    config = aim.AIMMechanism(workload=workload, max_rounds=4, pgm_iters=500)
+    baseline_config = independent.IndependentMechanism(pgm_iters=500)
+    mechanism_error, baseline_error = (
+      _correlated_workload_mechanism_baseline_errors(
+        config, baseline_config, workload
+      )
+    )
+    self.assertLess(mechanism_error, 0.05 * baseline_error)
+
+  def test_correlated_workload_regression_with_aim_gdp(self):
+    workload = [("a",), ("b",), ("c",), ("a", "b"), ("a", "c"), ("b", "c")]
+    config = aim_gdp.AIMGDPMechanism(
+      workload=workload, max_rounds=4, pgm_iters=500
+    )
+    baseline_config = independent.IndependentMechanism(pgm_iters=500)
+    mechanism_error, baseline_error = (
+      _correlated_workload_mechanism_baseline_errors(
+        config, baseline_config, workload
+      )
+    )
+    self.assertLess(mechanism_error, 0.05 * baseline_error)
 
 
 if __name__ == "__main__":
