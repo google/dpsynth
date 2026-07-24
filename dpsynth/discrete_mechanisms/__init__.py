@@ -16,9 +16,9 @@
 
 # pylint: disable=g-importing-member
 
-from dpsynth.api import DPMechanism as DiscreteMechanism
 from dpsynth.discrete_mechanisms.aim import AIMMechanism
 from dpsynth.discrete_mechanisms.aim_gdp import AIMGDPMechanism
+from dpsynth.discrete_mechanisms.base import DiscreteMechanism
 from dpsynth.discrete_mechanisms.common import DiscreteMechanismResult
 from dpsynth.discrete_mechanisms.common import MechanismDiagnostics
 from dpsynth.discrete_mechanisms.direct import DirectMechanism

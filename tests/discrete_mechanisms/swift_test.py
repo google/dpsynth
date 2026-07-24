@@ -145,10 +145,10 @@ class SWIFTTest(absltest.TestCase):
     with self.assertRaises(ValueError):
       _ = config.dp_event
 
-  def test_dp_event_returns_gaussian(self):
+  def test_dp_event_returns_zcdp(self):
     config = swift.SWIFTMechanism().configure(zcdp_rho=1.0)
     event = config.dp_event
-    self.assertIsInstance(event, dp_accounting.GaussianDpEvent)
+    self.assertIsInstance(event, dp_accounting.ZCDpEvent)
 
 
 if __name__ == '__main__':

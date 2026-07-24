@@ -35,8 +35,8 @@ import typing
 
 from absl import logging
 import dp_accounting
-from dpsynth import api
 from dpsynth.discrete_mechanisms import accounting
+from dpsynth.discrete_mechanisms import base
 from dpsynth.discrete_mechanisms import clique_tree
 from dpsynth.discrete_mechanisms import common
 from dpsynth.discrete_mechanisms import swift_utils
@@ -46,7 +46,7 @@ import numpy as np
 
 
 @dataclasses.dataclass
-class SWIFTMechanism(api.DPMechanism):
+class SWIFTMechanism(base.DiscreteMechanism):
   """Configuration for the SWIFT mechanism.
 
   Attributes:
@@ -56,27 +56,21 @@ class SWIFTMechanism(api.DPMechanism):
       the junction tree.
     max_marginal_size: The maximum size (domain product) of any marginal
       considered in the workload.
-    marginal_oracle: An optional oracle for marginal computations.
-    pgm_iters: Number of iterations for the PGM estimation.
     select_budget_frac: Fraction of the total budget used for selecting which
       marginals to measure.
-    one_way_budget_frac: Fraction of the total budget used for measuring one-way
-      marginals initially.
-    compress_columns: Controls domain compression. True compresses all columns,
-      False disables compression, or a list of column names to compress.
-    gdp_sigma: The GDP sigma of the end-to-end mechanism. Privacy budget is
-      split across measurement steps internally.
+    one_way_budget_frac: Alias for one_way_budget_fraction. Kept for backward
+      compatibility.
   """
 
   workload: Mapping[mbi.Clique, float] | Iterable[mbi.Clique] | None = None
   max_clique_size: float = 1e9
   max_marginal_size: float = 1e7
-  marginal_oracle: mbi.MarginalOracle | None = None
   pgm_iters: int = 25_000
   select_budget_frac: float = 0.1
-  one_way_budget_frac: float = 0.1
-  compress_columns: bool | Sequence[str] = False
-  gdp_sigma: float | None = None
+  one_way_budget_fraction: float = 0.1
+
+  # Internal state set by configure.
+  _select_rho: float | None = dataclasses.field(default=None, repr=False)
 
   def supporting_cliques(self, domain: mbi.Domain) -> list[mbi.Clique]:
     """Returns the workload cliques filtered by max_marginal_size."""
@@ -84,72 +78,29 @@ class SWIFTMechanism(api.DPMechanism):
         domain, self.workload, self.max_marginal_size
     )
 
-  def configure(self, *, zcdp_rho: float, delta: float = 0.0) -> SWIFTMechanism:
-    """Returns a copy calibrated to the given zCDP budget."""
-    return dataclasses.replace(
-        self, gdp_sigma=accounting.zcdp_gaussian_sigma(zcdp_rho)
-    )
+  def _allocate_budget(self, remaining_rho: float) -> Mapping[str, float]:
+    """Splits the remaining budget between selection and measurement."""
+    select_rho = remaining_rho * self.select_budget_frac
+    return {
+        '_select_rho': select_rho,
+        'measurement_rho': remaining_rho - select_rho,
+    }
 
   @property
   def dp_event(self) -> dp_accounting.DpEvent:
     """Returns the DP event for the SWIFT mechanism."""
-    if self.gdp_sigma is None:
-      raise ValueError('Must call calibrate() before using the mechanism.')
-    return dp_accounting.GaussianDpEvent(noise_multiplier=self.gdp_sigma)
+    self._check_calibration()
+    # SWIFT's budget is split between one-way, selection, and measurement.
+    # All three are Gaussian mechanism applications.
+    return dp_accounting.ZCDpEvent(self.zcdp_rho)
 
-  def __call__(
-      self,
-      rng: np.random.Generator,
-      data: mbi.Dataset | mbi.CliqueVector,
-      *,
-      initial_measurements: Sequence[mbi.LinearMeasurement] | None = None,
-      constraints: tuple[mbi.Constraint, ...] = (),
-  ) -> common.DiscreteMechanismResult:
-    """Runs the SWIFT mechanism on the given data.
+  def _run(self, rng, data, measurements, constraints, phase_times):
+    """Runs SWIFT's select-measure-estimate pipeline in a single pass."""
+    assert self._select_rho is not None
+    assert self.measurement_rho is not None
 
-    Args:
-      rng: A numpy random number generator.
-      data: The sensitive dataset. Must be an mbi.Dataset for domain
-        compression; mbi.CliqueVector is supported but compression will be
-        skipped.
-      initial_measurements: Optional pre-existing one-way measurements.
-      constraints: Structural constraints for the estimation.
-
-    Returns:
-      A DiscreteMechanismResult containing the estimated data distribution.
-
-    Raises:
-      ValueError: If calibrate() has not been called.
-    """
-    if self.gdp_sigma is None:
-      raise ValueError('Must call calibrate() before using the mechanism.')
-
-    logging.info('[SWIFT] Starting Mechanism.')
-    phase_times = {}
-
-    # Convert end-to-end GDP sigma to budget for internal allocation.
-    gdp_budget = 1.0 / self.gdp_sigma**2
-    budget_remaining = gdp_budget
-    if initial_measurements is None:
-      budget_oneway = self.one_way_budget_frac * gdp_budget
-      sigma_oneway = accounting.gdp_gaussian_sigma(budget_oneway)
-      budget_remaining -= budget_oneway
-      marginal_queries = common.one_way_cliques(self.workload, data.domain)
-      measurements = common.measure_marginals_with_noise(
-          rng,
-          data,
-          marginal_queries,
-          gdp_sigma=sigma_oneway,
-      )
-    else:
-      measurements = list(initial_measurements)
-
-    mappings = common.compression_mappings(
-        measurements, self.compress_columns, constraints
-    )
-    if mappings:
-      data = data.compress(mappings)
-      measurements = [m.compress(mappings, data.domain) for m in measurements]
+    # Budgets in GDP units, derived from the zCDP allocation set by configure.
+    gdp_budget = accounting.zcdp_to_gdp(self._select_rho + self.measurement_rho)
 
     #########################################################################
     # Compile workload into candidate measurements, and precompute answers. #
@@ -163,7 +114,7 @@ class SWIFTMechanism(api.DPMechanism):
     logging.info('[SWIFT] %d candidates.', len(candidates))
 
     with common.timed(phase_times, 'from_projectable'):
-      answers = mbi.CliqueVector.from_projectable(data, candidates)  # pyrefly: ignore[bad-argument-type]
+      answers = mbi.CliqueVector.from_projectable(data, candidates)
     domain = data.domain
 
     with common.timed(phase_times, 'initial_mirror_descent'):
@@ -177,13 +128,12 @@ class SWIFTMechanism(api.DPMechanism):
     # Select subset of candidates to measure. #
     ###########################################
     with common.timed(phase_times, 'selection'):
-      assert 0 < self.select_budget_frac < 1
-      l1_error_budget = self.select_budget_frac * gdp_budget
-      budget_remaining -= l1_error_budget
+      l1_error_budget = accounting.zcdp_to_gdp(self._select_rho)
+      budget_remaining = gdp_budget - l1_error_budget
 
       with common.timed(phase_times, 'compute_initial_errors'):
         errors = _compute_initial_errors(
-            rng, answers, model, list(candidates), l1_error_budget  # pyrefly: ignore[bad-argument-type]
+            rng, answers, model, list(candidates), l1_error_budget
         )
 
       with common.timed(phase_times, 'select_queries'):
@@ -219,7 +169,7 @@ class SWIFTMechanism(api.DPMechanism):
     with common.timed(phase_times, 'measurement'):
       logging.info('[SWIFT] Starting measurements.')
       new_measurements, _ = _measure_selected_marginals(
-          rng, answers, selected, budget_remaining  # pyrefly: ignore[bad-argument-type]
+          rng, answers, selected, budget_remaining
       )
       measurements.extend(new_measurements)
       logging.info('[SWIFT] Finished measurements.')
@@ -256,19 +206,8 @@ class SWIFTMechanism(api.DPMechanism):
       logging.info('[SWIFT] Synth precompile wait: %.2fs', time.time() - t0)
 
     syn = mbi.extensions.synthetic_data(final_model, rows)
-    if mappings:
-      syn = syn.decompress(mappings)
     logging.info('[SWIFT] Generated %d synthetic records.', rows)
-
-    diagnostics = common.clique_stats(final_model)
-    diagnostics.phase_times = phase_times
-    return common.DiscreteMechanismResult(
-        model=final_model,
-        synthetic_data=syn,
-        measurements=measurements,
-        diagnostics=diagnostics,
-        mappings=mappings,
-    )
+    return final_model, syn, measurements
 
 
 def _is_supported(clique: mbi.Clique, tree: nx.Graph) -> bool:
