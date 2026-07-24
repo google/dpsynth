@@ -116,6 +116,11 @@ class CategoricalAttribute:
       return value
     return self.possible_values[self.out_of_domain_index]
 
+  @functools.cached_property
+  def lookup(self) -> dict[str, int]:
+    """Returns a mapping from stringified values to their indices."""
+    return {str(v): i for i, v in enumerate(self.possible_values)}
+
 
 @attr.define(frozen=True)
 class OpenSetCategoricalAttribute:
@@ -238,7 +243,7 @@ class NumericalAttribute:
       return self.max_value + 1
     return math.nextafter(self.max_value, math.inf)
 
-  def standardize(self, value: Any) -> int | float | None:
+  def standardize(self, value: Any) -> int | float:
     """Standardizes a value to one of the possible values."""
     if self.clip_to_range:
       low_value = invalid_value = self.min_value

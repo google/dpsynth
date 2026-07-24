@@ -50,7 +50,7 @@ def discrete_encode(
   Returns:
     A 1-D integer array of indices into ``attribute_domain.possible_values``.
   """
-  lookup = {str(v): i for i, v in enumerate(attribute_domain.possible_values)}
+  lookup = attribute_domain.lookup
   default = attribute_domain.out_of_domain_index
   # Loop over unique values only (typically ≪ len(data) for categoricals),
   # then remap via pure numpy fancy indexing.  Normalizing to str avoids

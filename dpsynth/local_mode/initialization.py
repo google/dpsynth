@@ -31,6 +31,26 @@ import numpy as np
 _M = TypeVar('_M')
 
 
+def encode_to_grid(values, lower, upper, delta, **_):
+  """Maps finite value(s) to quantile-grid index/indices in [0, grid_size - 1].
+
+  Clipping to ``[lower, upper]`` folds out-of-grid values into the boundary bins
+  and guarantees the returned index stays in range. Polymorphic over scalars and
+  NumPy arrays; callers must handle NaN / out-of-domain filtering beforehand.
+
+  Args:
+    values: A finite scalar or NumPy array of standardized numerical values.
+    lower: The inclusive lower bound of the candidate grid.
+    upper: The inclusive upper bound of the candidate grid.
+    delta: The spacing between adjacent grid points.
+
+  Returns:
+    The nearest grid index (or array of indices) as ``np.int64``.
+  """
+  clamped = np.clip(values, lower, upper)
+  return np.round((clamped - lower) / delta).astype(np.int64)
+
+
 @dataclasses.dataclass
 class ColumnMeasurement:
   """Result of running a column initializer on raw data.
@@ -139,14 +159,25 @@ class NumericalInitializer(primitives.DPMechanism):
       A ColumnMeasurement with bin edges and optionally a heuristic measurement.
     """
     _validate_mechanism(self.mechanism)
-    lower, upper, gs = self._grid_spec
-    float_data = np.asarray(data, dtype=float)
-    finite_data = float_data[np.isfinite(float_data)]
-    clamped = np.clip(finite_data, lower, upper)
-    delta = (upper - lower) / (gs - 1)
-    indices = np.round((clamped - lower) / delta).astype(np.int64)
-    counts = np.bincount(indices, minlength=gs)
+    counts = self._grid_histogram(data)
     return self.from_summary(rng, counts, estimated_total=estimated_total)
+
+  def _grid_histogram(self, data):
+    """Returns the quantile candidate-grid histogram (length grid_size)."""
+    # Applies NumericalAttribute.standardize semantics in a vectorized manner.
+    lower, upper, gs = self._grid_spec
+    delta = (upper - lower) / (gs - 1)
+    attr = self.attribute
+    values = np.asarray(data, dtype=float)
+    if attr.clip_to_range:
+      values = np.where(np.isnan(values), attr.min_value, values)
+    else:
+      in_domain = (values >= attr.min_value) & (values <= attr.max_value)
+      values = values[in_domain]
+    if attr.dtype == 'int':
+      values = np.round(values)
+    indices = encode_to_grid(values, lower, upper, delta)
+    return np.bincount(indices, minlength=gs)
 
   def from_summary(
       self,
