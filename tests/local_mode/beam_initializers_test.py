@@ -15,39 +15,36 @@
 
 from __future__ import annotations
 
+import collections
+
 from absl.testing import absltest
 import apache_beam as beam
+from apache_beam.testing import util as beam_testing_util
 from dpsynth import domain
 from dpsynth.local_mode import beam_initializers
 from dpsynth.local_mode import initialization
 import mbi
 import numpy as np
 
-_TEST_RESULTS = []
-
-
-def _store(x):
-  _TEST_RESULTS.append(x)
-
 
 class NumericalHistogramTest(absltest.TestCase):
 
-  def _run(self, rows, attr, max_grid_size=101, num_partitions=4):
+  def _run_and_assert(
+      self, rows, attr, assert_fn, max_grid_size=101, num_partitions=4
+  ):
     init = initialization.NumericalInitializer(
         name='x',
         num_partitions=num_partitions,
         attribute=attr,
         max_grid_size=max_grid_size,
     ).configure(zcdp_rho=np.inf)
-    _TEST_RESULTS.clear()
     with beam.Pipeline() as p:
       stats = (
           p
           | beam.Create(rows)
           | beam_initializers.ComputeSufficientStats({'x': init})
       )
-      _ = stats | beam.combiners.ToDict() | beam.Map(_store)
-    return dict(_TEST_RESULTS[0]['x'])
+      beam_testing_util.assert_that(stats | beam.combiners.ToDict(), assert_fn)
 
   def _ref_counts(self, values, attr, max_grid_size=101, num_partitions=4):
     """In-memory grid histogram as an {index: count} dict."""
@@ -63,32 +60,47 @@ class NumericalHistogramTest(absltest.TestCase):
   def test_basic_histogram(self):
     attr = domain.NumericalAttribute(min_value=0, max_value=100)
     rows = [{'x': 10}, {'x': 10}, {'x': 50}, {'x': 90}]
-    counts = self._run(rows, attr)
-    self.assertEqual(counts.get(10, 0), 2)
-    self.assertEqual(counts.get(50, 0), 1)
-    self.assertEqual(counts.get(90, 0), 1)
-    self.assertEqual(sum(counts.values()), 4)
+
+    def check(actual):
+      counts = dict(actual[0]['x'])
+
+      self.assertEqual(counts.get(10, 0), 2)
+      self.assertEqual(counts.get(50, 0), 1)
+      self.assertEqual(counts.get(90, 0), 1)
+      self.assertEqual(sum(counts.values()), 4)
+
+    self._run_and_assert(rows, attr, check)
 
   def test_nan_clip_to_range_true(self):
     attr = domain.NumericalAttribute(
         min_value=0, max_value=100, clip_to_range=True
     )
     rows = [{'x': float('nan')}, {'x': None}, {'x': 50}]
-    counts = self._run(rows, attr)
-    self.assertEqual(counts.get(0, 0), 2)
-    self.assertEqual(counts.get(50, 0), 1)
-    self.assertEqual(sum(counts.values()), 3)
+
+    def check(actual):
+      counts = dict(actual[0]['x'])
+
+      self.assertEqual(counts.get(0, 0), 2)
+      self.assertEqual(counts.get(50, 0), 1)
+      self.assertEqual(sum(counts.values()), 3)
+
+    self._run_and_assert(rows, attr, check)
 
   def test_nan_clip_to_range_false(self):
     attr = domain.NumericalAttribute(
         min_value=0, max_value=100, clip_to_range=False
     )
     rows = [{'x': float('nan')}, {'x': 50}, {'x': 75}]
-    counts = self._run(rows, attr)
-    self.assertNotIn(0, counts)
-    self.assertEqual(counts.get(50, 0), 1)
-    self.assertEqual(counts.get(75, 0), 1)
-    self.assertEqual(sum(counts.values()), 2)
+
+    def check(actual):
+      counts = dict(actual[0]['x'])
+
+      self.assertNotIn(0, counts)
+      self.assertEqual(counts.get(50, 0), 1)
+      self.assertEqual(counts.get(75, 0), 1)
+      self.assertEqual(sum(counts.values()), 2)
+
+    self._run_and_assert(rows, attr, check)
 
   def test_beam_matches_in_memory_clip_true_nan(self):
     # clip_to_range=True: NaN/None fold into the minimum bin; nothing dropped.
@@ -96,10 +108,15 @@ class NumericalHistogramTest(absltest.TestCase):
         min_value=0, max_value=100, clip_to_range=True
     )
     values = [float('nan'), None, 50]
-    beam_counts = self._run([{'x': v} for v in values], attr)
     ref_counts = self._ref_counts(values, attr)
-    self.assertEqual(beam_counts, ref_counts)
-    self.assertEqual(ref_counts, {0: 2, 50: 1})
+
+    def check(actual):
+      beam_counts = dict(actual[0]['x'])
+
+      self.assertEqual(beam_counts, ref_counts)
+      self.assertEqual(ref_counts, {0: 2, 50: 1})
+
+    self._run_and_assert([{'x': v} for v in values], attr, check)
 
   def test_beam_matches_in_memory_clip_false_drops_ood(self):
     # clip_to_range=False: NaN and values outside [min, max] are dropped.
@@ -107,10 +124,15 @@ class NumericalHistogramTest(absltest.TestCase):
         min_value=0, max_value=100, clip_to_range=False
     )
     values = [float('nan'), -5, 150, 50, 75]
-    beam_counts = self._run([{'x': v} for v in values], attr)
     ref_counts = self._ref_counts(values, attr)
-    self.assertEqual(beam_counts, ref_counts)
-    self.assertEqual(ref_counts, {50: 1, 75: 1})
+
+    def check(actual):
+      beam_counts = dict(actual[0]['x'])
+
+      self.assertEqual(beam_counts, ref_counts)
+      self.assertEqual(ref_counts, {50: 1, 75: 1})
+
+    self._run_and_assert([{'x': v} for v in values], attr, check)
 
   def test_beam_matches_in_memory_int_at_max_value(self):
     # Regression: an integer value at max_value used to yield a grid index of
@@ -118,14 +140,23 @@ class NumericalHistogramTest(absltest.TestCase):
     # it into the top bin and agree.
     attr = domain.NumericalAttribute(min_value=0, max_value=100, dtype='int')
     values = [0, 50, 100, 100]
-    beam_counts = self._run(
-        [{'x': v} for v in values], attr, max_grid_size=2, num_partitions=1
-    )
     ref_counts = self._ref_counts(
         values, attr, max_grid_size=2, num_partitions=1
     )
-    self.assertEqual(beam_counts, ref_counts)
-    self.assertEqual(sum(beam_counts.values()), 4)
+
+    def check(actual):
+      beam_counts = dict(actual[0]['x'])
+
+      self.assertEqual(beam_counts, ref_counts)
+      self.assertEqual(sum(beam_counts.values()), 4)
+
+    self._run_and_assert(
+        [{'x': v} for v in values],
+        attr,
+        check,
+        max_grid_size=2,
+        num_partitions=1,
+    )
 
 
 class CategoricalCountsTest(absltest.TestCase):
@@ -148,20 +179,23 @@ class CategoricalCountsTest(absltest.TestCase):
         {'col': 'c'},
         {'col': 'z'},  # unknown → mapped to 'unk' (index 0)
     ]
-    _TEST_RESULTS.clear()
+
+    def check(actual):
+      counts = dict(actual[0]['col'])
+
+      self.assertEqual(counts.get(0, 0), 1)
+      self.assertEqual(counts.get(1, 0), 2)
+      self.assertEqual(counts.get(2, 0), 1)
+      self.assertEqual(counts.get(3, 0), 3)
+      self.assertEqual(sum(counts.values()), 7)
+
     with beam.Pipeline() as p:
       stats = (
           p
           | beam.Create(rows)
           | beam_initializers.ComputeSufficientStats({'col': init})
       )
-      _ = stats | beam.combiners.ToDict() | beam.Map(_store)
-    counts = dict(_TEST_RESULTS[0]['col'])
-    self.assertEqual(counts.get(0, 0), 1)
-    self.assertEqual(counts.get(1, 0), 2)
-    self.assertEqual(counts.get(2, 0), 1)
-    self.assertEqual(counts.get(3, 0), 3)
-    self.assertEqual(sum(counts.values()), 7)
+      beam_testing_util.assert_that(stats | beam.combiners.ToDict(), check)
 
 
 class OpenSetCountsTest(absltest.TestCase):
@@ -179,19 +213,22 @@ class OpenSetCountsTest(absltest.TestCase):
         {'col': 'cherry'},
         {'col': 'cherry'},
     ]
-    _TEST_RESULTS.clear()
+
+    def check(actual):
+      counts = dict(actual[0]['col'])
+
+      self.assertEqual(counts['apple'], 2)
+      self.assertEqual(counts['banana'], 1)
+      self.assertEqual(counts['cherry'], 3)
+      self.assertEqual(sum(counts.values()), 6)
+
     with beam.Pipeline() as p:
       stats = (
           p
           | beam.Create(rows)
           | beam_initializers.ComputeSufficientStats({'col': init})
       )
-      _ = stats | beam.combiners.ToDict() | beam.Map(_store)
-    counts = dict(_TEST_RESULTS[0]['col'])
-    self.assertEqual(counts['apple'], 2)
-    self.assertEqual(counts['banana'], 1)
-    self.assertEqual(counts['cherry'], 3)
-    self.assertEqual(sum(counts.values()), 6)
+      beam_testing_util.assert_that(stats | beam.combiners.ToDict(), check)
 
 
 class BeamInitializeTest(absltest.TestCase):
@@ -226,19 +263,20 @@ class BeamInitializeTest(absltest.TestCase):
     ]
     rng = np.random.default_rng(42)
 
-    _TEST_RESULTS.clear()
+    def check(actual):
+      measurements = actual[0]
+
+      self.assertLen(measurements, 3)
+      for cm in measurements.values():
+        self.assertIsInstance(cm, initialization.ColumnMeasurement)
+
     with beam.Pipeline() as p:
       result = (
           p
           | beam.Create(rows)
           | beam_initializers.BeamInitialize(initializers, rng)
       )
-      _ = result | beam.Map(_store)
-    measurements = _TEST_RESULTS[0]
-
-    self.assertLen(measurements, 3)
-    for cm in measurements.values():
-      self.assertIsInstance(cm, initialization.ColumnMeasurement)
+      beam_testing_util.assert_that(result, check)
 
 
 class ComputeMarginalsTest(absltest.TestCase):
@@ -266,47 +304,59 @@ class ComputeMarginalsTest(absltest.TestCase):
         {'color': 'c', 'size': 0},
     ]
 
-    # Stage 1: get ColumnMeasurements.
+    # Stage 1: get ColumnMeasurements natively in Python.
     inits = {'color': cat_init, 'size': num_init}
     rng = np.random.default_rng(42)
-    _TEST_RESULTS.clear()
-    with beam.Pipeline() as p:
-      stats = (
-          p
-          | 'Create1' >> beam.Create(rows)
-          | beam_initializers.ComputeSufficientStats(inits)
-      )
-      _ = stats | 'ToDict1' >> beam.combiners.ToDict() | beam.Map(_store)
-    cms = beam_initializers.run_from_summary(_TEST_RESULTS[0], inits, rng)
+
+    encoder = beam_initializers._EncodeColumns(inits)
+    counts = collections.defaultdict(int)
+    for row in rows:
+      for encoded in encoder.process(row):
+        counts[encoded] += 1
+
+    summary = collections.defaultdict(list)
+    for (col, val), count in counts.items():
+      summary[col].append((val, count))
+
+    compute_stats = beam_initializers.ComputeSufficientStats(inits)
+    summary = {
+        col: beam_initializers._filter_openset(
+            (col, pairs), min_counts=compute_stats._openset_min_counts
+        )[1]
+        for col, pairs in summary.items()
+    }
+    cms = beam_initializers.run_from_summary(summary, inits, rng)
 
     # Stage 2: compute marginals.
     workload = [('color',), ('size',), ('color', 'size')]
-    _TEST_RESULTS.clear()
+
+    def check(actual):
+      cv = actual[0]
+
+      self.assertIsInstance(cv, mbi.CliqueVector)
+      self.assertLen(cv.cliques, 3)
+
+      # 1-way: color [a=2, b=2, c=2].
+      np.testing.assert_array_equal(
+          cv.arrays[('color',)].datavector(),
+          [2, 2, 2],
+      )
+      # 1-way: size total equals number of rows.
+      self.assertEqual(cv.arrays[('size',)].datavector().sum(), 6)
+      # 2-way: shape matches product of column sizes, total equals rows.
+      joint = cv.arrays[('color', 'size')]
+      expected_size = cms['color'].categorical_attribute.size
+      expected_size *= cms['size'].categorical_attribute.size
+      self.assertEqual(joint.domain.size(), expected_size)
+      self.assertEqual(joint.datavector().sum(), 6)
+
     with beam.Pipeline() as p:
       result = (
           p
           | 'Create2' >> beam.Create(rows)
           | beam_initializers.ComputeMarginals(cms, domains, workload)
       )
-      _ = result | beam.Map(_store)
-
-    cv = _TEST_RESULTS[0]
-    self.assertIsInstance(cv, mbi.CliqueVector)
-    self.assertLen(cv.cliques, 3)
-
-    # 1-way: color [a=2, b=2, c=2].
-    np.testing.assert_array_equal(
-        cv.arrays[('color',)].datavector(),
-        [2, 2, 2],
-    )
-    # 1-way: size total equals number of rows.
-    self.assertEqual(cv.arrays[('size',)].datavector().sum(), 6)
-    # 2-way: shape matches product of column sizes, total equals rows.
-    joint = cv.arrays[('color', 'size')]
-    expected_size = cms['color'].categorical_attribute.size
-    expected_size *= cms['size'].categorical_attribute.size
-    self.assertEqual(joint.domain.size(), expected_size)
-    self.assertEqual(joint.datavector().sum(), 6)
+      beam_testing_util.assert_that(result, check)
 
 
 if __name__ == '__main__':
