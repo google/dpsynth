@@ -35,6 +35,7 @@ import typing
 
 from absl import logging
 import dp_accounting
+from dpsynth import checkpoint as checkpoint_lib
 from dpsynth.discrete_mechanisms import accounting
 from dpsynth.discrete_mechanisms import base
 from dpsynth.discrete_mechanisms import clique_tree
@@ -60,6 +61,13 @@ class SWIFTMechanism(base.DiscreteMechanism):
       marginals to measure.
     one_way_budget_frac: Alias for one_way_budget_fraction. Kept for backward
       compatibility.
+    checkpointer: Checkpoint manager for saving and resuming intermediate state.
+      When it has a private store, SWIFT persists resume-only state (exact
+      marginals, noisy measurements, the estimated model) and resumes from the
+      latest completed phase on restart. All checkpointed state is resume-only
+      and written to the private store, which may contain sensitive
+      intermediates and must be given the same protections as the input data. By
+      default the checkpointer is disabled and SWIFT runs in a single pass.
   """
 
   workload: Mapping[mbi.Clique, float] | Iterable[mbi.Clique] | None = None
@@ -68,6 +76,9 @@ class SWIFTMechanism(base.DiscreteMechanism):
   pgm_iters: int = 25_000
   select_budget_frac: float = 0.1
   one_way_budget_fraction: float = 0.1
+  checkpointer: checkpoint_lib.Checkpointer = dataclasses.field(
+      default_factory=checkpoint_lib.Checkpointer
+  )
 
   # Internal state set by configure.
   _select_rho: float | None = dataclasses.field(default=None, repr=False)
@@ -99,6 +110,24 @@ class SWIFTMechanism(base.DiscreteMechanism):
     assert self._select_rho is not None
     assert self.measurement_rho is not None
 
+    ckpt = self.checkpointer
+
+    # If a completed run was checkpointed (model + noisy measurements), resume
+    # straight to synthesis. Both are resume-only state in the private store.
+    # Domain decompression and result assembly are handled by the base
+    # __call__.
+    cached_model = ckpt.load('model.npz')
+    cached_measurements = ckpt.load('measurements.npz')
+    if cached_model is not None and cached_measurements is not None:
+      logging.info('[SWIFT] Resuming from model + measurements checkpoint.')
+      final_model = typing.cast(mbi.MarkovRandomField, cached_model)
+      measurements = cached_measurements
+      rows = int(mbi.estimation.minimum_variance_unbiased_total(measurements))
+      syn = mbi.extensions.synthetic_data(final_model, rows)
+      logging.info('[SWIFT] Generated %d synthetic records.', rows)
+      ckpt.cleanup(['marginals.npz'])
+      return final_model, syn, measurements
+
     # Budgets in GDP units, derived from the zCDP allocation set by configure.
     gdp_budget = accounting.zcdp_to_gdp(self._select_rho + self.measurement_rho)
 
@@ -113,8 +142,15 @@ class SWIFTMechanism(base.DiscreteMechanism):
       )
     logging.info('[SWIFT] %d candidates.', len(candidates))
 
-    with common.timed(phase_times, 'from_projectable'):
-      answers = mbi.CliqueVector.from_projectable(data, candidates)
+    # Exact marginals are sensitive; checkpoint them in the private store so a
+    # preempted run can skip the expensive recomputation on restart.
+    answers = ckpt.load('marginals.npz')
+    if answers is None:
+      with common.timed(phase_times, 'from_projectable'):
+        answers = mbi.CliqueVector.from_projectable(data, candidates)
+      ckpt.save('marginals.npz', answers)
+    else:
+      logging.info('[SWIFT] Loaded %d cached marginals.', len(answers.cliques))
     domain = data.domain
 
     with common.timed(phase_times, 'initial_mirror_descent'):
@@ -174,6 +210,11 @@ class SWIFTMechanism(base.DiscreteMechanism):
       measurements.extend(new_measurements)
       logging.info('[SWIFT] Finished measurements.')
 
+    # Checkpoint the noisy measurements for resume. The exact marginals are no
+    # longer needed once the measurements are saved.
+    ckpt.save('measurements.npz', measurements)
+    ckpt.cleanup(['marginals.npz'])
+
     ########################################################
     # Estimate the model using all measurements            #
     ########################################################
@@ -196,6 +237,10 @@ class SWIFTMechanism(base.DiscreteMechanism):
       )
       assert isinstance(final_model, mbi.MarkovRandomField)
       logging.info('[SWIFT] Estimated final model.')
+
+    # Checkpoint the estimated model for resume so synthesis can restart
+    # without re-estimating.
+    ckpt.save('model.npz', final_model)
 
     if synth_future is not None:
       t0 = time.time()
