@@ -62,6 +62,10 @@ class DiscreteMechanism(api.DPMechanism):
     zcdp_rho: Total zCDP budget (set by configure).
     one_way_rho: zCDP budget for one-way measurements (set by configure).
     measurement_rho: zCDP budget for selected marginal measurements.
+    max_records_per_user: Assumed upper bound on the number of records a single
+      user contributes. The noise added to counts (and the exponential-mechanism
+      selection sensitivity) is scaled by this factor; the reported dp_event is
+      unchanged. Soundness relies on the caller enforcing this bound.
   """
 
   marginal_oracle: mbi.MarginalOracle | None = None
@@ -71,6 +75,10 @@ class DiscreteMechanism(api.DPMechanism):
   zcdp_rho: float | None = None
   one_way_rho: float | None = dataclasses.field(default=None, repr=False)
   measurement_rho: float | None = dataclasses.field(default=None, repr=False)
+  max_records_per_user: int = 1
+
+  def __post_init__(self):
+    api.validate_max_records_per_user(self.max_records_per_user)
 
   @abc.abstractmethod
   def supporting_cliques(self, domain: mbi.Domain) -> list[mbi.Clique]:
@@ -162,7 +170,9 @@ class DiscreteMechanism(api.DPMechanism):
     if self.one_way_rho is None:
       return []
     with common.timed(phase_times, 'measurement'):
-      sigma = accounting.zcdp_gaussian_sigma(self.one_way_rho)
+      sigma = self.max_records_per_user * accounting.zcdp_gaussian_sigma(
+          self.one_way_rho
+      )
       cliques = self._one_way_cliques(data)
       return common.measure_marginals_with_noise(rng, data, cliques, sigma)
 
@@ -236,7 +246,9 @@ class DiscreteMechanism(api.DPMechanism):
 
     if selected:
       with common.timed(phase_times, 'measurement'):
-        sigma = accounting.zcdp_gaussian_sigma(self.measurement_rho)  # pyrefly: ignore[bad-argument-type]
+        sigma = self.max_records_per_user * accounting.zcdp_gaussian_sigma(
+            self.measurement_rho  # pyrefly: ignore[bad-argument-type]
+        )
         measurements = measurements + common.measure_marginals_with_noise(
             rng, data, selected, sigma
         )

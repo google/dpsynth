@@ -21,6 +21,7 @@ import math
 from typing import TypeVar
 
 import dp_accounting
+from dpsynth import api
 from dpsynth import domain
 from dpsynth.local_mode import _quantiles
 from dpsynth.local_mode import primitives
@@ -87,17 +88,21 @@ class NumericalInitializer(primitives.DPMechanism):
     name: Attribute name used as the clique key in the measurement.
     num_partitions: Number of quantile partitions (must be a power of 2).
     attribute: The NumericalAttribute defining the data domain.
+    max_records_per_user: Assumed upper bound on the number of records a single
+      user contributes; forwarded to the underlying ``DPQuantiles`` mechanism.
   """
 
   name: str
   num_partitions: int
   attribute: domain.NumericalAttribute
   max_grid_size: int = 10_000_000
+  max_records_per_user: int = 1
   mechanism: primitives.DPQuantiles | None = dataclasses.field(
       default=None, repr=False
   )
 
   def __post_init__(self):
+    api.validate_max_records_per_user(self.max_records_per_user)
     if self.max_grid_size < 2:
       raise ValueError(f'max_grid_size must be >= 2, got {self.max_grid_size}.')
 
@@ -132,6 +137,7 @@ class NumericalInitializer(primitives.DPMechanism):
         jitter_strategy=(
             'refine' if self.attribute.dtype == 'int' else 'symmetric'
         ),
+        max_records_per_user=self.max_records_per_user,
     ).configure(zcdp_rho=zcdp_rho, epsilon_ratio=epsilon_ratio)
     return dataclasses.replace(self, mechanism=mechanism)
 
@@ -195,6 +201,7 @@ class NumericalInitializer(primitives.DPMechanism):
         name=self.name,
         zcdp_rho=mechanism.zcdp_rho,
         estimated_total=estimated_total,
+        max_records_per_user=self.max_records_per_user,
     )
 
 
@@ -204,6 +211,7 @@ def edges_to_column_measurement(
     name,
     zcdp_rho,
     estimated_total=None,
+    max_records_per_user=1,
 ):
   """Converts raw quantile edges into a ColumnMeasurement.
 
@@ -218,6 +226,8 @@ def edges_to_column_measurement(
     name: Attribute name used as the clique key in any measurement.
     zcdp_rho: Total zCDP rho consumed by the quantile mechanism.
     estimated_total: If provided, a heuristic one-way measurement is included.
+    max_records_per_user: Assumed upper bound on the number of records a single
+      user contributes; inflates the heuristic measurement's stddev.
 
   Returns:
     A ``ColumnMeasurement`` with bin edges and optionally a measurement.
@@ -242,7 +252,7 @@ def edges_to_column_measurement(
       # Prepend zero weight for the OUT_OF_DOMAIN slot at index 0.
       bin_weights = np.r_[0, bin_weights]
     counts = estimated_total * bin_weights / bin_weights.sum()
-    stddev = 1.0 / np.sqrt(zcdp_rho)
+    stddev = max_records_per_user / np.sqrt(zcdp_rho)
     measurement = mbi.LinearMeasurement(
         counts,
         (name,),
@@ -263,13 +273,19 @@ class CategoricalInitializer(primitives.DPMechanism):
   Attributes:
     name: Attribute name used as the clique key in the measurement.
     attribute: The CategoricalAttribute defining the closed domain.
+    max_records_per_user: Assumed upper bound on the number of records a single
+      user contributes; forwarded to the underlying ``DPGaussianHistogram``.
   """
 
   name: str
   attribute: domain.CategoricalAttribute
+  max_records_per_user: int = 1
   mechanism: primitives.DPGaussianHistogram | None = dataclasses.field(
       default=None, repr=False
   )
+
+  def __post_init__(self):
+    api.validate_max_records_per_user(self.max_records_per_user)
 
   def configure(  # pyrefly: ignore[bad-override]
       self, *, zcdp_rho: float, delta: float = 0.0
@@ -277,6 +293,7 @@ class CategoricalInitializer(primitives.DPMechanism):
     """Returns a copy calibrated to the given zCDP budget."""
     mechanism = primitives.DPGaussianHistogram(
         domain_size=self.attribute.size,
+        max_records_per_user=self.max_records_per_user,
     ).configure(zcdp_rho=zcdp_rho)
     return dataclasses.replace(self, mechanism=mechanism)
 
@@ -300,7 +317,9 @@ class CategoricalInitializer(primitives.DPMechanism):
     mechanism = _validate_mechanism(self.mechanism)
     result = mechanism(rng, counts)
     measurement = mbi.LinearMeasurement(
-        result.counts, (self.name,), stddev=mechanism.sigma  # pyrefly: ignore[bad-argument-type]
+        result.counts,
+        (self.name,),
+        stddev=mechanism.max_records_per_user * mechanism.sigma,  # pyrefly: ignore[bad-argument-type, unsupported-operation]
     )
     return ColumnMeasurement(self.attribute, measurement=measurement)
 
@@ -320,15 +339,31 @@ class OpenSetCategoricalInitializer(primitives.DPMechanism):
     attribute: The OpenSetCategoricalAttribute specifying the default value.
     delta: Failure probability for the partition selection threshold.
     min_count: Minimum true count for a partition to be discovered.
+    max_records_per_user: Assumed upper bound on the number of records a single
+      user contributes. Values greater than 1 are not yet supported for open-set
+      columns (see __post_init__).
   """
 
   name: str
   attribute: domain.OpenSetCategoricalAttribute
   delta: float
   min_count: int = 1
+  max_records_per_user: int = 1
   mechanism: primitives.DPPartitionSelection | None = dataclasses.field(
       default=None, repr=False
   )
+
+  def __post_init__(self):
+    api.validate_max_records_per_user(self.max_records_per_user)
+    if self.max_records_per_user > 1:
+      # Bounding user contribution for open-set partition selection without a
+      # user->record mapping would require a conservative worst-case threshold
+      # with poor utility. Proper support is deferred to the user-id-aware path.
+      raise ValueError(
+          'max_records_per_user > 1 is not yet supported for open-set '
+          'categorical attributes; it requires a record-to-user mapping for '
+          'sound, good-utility partition selection.'
+      )
 
   def configure(  # pyrefly: ignore[bad-override]
       self, *, zcdp_rho: float, delta: float = 0.0

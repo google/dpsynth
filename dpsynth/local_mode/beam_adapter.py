@@ -433,6 +433,7 @@ def generate_from_marginals(
   return data_generation_v3.DataGenerationResult(
       synthetic_data=synthetic_data,
       discrete_mechanism_result=mechanism_result,
+      codec=codec,
   )
 
 

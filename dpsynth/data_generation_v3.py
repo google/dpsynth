@@ -21,6 +21,7 @@ import dataclasses
 
 from absl import logging
 import dp_accounting
+from dpsynth import api
 from dpsynth import constraints
 from dpsynth import discrete_mechanisms
 from dpsynth import domain
@@ -37,6 +38,7 @@ def _create_initializers(
     domains: Mapping[str, domain.AttributeType],
     numerical_bins: int,
     init_delta: float,
+    max_records_per_user: int = 1,
 ) -> dict[str, primitives.DPMechanism]:
   """Creates per-column initializers from the domain specification.
 
@@ -44,6 +46,8 @@ def _create_initializers(
     domains: Mapping from column names to attribute domain specifications.
     numerical_bins: Number of bins for numerical discretization.
     init_delta: Delta for open-set categorical partition selection.
+    max_records_per_user: Assumed upper bound on the number of records a single
+      user contributes; forwarded to each initializer.
 
   Returns:
     A dictionary mapping column names to uncalibrated initializer instances.
@@ -55,15 +59,21 @@ def _create_initializers(
   for col, attr in domains.items():
     if isinstance(attr, domain.NumericalAttribute):
       initializers[col] = initialization.NumericalInitializer(
-          name=col, num_partitions=numerical_bins, attribute=attr
+          name=col,
+          num_partitions=numerical_bins,
+          attribute=attr,
+          max_records_per_user=max_records_per_user,
       )
     elif isinstance(attr, domain.CategoricalAttribute):
       initializers[col] = initialization.CategoricalInitializer(
-          name=col, attribute=attr
+          name=col, attribute=attr, max_records_per_user=max_records_per_user
       )
     elif isinstance(attr, domain.OpenSetCategoricalAttribute):
       initializers[col] = initialization.OpenSetCategoricalInitializer(
-          name=col, attribute=attr, delta=init_delta
+          name=col,
+          attribute=attr,
+          delta=init_delta,
+          max_records_per_user=max_records_per_user,
       )
     else:
       raise ValueError(
@@ -172,10 +182,19 @@ class TabularCodec:
 
 @dataclasses.dataclass
 class DataGenerationResult:
-  """Result of end-to-end DP synthetic data generation."""
+  """Result of end-to-end DP synthetic data generation.
+
+  Attributes:
+    synthetic_data: The generated synthetic data in the original domain.
+    discrete_mechanism_result: The raw result of the discrete mechanism run on
+      the discretized data.
+    codec: The codec mapping columns between raw values and the discrete domain
+      used to encode/decode the data.
+  """
 
   synthetic_data: pd.DataFrame
   discrete_mechanism_result: dm_common.DiscreteMechanismResult
+  codec: TabularCodec
 
 
 @dataclasses.dataclass
@@ -204,6 +223,12 @@ class TabularSynthesizer(primitives.DPMechanism):
       automatically from ``domains`` during ``configure()``.
     skip_compression: Whether to skip domain compression.
     cross_attribute_constraints: Constraints to enforce on generated data.
+    max_records_per_user: Assumed upper bound on the number of records a single
+      user contributes. All added noise (and selection sensitivity) is scaled by
+      this factor so the mechanism provides user-level (rather than
+      record-level) DP under the stated ``dp_event``. Soundness relies on the
+      caller enforcing the bound; open-set categorical columns require this to
+      be 1.
   """
 
   domains: Mapping[str, domain.AttributeType]
@@ -215,6 +240,10 @@ class TabularSynthesizer(primitives.DPMechanism):
   initializers: dict[str, primitives.DPMechanism] | None = None
   total_count_mechanism: primitives.DPGaussianCount | None = None
   cross_attribute_constraints: Sequence[constraints.Constraint] = ()
+  max_records_per_user: int = 1
+
+  def __post_init__(self):
+    api.validate_max_records_per_user(self.max_records_per_user)
 
   def configure(  # pyrefly: ignore[bad-override]
       self,
@@ -269,8 +298,16 @@ class TabularSynthesizer(primitives.DPMechanism):
         thresholding_delta / num_open_set if num_open_set > 0 else 0.0
     )
 
+    if self.initializers is not None and self.max_records_per_user > 1:
+      raise ValueError(
+          'max_records_per_user > 1 requires auto-created initializers; set '
+          'max_records_per_user on each custom initializer directly instead.'
+      )
     inits = self.initializers or _create_initializers(
-        self.domains, self.numerical_bins, per_col_delta
+        self.domains,
+        self.numerical_bins,
+        per_col_delta,
+        self.max_records_per_user,
     )
     init_rho = self.init_budget_fraction * zcdp_rho
     # +1 for the DPGaussianCount that always measures the total.
@@ -280,12 +317,12 @@ class TabularSynthesizer(primitives.DPMechanism):
     calibrated_inits = {
         col: init.configure(zcdp_rho=per_col_rho) for col, init in inits.items()
     }
-    calibrated_total = primitives.DPGaussianCount().configure(
-        zcdp_rho=per_col_rho
-    )
-    calibrated_discrete = self.discrete_mechanism.configure(
-        zcdp_rho=discrete_rho
-    )
+    calibrated_total = primitives.DPGaussianCount(
+        max_records_per_user=self.max_records_per_user
+    ).configure(zcdp_rho=per_col_rho)
+    calibrated_discrete = dataclasses.replace(
+        self.discrete_mechanism, max_records_per_user=self.max_records_per_user
+    ).configure(zcdp_rho=discrete_rho)
     return dataclasses.replace(
         self,
         initializers=calibrated_inits,
@@ -344,7 +381,9 @@ class TabularSynthesizer(primitives.DPMechanism):
     any_col = next(iter(self.domains))
     total = max(1.0, self.total_count_mechanism(rng, data[any_col].values))
     total_measurement = mbi.LinearMeasurement(
-        np.array([total]), (), stddev=self.total_count_mechanism.sigma  # pyrefly: ignore[bad-argument-type]
+        np.array([total]),
+        (),
+        stddev=(self.max_records_per_user * self.total_count_mechanism.sigma),  # pyrefly: ignore[bad-argument-type, unsupported-operation]
     )
 
     results: dict[str, initialization.ColumnMeasurement] = {}
@@ -383,4 +422,5 @@ class TabularSynthesizer(primitives.DPMechanism):
     return DataGenerationResult(
         synthetic_data=synthetic_data,
         discrete_mechanism_result=mechanism_result,
+        codec=codec,
     )
