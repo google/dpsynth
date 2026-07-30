@@ -64,6 +64,8 @@ docs = [
     "myst-parser",
 ]
 examples = [
+    "dpsynth[text]",
+    "datasets",
     "kagglehub",
     "scikit-learn",
     "sdmetrics",
