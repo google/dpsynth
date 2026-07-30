@@ -37,6 +37,7 @@ def dp_maximum_spanning_tree(
     zcdp_rho: float | None = None,
     exponential_mechanism_epsilon: float | None = None,
     initial_marginal_queries: Sequence[tuple[str, str]] = (),
+    sensitivity: float = 1.0,
 ) -> list[tuple[str, str]]:
   """Computes an approximate maximum spanning tree with differential privacy.
 
@@ -48,8 +49,9 @@ def dp_maximum_spanning_tree(
     2. otherwise, it has the same privacy guarantees as the len(weights)-1
      Exponential Mechanism with parameter exponential_mechanism_epsilon.
 
-  It is assumed that the weights are obtained from sensitivity 1 functions of
-  the data (i.e., L1 norm between true and estimated marginal).
+  It is assumed that the weights are obtained from sensitivity ``sensitivity``
+  functions of the data (i.e., L1 norm between true and estimated marginal,
+  scaled by the maximum number of records a single user contributes).
 
   Args:
     rng: A numpy random number generator.
@@ -60,6 +62,7 @@ def dp_maximum_spanning_tree(
       mechanism. If None, the value is computed from zcdp_rho.
     initial_marginal_queries: The list of initial attribute pairs to include in
       the tree.
+    sensitivity: The sensitivity of the quality scores in ``weights``.
 
   Returns:
     A list of attribute pairs that constitute an approximate maximum spanning
@@ -89,7 +92,7 @@ def dp_maximum_spanning_tree(
     candidates = [e for e in candidates if not ds.connected(*e)]
     wgts = np.array([weights[e] for e in candidates])
     idx = common.exponential_mechanism(
-        wgts, exponential_mechanism_epsilon, sensitivity=1.0, rng=rng
+        wgts, exponential_mechanism_epsilon, sensitivity=sensitivity, rng=rng
     )
     e = candidates[idx]
     tree.add_edge(*e)
@@ -105,6 +108,7 @@ def _select_two_way_marginal_queries(
     one_way_measurements: list[mbi.LinearMeasurement],
     initial_marginal_queries: Sequence[tuple[str, ...]] = (),
     maximum_marginal_size: int = 10_000_000,
+    sensitivity: float = 1.0,
 ) -> list[tuple[str, ...]]:
   """Selects a set of two-way marginal queries with DP to form a spanning tree.
 
@@ -118,6 +122,7 @@ def _select_two_way_marginal_queries(
     one_way_measurements: The initial one-way measurements already made.
     initial_marginal_queries: The list of cliques to start with.
     maximum_marginal_size: The maximum size of a marginal query.
+    sensitivity: The sensitivity of the correlation quality scores.
 
   Returns:
     A list of two-way marginal queries over highly correlated attributes.
@@ -145,6 +150,7 @@ def _select_two_way_marginal_queries(
       weights,  # pyrefly: ignore[bad-argument-type]
       zcdp_rho=zcdp_rho,
       initial_marginal_queries=initial_marginal_queries,  # pyrefly: ignore[bad-argument-type]
+      sensitivity=sensitivity,
   )
 
 
@@ -199,4 +205,5 @@ class MSTMechanism(base.DiscreteMechanism):
           self._select_rho,  # pyrefly: ignore[bad-argument-type]
           measurements,
           maximum_marginal_size=self.maximum_marginal_size,
+          sensitivity=self.max_records_per_user,
       )

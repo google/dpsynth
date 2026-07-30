@@ -277,15 +277,24 @@ class DPQuantiles(DPMechanism):
     upper: Upper bound of the data domain (exclusive).
     jitter_strategy: Tie-breaking jitter passed to ``quantiles_from_histogram``:
       ``'refine'`` for integer attributes, ``'symmetric'`` for continuous ones.
+    max_records_per_user: Assumed upper bound on the number of records a single
+      user contributes. The per-level exponential-mechanism epsilon is divided
+      by this factor (the quality-score sensitivity grows linearly in it); the
+      reported dp_event is unchanged. Soundness relies on the caller enforcing
+      this bound.
   """
 
   num_partitions: int
   lower: float
   upper: float
   jitter_strategy: Literal['symmetric', 'refine'] = 'symmetric'
+  max_records_per_user: int = 1
   _epsilon_levels: tuple[float, ...] | None = dataclasses.field(
       default=None, repr=False
   )
+
+  def __post_init__(self):
+    api.validate_max_records_per_user(self.max_records_per_user)
 
   @property
   def _num_levels(self) -> int:
@@ -341,7 +350,9 @@ class DPQuantiles(DPMechanism):
     indices = _quantiles.quantiles_from_histogram(
         rng,
         counts,
-        epsilon_levels=np.asarray(self._epsilon_levels),
+        epsilon_levels=(
+            np.asarray(self._epsilon_levels) / self.max_records_per_user
+        ),
         jitter_strategy=self.jitter_strategy,
     )
     # Map cell indices back to domain values; delta is the grid step, which
@@ -360,10 +371,18 @@ class DPGaussianHistogram(DPMechanism):
   Attributes:
     domain_size: Number of categories in the histogram domain.
     sigma: Gaussian noise standard deviation. Set directly or via ``configure``.
+    max_records_per_user: Assumed upper bound on the number of records a single
+      user contributes. The noise standard deviation is scaled by this factor
+      (the count-vector sensitivity grows linearly in it); the reported dp_event
+      is unchanged. Soundness relies on the caller enforcing this bound.
   """
 
   domain_size: int
   sigma: float | None = None
+  max_records_per_user: int = 1
+
+  def __post_init__(self):
+    api.validate_max_records_per_user(self.max_records_per_user)
 
   def configure(  # pyrefly: ignore[bad-override]
       self, *, zcdp_rho: float, delta: float = 0.0
@@ -384,7 +403,9 @@ class DPGaussianHistogram(DPMechanism):
     """Adds Gaussian noise to the given counts."""
     if self.sigma is None:
       raise ValueError(_UNCALIBRATED_MSG.format(param='sigma'))
-    noise = rng.normal(scale=self.sigma, size=self.domain_size)
+    noise = rng.normal(
+        scale=self.max_records_per_user * self.sigma, size=self.domain_size
+    )
     return HistogramResult(counts=counts.astype(float) + noise)
 
 
@@ -393,6 +414,10 @@ class DPGaussianCount(DPMechanism):
   """Differentially private count via the Gaussian mechanism."""
 
   sigma: float | None = None
+  max_records_per_user: int = 1
+
+  def __post_init__(self):
+    api.validate_max_records_per_user(self.max_records_per_user)
 
   def configure(  # pyrefly: ignore[bad-override]
       self, *, zcdp_rho: float, delta: float = 0.0
@@ -411,7 +436,9 @@ class DPGaussianCount(DPMechanism):
     """Returns ``true_count`` plus calibrated Gaussian noise."""
     if self.sigma is None:
       raise ValueError(_UNCALIBRATED_MSG.format(param='sigma'))
-    return float(true_count + rng.normal(scale=self.sigma))
+    return float(
+        true_count + rng.normal(scale=self.max_records_per_user * self.sigma)
+    )
 
   def __call__(self, rng: np.random.Generator, data: np.ndarray) -> float:
     """Returns a noisy count of len(data) + Gaussian noise."""

@@ -241,3 +241,9 @@ class DPMechanism(abc.ABC):
         target_delta=delta,
     )
     return self.configure(zcdp_rho=optimal_rho, delta=delta, **kwargs)
+
+
+def validate_max_records_per_user(value: int) -> None:
+  """Raises ValueError if the per-user record bound is not a positive int."""
+  if value < 1:
+    raise ValueError(f'max_records_per_user must be >= 1, got {value}.')
