@@ -14,6 +14,7 @@
 
 
 from absl.testing import absltest
+import dp_accounting
 from dpsynth.text import dp_trainer
 from flax import nnx
 import jax.numpy as jnp
@@ -106,6 +107,23 @@ class DPTrainerTest(absltest.TestCase):
         optimizer=optax.adamw(1e-4),
     ).configure(zcdp_rho=1.0)
 
+    train_state = trainer(rng=42, data={'x': jnp.ones((10, 4, 4))})
+    self.assertIsNotNone(train_state)
+
+  def test_non_private_config(self):
+    params, loss_fn = _dummy_params_and_loss()
+    non_private_config = jax_privacy.execution_plan.NonPrivateConfig(
+        iterations=5,
+        batch_size=2,
+    )
+    trainer = dp_trainer.DPTrainer(
+        init_params=params,
+        loss_fn=loss_fn,
+        mechanism_config=non_private_config,
+        optimizer=optax.adamw(1e-4),
+    ).configure(zcdp_rho=float('inf'))
+
+    self.assertIsInstance(trainer.dp_event, dp_accounting.NonPrivateDpEvent)
     train_state = trainer(rng=42, data={'x': jnp.ones((10, 4, 4))})
     self.assertIsNotNone(train_state)
 
