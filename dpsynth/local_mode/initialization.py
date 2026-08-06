@@ -399,11 +399,23 @@ class OpenSetCategoricalInitializer(primitives.DPMechanism):
       counts: np.ndarray,
   ) -> ColumnMeasurement:
     """Returns a ColumnMeasurement from pre-aggregated value counts."""
+    # Handles pre-aggregated counts and public partitions.
     mechanism = _validate_mechanism(self.mechanism)
-    result = mechanism.from_summary(rng, counts)
-    selected_values = [
-        str(v) for v in unique_values[result.selected_partitions]
-    ]
+
+    counts_map = {str(v): int(c) for v, c in zip(unique_values, counts)}
+    counts_map.pop(self.attribute.default_value, None)
+    for v in self.attribute.public_possible_values:
+      counts_map.setdefault(v, 0)
+
+    candidates = np.array(list(counts_map.keys()))
+    candidate_counts = np.array(list(counts_map.values()))
+    pub_set = set(self.attribute.public_possible_values)
+    pub_indices = [i for i, v in enumerate(candidates) if v in pub_set]
+
+    result = mechanism.from_summary(
+        rng, candidate_counts, public_indices=pub_indices or None
+    )
+    selected_values = [str(v) for v in candidates[result.selected_partitions]]
 
     # Build the discovered domain: default first, then selected values.
     possible_values = [self.attribute.default_value] + selected_values

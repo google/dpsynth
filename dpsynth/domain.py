@@ -139,10 +139,19 @@ class OpenSetCategoricalAttribute:
   Attributes:
     default_value: The default string value for out-of-domain entries.
     description: An optional semantic description of the attribute.
+    public_possible_values: Known values that are guaranteed to be in-domain and
+      will always be retained with noisy counts regardless of thresholding.
   """
 
   default_value: str = '<OOD>'
   description: str | None = None
+  public_possible_values: Sequence[str] = ()
+
+  def __post_init__(self):
+    pub = [str(v) for v in self.public_possible_values]
+    if self.default_value in pub:
+      raise ValueError(f'{self.default_value!r} in public_possible_values.')
+    object.__setattr__(self, 'public_possible_values', pub)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -297,9 +306,9 @@ AttributeType = (
 
 def to_yaml_file(domain: Mapping[str, AttributeType], filepath: str | PathType):
   """Writes a dictionary of Attribute objects to a YAML file."""
-  yaml_data = {}
-  for name, attr_obj in domain.items():
-    yaml_data[name] = dataclasses.asdict(attr_obj)
+  yaml_data = {
+      name: dataclasses.asdict(attr_obj) for name, attr_obj in domain.items()
+  }
   with open(filepath, 'w') as f:
     yaml.dump(yaml_data, f, default_flow_style=False)
 
@@ -316,8 +325,12 @@ def from_yaml_file(filepath: str | PathType) -> Mapping[str, AttributeType]:
       domain[name] = NumericalAttribute(**attr_data)
     elif 'max_tokens' in attr_data:
       domain[name] = FreeFormTextAttribute(**attr_data)
-    elif not attr_data:
-      domain[name] = OpenSetCategoricalAttribute()
+    elif (
+        'default_value' in attr_data
+        or 'public_possible_values' in attr_data
+        or not attr_data
+    ):
+      domain[name] = OpenSetCategoricalAttribute(**attr_data)
     else:
       raise ValueError(f'Invalid YAML data for attribute: {name}')
   return domain

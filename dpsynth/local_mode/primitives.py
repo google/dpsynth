@@ -20,9 +20,10 @@ operations for efficiency in single-machine environments.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 import dataclasses
 import math
-from typing import Literal
+from typing import Any, Literal
 
 import dp_accounting
 from dpsynth import api
@@ -82,6 +83,7 @@ def select_partitions_gaussian_thresholding(
     delta: float,
     min_count: int = 1,
     max_records_per_user: int = 1,
+    public_partitions: Sequence[Any] | None = None,
 ) -> tuple[np.ndarray, np.ndarray, float]:
   """Selects partitions using Gaussian Thresholding (Weighted Gaussian).
 
@@ -117,7 +119,7 @@ def select_partitions_gaussian_thresholding(
 
   Args:
     rng: A numpy random number generator.
-    data: 1D array of integers, where each element is a partition ID.
+    data: 1D array of integers or strings, where each element is a partition ID.
     gdp_budget: Privacy budget in terms of squared Gaussian DP mu parameter
       (gdp_budget = mu^2 = 1 / sigma^2).
     delta: Failure probability (false positive bound per empty partition).
@@ -128,11 +130,14 @@ def select_partitions_gaussian_thresholding(
       this factor to provide user-level rather than record-level DP; the privacy
       accounting is unchanged. Soundness relies on the caller enforcing this
       bound.
+    public_partitions: Optional sequence of partition IDs guaranteed to be
+      in-domain. Noisy counts for these partitions are always returned
+      regardless of thresholding.
 
   Returns:
     A tuple containing:
       - selected_partitions: 1D array of partition IDs that passed the
-        threshold.
+        threshold (or are public).
       - estimated_counts: 1D array of noisy counts for each selected
         partition.
       - stddev: The standard deviation of the Gaussian noise added
@@ -145,31 +150,37 @@ def select_partitions_gaussian_thresholding(
 
   stddev = max_records_per_user / np.sqrt(gdp_budget)
 
+  pub_list = list(public_partitions) if public_partitions is not None else []
+  pub_set = set(pub_list)
+
   if data.size == 0:
-    return np.empty(0, dtype=data.dtype), np.empty(0, dtype=float), stddev
+    if not pub_list:
+      return np.empty(0, dtype=data.dtype), np.empty(0, dtype=float), stddev
+    pub_arr = np.array(pub_list)
+    noisy_counts = rng.normal(scale=stddev, size=len(pub_list))
+    return pub_arr, noisy_counts, stddev
 
   unique_parts, counts = np.unique(data, return_counts=True)
+  count_map = dict(zip(unique_parts.tolist(), counts.tolist()))
 
-  # Filter partitions below the minimum count before adding noise.
-  above_min = counts >= min_count
-  unique_parts, counts = unique_parts[above_min], counts[above_min]
-  if unique_parts.size == 0:
-    return np.empty(0, dtype=data.dtype), np.empty(0, dtype=float), stddev
+  # Candidate partitions: public partitions first, then non-public unique_parts
+  non_pub_parts = [p for p in unique_parts.tolist() if p not in pub_set]
+  all_parts_list = pub_list + non_pub_parts
+  all_parts = np.array(all_parts_list)
+  all_counts = np.array(
+      [count_map.get(p, 0) for p in all_parts_list], dtype=int
+  )
 
-  noisy_counts = counts + rng.normal(scale=stddev, size=counts.size)
+  noisy_counts = all_counts.astype(float) + rng.normal(
+      scale=stddev, size=len(all_parts_list)
+  )
 
-  # A partition that is a candidate here but absent from a neighbor drives the
-  # per-partition false-positive budget `delta`. One user contributes up to
-  # k = max_records_per_user records, so (i) the noise std is
-  # stddev = k / sqrt(gdp_budget), and (ii) such a partition's true count can
-  # reach (min_count - 1) + k -- the neighbor sits just under the eligibility
-  # cutoff at min_count - 1 and the user piles all k records into it. Bounding
-  #   Pr[(min_count - 1 + k) + N(0, stddev^2) >= T] <= delta
-  # gives T = (min_count + k - 1) + stddev * ppf(1 - delta).
   base = float(max_records_per_user + min_count - 1)
   threshold = base + stddev * scipy.stats.norm.ppf(1.0 - delta)
-  passed = noisy_counts >= threshold
-  return unique_parts[passed], noisy_counts[passed], stddev
+
+  is_public = np.array([p in pub_set for p in all_parts_list], dtype=bool)
+  passed = is_public | ((all_counts >= min_count) & (noisy_counts >= threshold))
+  return all_parts[passed], noisy_counts[passed], stddev
 
 
 def _select_partitions_sips(
@@ -536,12 +547,15 @@ class DPPartitionSelection(DPMechanism):
       self,
       rng: np.random.Generator,
       counts: np.ndarray,
+      public_indices: Sequence[int] | None = None,
   ) -> PartitionSelectionResult:
     """Single-round partition selection from pre-aggregated counts.
 
     Args:
       rng: A numpy random number generator.
       counts: 1D array of per-partition counts.
+      public_indices: Optional sequence of integer indices in counts
+        representing public partitions that must always be selected.
 
     Returns:
       A PartitionSelectionResult with indices into `counts` as the
@@ -549,9 +563,13 @@ class DPPartitionSelection(DPMechanism):
     """
     if self.sigma is None:
       raise ValueError(_UNCALIBRATED_MSG.format(param='sigma'))
+    is_public = np.zeros(len(counts), dtype=bool)
+    if public_indices is not None:
+      is_public[list(public_indices)] = True
     above_min = counts >= self.min_count
-    eligible_idx = np.where(above_min)[0]
-    eligible_counts = counts[above_min].astype(float)
+    eligible = is_public | above_min
+    eligible_idx = np.where(eligible)[0]
+    eligible_counts = counts[eligible].astype(float)
     stddev = self.max_records_per_user * self.sigma
     noisy_counts = eligible_counts + rng.normal(
         scale=stddev, size=len(eligible_counts)
@@ -562,7 +580,7 @@ class DPPartitionSelection(DPMechanism):
     # full derivation).
     base = float(self.max_records_per_user + self.min_count - 1)
     threshold = base + stddev * scipy.stats.norm.ppf(1.0 - self.delta)
-    passed = noisy_counts >= threshold
+    passed = is_public[eligible_idx] | (noisy_counts >= threshold)
     return PartitionSelectionResult(
         selected_partitions=eligible_idx[passed],
         estimated_counts=noisy_counts[passed],

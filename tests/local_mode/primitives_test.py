@@ -218,7 +218,32 @@ class SelectPartitionsGaussianThresholdingTest(absltest.TestCase):
     selected, _, _ = primitives.select_partitions_gaussian_thresholding(
         self.rng, data, gdp_budget=np.inf, delta=0.1, min_count=10
     )
-    self.assertCountEqual(selected, [1, 2])
+
+  def test_public_partitions_retained_below_threshold(self):
+    # Partition 1 has count 100 (private), partition 2 has count 1 (private),
+    # partition 3 has count 0 (public).
+    data = np.array([1] * 100 + [2] * 1)
+    selected, _, _ = primitives.select_partitions_gaussian_thresholding(
+        self.rng,
+        data,
+        gdp_budget=1.0,
+        delta=1e-6,
+        min_count=5,
+        public_partitions=[3],
+    )
+    self.assertIn(1, selected)
+    self.assertNotIn(2, selected)
+    self.assertIn(3, selected)
+
+  def test_from_summary_public_indices(self):
+    mech = primitives.DPPartitionSelection(delta=1e-6, min_count=5, sigma=1.0)
+    counts = np.array(
+        [0, 100, 1]
+    )  # index 0 is public, index 1 is high count, index 2 is low count
+    result = mech.from_summary(self.rng, counts, public_indices=[0])
+    self.assertIn(0, result.selected_partitions)
+    self.assertIn(1, result.selected_partitions)
+    self.assertNotIn(2, result.selected_partitions)
 
 
 class GaussianHistogramTest(absltest.TestCase):

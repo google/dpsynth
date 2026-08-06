@@ -740,6 +740,26 @@ class MaxRecordsPerUserTest(parameterized.TestCase):
           name='x', attribute=attr, max_records_per_user=k
       )
 
+  def test_open_set_public_possible_values_retained(self):
+    attr = domain.OpenSetCategoricalAttribute(
+        default_value='<OOD>', public_possible_values=['PUB1', 'PUB2']
+    )
+    # 'a' has 100 occurrences (high count), 'b' has 1 (below min_count 5),
+    # and 'PUB2' has 0.
+    data = np.array(['a'] * 100 + ['b'] * 1)
+    init = initialization.OpenSetCategoricalInitializer(
+        name='x', attribute=attr, delta=1e-6, min_count=5
+    ).configure(zcdp_rho=1.0)
+    col_meas = init(np.random.default_rng(0), data)
+    cat_attr = col_meas.categorical_attribute
+    self.assertIsInstance(cat_attr, domain.CategoricalAttribute)
+    # Expected possible_values: default_value, PUB1, PUB2, and 'a'
+    self.assertIn('<OOD>', cat_attr.possible_values)
+    self.assertIn('PUB1', cat_attr.possible_values)
+    self.assertIn('PUB2', cat_attr.possible_values)
+    self.assertIn('a', cat_attr.possible_values)
+    self.assertNotIn('b', cat_attr.possible_values)
+
 
 if __name__ == '__main__':
   absltest.main()
