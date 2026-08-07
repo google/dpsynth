@@ -188,6 +188,7 @@ class DataGenerationResult:
 
   synthetic_data: pd.DataFrame
   discrete_mechanism_result: dm_common.DiscreteMechanismResult
+  codec: TabularCodec
 
 
 @dataclasses.dataclass
@@ -424,4 +425,5 @@ class TabularSynthesizer(primitives.DPMechanism):
     return DataGenerationResult(
         synthetic_data=synthetic_data,
         discrete_mechanism_result=mechanism_result,
+        codec=codec,
     )
