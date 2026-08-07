@@ -128,7 +128,7 @@ class CategoricalAttribute:
 
 @dataclasses.dataclass(frozen=True)
 class OpenSetCategoricalAttribute:
-  """Dataclass representing a categorical attribute with unknown domain.
+  """A categorical attribute of strings with unknown domain.
 
   Given an attribute with an unknown domain, we will attempt to automatically
   infer the set of possible values from the data in a DP manner. Values that
@@ -138,11 +138,20 @@ class OpenSetCategoricalAttribute:
 
   Attributes:
     default_value: The default string value for out-of-domain entries.
+      Partitions that do not meet the threshold will be mapped to this value.
+    public_possible_values: Values guaranteed to be in-domain. Partition
+      selection always retains these regardless of thresholding.
     description: An optional semantic description of the attribute.
   """
 
   default_value: str = '<OOD>'
+  public_possible_values: Sequence[str] = ()
   description: str | None = None
+
+  def __post_init__(self):
+    object.__setattr__(
+        self, 'public_possible_values', list(self.public_possible_values)
+    )
 
 
 @dataclasses.dataclass(frozen=True)
@@ -310,14 +319,16 @@ def from_yaml_file(filepath: str | PathType) -> Mapping[str, AttributeType]:
     yaml_data = yaml.safe_load(f)
   domain = {}
   for name, attr_data in yaml_data.items():
+    # attr_data is a dictionary mapping dataclass fields to values. We match on
+    # the presence of certain fields to determine the attribute type.
     if 'possible_values' in attr_data:
       domain[name] = CategoricalAttribute(**attr_data)
     elif 'min_value' in attr_data:
       domain[name] = NumericalAttribute(**attr_data)
     elif 'max_tokens' in attr_data:
       domain[name] = FreeFormTextAttribute(**attr_data)
-    elif not attr_data:
-      domain[name] = OpenSetCategoricalAttribute()
+    elif 'default_value' in attr_data or not attr_data:
+      domain[name] = OpenSetCategoricalAttribute(**attr_data)
     else:
       raise ValueError(f'Invalid YAML data for attribute: {name}')
   return domain
