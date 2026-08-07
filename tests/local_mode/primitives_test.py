@@ -221,6 +221,45 @@ class SelectPartitionsGaussianThresholdingTest(absltest.TestCase):
     self.assertCountEqual(selected, [1, 2])
 
 
+class EnsurePublicPartitionsTest(absltest.TestCase):
+
+  def setUp(self):
+    super().setUp()
+    self.rng = np.random.default_rng(42)
+
+  def test_missing_partitions_appended_and_sorted(self):
+    selected = np.array(["a", "c"])
+    counts = np.array([10.0, 20.0])
+    public = np.array(["b", "c"])
+    sel, cts = primitives.ensure_public_partitions(
+        self.rng, selected, counts, 0.0, public
+    )
+    np.testing.assert_array_equal(sel, ["a", "b", "c"])
+    self.assertEqual(cts[0], 10.0)  # count for 'a'
+    self.assertEqual(cts[1], 0.0)  # noise for 'b' (stddev=0)
+    self.assertEqual(cts[2], 20.0)  # count for 'c'
+
+  def test_all_present_is_noop(self):
+    selected = np.array(["a", "b"])
+    counts = np.array([10.0, 20.0])
+    public = np.array(["a", "b"])
+    sel, cts = primitives.ensure_public_partitions(
+        self.rng, selected, counts, 1.0, public
+    )
+    np.testing.assert_array_equal(sel, selected)
+    np.testing.assert_array_equal(cts, counts)
+
+  def test_empty_selected(self):
+    selected = np.array([], dtype=str)
+    counts = np.array([], dtype=float)
+    public = np.array(["y", "x"])
+    sel, cts = primitives.ensure_public_partitions(
+        self.rng, selected, counts, 1.0, public
+    )
+    np.testing.assert_array_equal(sel, ["x", "y"])
+    self.assertLen(cts, 2)
+
+
 class GaussianHistogramTest(absltest.TestCase):
 
   def setUp(self):

@@ -169,7 +169,44 @@ def select_partitions_gaussian_thresholding(
   base = float(max_records_per_user + min_count - 1)
   threshold = base + stddev * scipy.stats.norm.ppf(1.0 - delta)
   passed = noisy_counts >= threshold
+  # unique_parts is sorted (see np.unique), so the output order is determinstic.
   return unique_parts[passed], noisy_counts[passed], stddev
+
+
+def ensure_public_partitions(
+    rng: np.random.Generator,
+    selected: np.ndarray,
+    counts: np.ndarray,
+    stddev: float,
+    public: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+  """Ensures public partition IDs appear in the selected set.
+
+  For any public ID not already in ``selected``, appends it with a noisy
+  count drawn from N(0, stddev²), consistent with the Gaussian mechanism
+  applied to an empty partition.
+
+  Args:
+    rng: A numpy random number generator.
+    selected: 1D array of already-selected partition IDs.
+    counts: 1D array of noisy counts parallel to ``selected``.
+    stddev: Gaussian noise standard deviation used by the mechanism.
+    public: 1D array of public partition IDs to guarantee.
+
+  Returns:
+    A (selected, counts) tuple with missing public partitions appended.
+  """
+  missing_mask = ~np.isin(public, selected)
+  missing = public[missing_mask]
+  if missing.size == 0:
+    return selected, counts
+  noise = rng.normal(scale=stddev, size=missing.size)
+  all_selected = np.concatenate([selected, missing])
+  all_counts = np.concatenate([counts, noise])
+  # Sort by partition key to ensure deterministic order and avoid leaking
+  # which partitions were missing.
+  order = np.argsort(all_selected)
+  return all_selected[order], all_counts[order]
 
 
 def _select_partitions_sips(

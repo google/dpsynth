@@ -200,6 +200,17 @@ class TestDomain(absltest.TestCase):
         loaded['text'], domain.FreeFormTextAttribute(max_tokens=64)
     )
 
+  def test_open_set_yaml_roundtrip(self):
+    original_domain = {
+        'open_cat': domain.OpenSetCategoricalAttribute(
+            default_value='<UNKNOWN>', public_possible_values=('X', 'Y')
+        ),
+    }
+    temp_file = self.create_tempfile('open_cat.yaml', mode='w+')
+    domain.to_yaml_file(original_domain, temp_file.full_path)
+    loaded_domain = domain.from_yaml_file(temp_file.full_path)
+    self.assertEqual(loaded_domain, original_domain)
+
 
 if __name__ == '__main__':
   absltest.main()

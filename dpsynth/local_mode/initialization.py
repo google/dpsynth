@@ -401,12 +401,24 @@ class OpenSetCategoricalInitializer(primitives.DPMechanism):
     """Returns a ColumnMeasurement from pre-aggregated value counts."""
     mechanism = _validate_mechanism(self.mechanism)
     result = mechanism.from_summary(rng, counts)
-    selected_values = [
-        str(v) for v in unique_values[result.selected_partitions]
-    ]
+    selected_values = np.array(
+        [str(v) for v in unique_values[result.selected_partitions]]
+    )
+    estimated_counts = result.estimated_counts
+
+    if self.attribute.public_possible_values:
+      stddev = mechanism.max_records_per_user * mechanism.sigma  # pyrefly: ignore[unsupported-operation]
+      pub = np.array(self.attribute.public_possible_values)
+      selected_values, estimated_counts = primitives.ensure_public_partitions(
+          rng,
+          selected_values,
+          estimated_counts,
+          stddev,
+          pub,
+      )
 
     # Build the discovered domain: default first, then selected values.
-    possible_values = [self.attribute.default_value] + selected_values
+    possible_values = [self.attribute.default_value] + selected_values.tolist()
     cat_attr = domain.CategoricalAttribute(
         possible_values=possible_values,  # pyrefly: ignore[unexpected-keyword]
         out_of_domain_index=0,  # pyrefly: ignore[unexpected-keyword]
@@ -415,7 +427,7 @@ class OpenSetCategoricalInitializer(primitives.DPMechanism):
     # The measurement covers only the discovered partitions (indices 1:),
     # not the unmeasured default at index 0.
     measurement = mbi.LinearMeasurement(
-        result.estimated_counts,  # pyrefly: ignore[bad-argument-type]
+        estimated_counts,  # pyrefly: ignore[bad-argument-type]
         (self.name,),
         stddev=mechanism.max_records_per_user * mechanism.sigma,  # pyrefly: ignore[unsupported-operation]
         query=mbi.SlicedQuery(start=1),
