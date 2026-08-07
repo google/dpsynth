@@ -27,7 +27,7 @@ from dpsynth import constraints
 from dpsynth import data_generation_v3
 from dpsynth import discrete_mechanisms
 from dpsynth import domain
-from dpsynth.local_mode import beam_adapter
+from dpsynth.adapters import beam as beam_adapter
 from dpsynth.local_mode import initialization
 import mbi
 import numpy as np
@@ -56,9 +56,11 @@ class NumericalHistogramTest(absltest.TestCase):
     _TEST_RESULTS.clear()
     with beam.Pipeline() as p:
       stats = (
-          p
-          | beam.Create(rows)
+
+          p | beam.Create(rows)
+
           | beam_adapter.ComputeSufficientStats({'x': init})
+
       )
       _ = stats | beam.combiners.ToDict() | beam.Map(_store)
     return dict(_TEST_RESULTS[0]['x'])
@@ -165,9 +167,11 @@ class CategoricalCountsTest(absltest.TestCase):
     _TEST_RESULTS.clear()
     with beam.Pipeline() as p:
       stats = (
-          p
-          | beam.Create(rows)
+
+          p | beam.Create(rows)
+
           | beam_adapter.ComputeSufficientStats({'col': init})
+
       )
       _ = stats | beam.combiners.ToDict() | beam.Map(_store)
     counts = dict(_TEST_RESULTS[0]['col'])
@@ -196,9 +200,11 @@ class OpenSetCountsTest(absltest.TestCase):
     _TEST_RESULTS.clear()
     with beam.Pipeline() as p:
       stats = (
-          p
-          | beam.Create(rows)
+
+          p | beam.Create(rows)
+
           | beam_adapter.ComputeSufficientStats({'col': init})
+
       )
       _ = stats | beam.combiners.ToDict() | beam.Map(_store)
     counts = dict(_TEST_RESULTS[0]['col'])
@@ -244,13 +250,17 @@ class RunFromSummaryTest(absltest.TestCase):
     _TEST_RESULTS.clear()
     with beam.Pipeline() as p:
       stats = (
-          p
-          | beam.Create(rows)
+
+          p | beam.Create(rows)
+
           | beam_adapter.ComputeSufficientStats(initializers)
+
       )
       _ = stats | beam.combiners.ToDict() | beam.Map(_store)
     measurements = beam_adapter.run_from_summary(
+
         _TEST_RESULTS[0], initializers, rng
+
     )
 
     self.assertLen(measurements, 3)
@@ -338,7 +348,9 @@ class BeamTabularSynthesizerTest(parameterized.TestCase):
   def test_end_to_end_generates_synthetic_data(self):
     synth = data_generation_v3.TabularSynthesizer(domains=self._domains())
     beam_synth = beam_adapter.BeamTabularSynthesizer(synth).configure(
+
         zcdp_rho=100.0
+
     )
     rows = [
         {'color': 'r', 'size': 's'},
@@ -360,7 +372,9 @@ class BeamTabularSynthesizerTest(parameterized.TestCase):
     }
     synth = data_generation_v3.TabularSynthesizer(domains=domains)
     beam_synth = beam_adapter.BeamTabularSynthesizer(synth).configure(
+
         zcdp_rho=100.0
+
     )
     rng_data = np.random.default_rng(0)
     rows = [
@@ -401,7 +415,9 @@ class BeamTabularSynthesizerTest(parameterized.TestCase):
         domains=domains, discrete_mechanism=mechanism
     )
     beam_synth = beam_adapter.BeamTabularSynthesizer(synth).configure(
+
         zcdp_rho=100.0
+
     )
     rows = [
         {'a': 'x', 'b': 'p'},
@@ -420,7 +436,9 @@ class BeamTabularSynthesizerTest(parameterized.TestCase):
     domains = {'a': domain.CategoricalAttribute(possible_values=['x', 'y'])}
     synth = data_generation_v3.TabularSynthesizer(domains=domains)
     beam_synth = beam_adapter.BeamTabularSynthesizer(synth).configure(
+
         zcdp_rho=1e8
+
     )
     rows = [{'a': 'x'}, {'a': 'y'}] * 150  # 300 rows.
 
@@ -442,7 +460,9 @@ class BeamTabularSynthesizerTest(parameterized.TestCase):
         domains=domains, cross_attribute_constraints=(constraint,)
     )
     beam_synth = beam_adapter.BeamTabularSynthesizer(synth).configure(
+
         zcdp_rho=100.0
+
     )
     # The data never contains (a0, b1). Without enforcement, independent
     # (a, b) marginals would put ~25% of mass on that cell; forwarding the
@@ -469,7 +489,9 @@ class BeamTabularSynthesizerTest(parameterized.TestCase):
     }
     synth = data_generation_v3.TabularSynthesizer(domains=domains)
     beam_synth = beam_adapter.BeamTabularSynthesizer(synth).configure(
+
         zcdp_rho=100.0
+
     )
     rows = [
         {'z': 'a', 'm': 'c', 'a': 'e'},
