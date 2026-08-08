@@ -29,7 +29,7 @@ import pandas as pd
 
 synth = dpsynth.TabularSynthesizer(
     domains=domains,
-    discrete_mechanism=discrete_mechanisms.MSTMechanism(),
+    discrete_mechanism=discrete_mechanisms.MSTConfig(),
 )
 result = synth.calibrate(
     epsilon=1.0,

@@ -21,7 +21,6 @@ import dataclasses
 
 from absl import logging
 import dp_accounting
-from dpsynth import api
 from dpsynth import constraints
 from dpsynth import discrete_mechanisms
 from dpsynth import domain
@@ -38,7 +37,6 @@ def _create_initializers(
     domains: Mapping[str, domain.AttributeType],
     numerical_bins: int,
     init_delta: float,
-    max_records_per_user: int = 1,
 ) -> dict[str, primitives.DPMechanism]:
   """Creates per-column initializers from the domain specification.
 
@@ -46,10 +44,6 @@ def _create_initializers(
     domains: Mapping from column names to attribute domain specifications.
     numerical_bins: Number of bins for numerical discretization.
     init_delta: Delta for open-set categorical partition selection.
-    max_records_per_user: Assumed upper bound on the number of records a single
-      user contributes. Sensitivity (and hence added noise) is scaled by this
-      factor to provide user-level rather than record-level DP; the privacy
-      analysis is unchanged. Soundness relies on the caller enforcing the bound.
 
   Returns:
     A dictionary mapping column names to uncalibrated initializer instances.
@@ -60,22 +54,20 @@ def _create_initializers(
   initializers = {}
   for col, attr in domains.items():
     if isinstance(attr, domain.NumericalAttribute):
-      initializers[col] = initialization.NumericalInitializer(
+      initializers[col] = initialization.NumericalInitializerConfig(
           name=col,
           num_partitions=numerical_bins,
           attribute=attr,
-          max_records_per_user=max_records_per_user,
       )
     elif isinstance(attr, domain.CategoricalAttribute):
-      initializers[col] = initialization.CategoricalInitializer(
-          name=col, attribute=attr, max_records_per_user=max_records_per_user
+      initializers[col] = initialization.CategoricalInitializerConfig(
+          name=col, attribute=attr
       )
     elif isinstance(attr, domain.OpenSetCategoricalAttribute):
-      initializers[col] = initialization.OpenSetCategoricalInitializer(
+      initializers[col] = initialization.OpenSetCategoricalInitializerConfig(
           name=col,
           attribute=attr,
           delta=init_delta,
-          max_records_per_user=max_records_per_user,
       )
     else:
       raise ValueError(
@@ -225,9 +217,10 @@ class TabularSynthesizer(primitives.DPMechanism):
   """
 
   domains: Mapping[str, domain.AttributeType]
-  discrete_mechanism: discrete_mechanisms.DiscreteMechanism = dataclasses.field(
-      default_factory=discrete_mechanisms.MSTMechanism
-  )
+  discrete_mechanism: (
+      discrete_mechanisms.DiscreteMechanismConfig
+      | discrete_mechanisms.DiscreteMechanism
+  ) = dataclasses.field(default_factory=discrete_mechanisms.MSTConfig)
   numerical_bins: int = 32
   init_budget_fraction: float = 0.1
   initializers: dict[str, primitives.DPMechanism] | None = None
@@ -236,13 +229,15 @@ class TabularSynthesizer(primitives.DPMechanism):
   experimental_max_records_per_user: int = 1
 
   def __post_init__(self):
-    api.validate_max_records_per_user(self.experimental_max_records_per_user)
+    if self.experimental_max_records_per_user <= 0:
+      raise ValueError('experimental_max_records_per_user must be >= 1')
 
   def configure(  # pyrefly: ignore[bad-override]
       self,
       *,
       zcdp_rho: float,
       delta: float = 0.0,
+      max_records_per_user: int | None = None,
   ) -> TabularSynthesizer:
     """Returns a copy configured with the given privacy budget.
 
@@ -266,6 +261,11 @@ class TabularSynthesizer(primitives.DPMechanism):
         (``init_budget_fraction``) is allocated to partition selection for
         open-set columns. Must be positive when open-set categorical attributes
         are present.
+      max_records_per_user: Upper bound on the number of records a single user
+        contributes. Values greater than 1 scale the added noise (and mechanism
+        sensitivity) to provide user-level rather than record-level DP; the
+        privacy accounting is unchanged. This bound is NOT enforced -- soundness
+        relies on the caller guaranteeing it via preprocessing.
 
     Returns:
       A new TabularSynthesizer with calibrated sub-mechanisms.
@@ -282,6 +282,9 @@ class TabularSynthesizer(primitives.DPMechanism):
           'delta must be positive when open-set categorical attributes are'
           ' present. It is used for Gaussian partition selection.'
       )
+    if max_records_per_user is None:
+      max_records_per_user = self.experimental_max_records_per_user
+
     # Split delta across open-set columns, analogous to splitting zcdp_rho.
     # Under calibrate(), any delta not consumed here is automatically
     # available for the zCDP-to-(epsilon, delta) conversion, so this
@@ -297,38 +300,33 @@ class TabularSynthesizer(primitives.DPMechanism):
           self.domains,
           self.numerical_bins,
           per_col_delta,
-          self.experimental_max_records_per_user,
       )
-    elif self.experimental_max_records_per_user > 1:
-      # The synthesizer's experimental_max_records_per_user is the single
-      # source of truth: the total-count and discrete mechanisms already use it,
-      # so propagate it to caller-supplied initializers too.
-      propagated = {}
-      for col, init in inits.items():
-        propagated[col] = dataclasses.replace(  # pytype: disable=wrong-arg-types
-            init, max_records_per_user=self.experimental_max_records_per_user
-        )
-      inits = propagated
     init_rho = self.init_budget_fraction * zcdp_rho
     # +1 for the DPGaussianCount that always measures the total.
     per_col_rho = init_rho / (len(inits) + 1)
     discrete_rho = zcdp_rho - init_rho
 
     calibrated_inits = {
-        col: init.configure(zcdp_rho=per_col_rho) for col, init in inits.items()
+        col: init.configure(
+            zcdp_rho=per_col_rho,
+            max_records_per_user=max_records_per_user,
+        )
+        for col, init in inits.items()
     }
-    calibrated_total = primitives.DPGaussianCount(
-        max_records_per_user=self.experimental_max_records_per_user
-    ).configure(zcdp_rho=per_col_rho)
-    calibrated_discrete = dataclasses.replace(
-        self.discrete_mechanism,
-        max_records_per_user=self.experimental_max_records_per_user,
-    ).configure(zcdp_rho=discrete_rho)
+    calibrated_total = primitives.DPGaussianCountConfig().configure(
+        zcdp_rho=per_col_rho,
+        max_records_per_user=max_records_per_user,
+    )
+    calibrated_discrete = self.discrete_mechanism.configure(  # pyrefly: ignore[missing-attribute]
+        zcdp_rho=discrete_rho,
+        max_records_per_user=max_records_per_user,
+    )
     return dataclasses.replace(
         self,
         initializers=calibrated_inits,
         discrete_mechanism=calibrated_discrete,
         total_count_mechanism=calibrated_total,
+        experimental_max_records_per_user=max_records_per_user,
     )
 
   @property
@@ -347,7 +345,7 @@ class TabularSynthesizer(primitives.DPMechanism):
       )
     events = [init.dp_event for init in self.initializers.values()]
     events.append(self.total_count_mechanism.dp_event)
-    events.append(self.discrete_mechanism.dp_event)
+    events.append(self.discrete_mechanism.dp_event)  # pyrefly: ignore[missing-attribute]
     return dp_accounting.ComposedDpEvent(events)
 
   def __call__(
@@ -385,7 +383,7 @@ class TabularSynthesizer(primitives.DPMechanism):
     total_measurement = mbi.LinearMeasurement(
         np.array([total]),  # pyrefly: ignore[bad-argument-type]
         (),
-        stddev=k * self.total_count_mechanism.sigma,  # pyrefly: ignore[unsupported-operation]
+        stddev=k * self.total_count_mechanism.sigma,
     )
 
     results: dict[str, initialization.ColumnMeasurement] = {}
@@ -408,7 +406,7 @@ class TabularSynthesizer(primitives.DPMechanism):
     mbi_constraints = tuple(
         c.to_mbi() for c in self.cross_attribute_constraints
     )
-    mechanism_result = self.discrete_mechanism(
+    mechanism_result = self.discrete_mechanism(  # pyrefly: ignore[not-callable]
         rng,
         data=discrete,
         initial_measurements=initial_measurements,

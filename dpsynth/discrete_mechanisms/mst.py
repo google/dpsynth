@@ -155,8 +155,8 @@ def _select_two_way_marginal_queries(
   )
 
 
-@dataclasses.dataclass
-class MSTMechanism(base.DiscreteMechanism):
+@dataclasses.dataclass(frozen=True)
+class MSTConfig(base.DiscreteMechanismConfig):
   """Configuration for the maximum spanning tree mechanism.
 
   Details are described in the paper:
@@ -172,7 +172,6 @@ class MSTMechanism(base.DiscreteMechanism):
 
   select_budget_fraction: float = 1 / 3
   maximum_marginal_size: int = 10_000_000
-  _select_rho: float | None = dataclasses.field(default=None, repr=False)
 
   def supporting_cliques(self, domain: mbi.Domain) -> list[mbi.Clique]:
     """Returns all pairwise marginals within the size limit."""
@@ -190,11 +189,20 @@ class MSTMechanism(base.DiscreteMechanism):
         'measurement_rho': remaining_rho - select_rho,
     }
 
+  def _create_mechanism(self, **kwargs) -> 'MST':
+    return MST(**kwargs)
+
+
+@dataclasses.dataclass(frozen=True, kw_only=True)
+class MST(base.DiscreteMechanism):
+  """Calibrated MST instance."""
+
+  config: MSTConfig
+  _select_rho: float = -1.0
+
   @property
   def dp_event(self) -> dp_accounting.DpEvent:
     """Returns the DP event for the MST mechanism."""
-    if self.zcdp_rho is None:
-      raise ValueError('Must call calibrate() before using the mechanism.')
     # exponential mechanisms and (d-1) Gaussian mechanisms.
     return dp_accounting.ZCDpEvent(self.zcdp_rho)
 
@@ -205,6 +213,6 @@ class MSTMechanism(base.DiscreteMechanism):
           data,
           self._select_rho,  # pyrefly: ignore[bad-argument-type]
           measurements,
-          maximum_marginal_size=self.maximum_marginal_size,
+          maximum_marginal_size=self.config.maximum_marginal_size,
           max_records_per_user=self.max_records_per_user,
       )
