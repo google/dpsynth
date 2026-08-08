@@ -305,7 +305,7 @@ class TabularSynthesizer(primitives.DPMechanism):
       # so propagate it to caller-supplied initializers too.
       propagated = {}
       for col, init in inits.items():
-        propagated[col] = dataclasses.replace(  # pytype: disable=wrong-arg-types
+        propagated[col] = dataclasses.replace(  # pyrefly: ignore[bad-specialization]
             init, max_records_per_user=self.experimental_max_records_per_user
         )
       inits = propagated
@@ -317,9 +317,10 @@ class TabularSynthesizer(primitives.DPMechanism):
     calibrated_inits = {
         col: init.configure(zcdp_rho=per_col_rho) for col, init in inits.items()
     }
-    calibrated_total = primitives.DPGaussianCount(
-        max_records_per_user=self.experimental_max_records_per_user
-    ).configure(zcdp_rho=per_col_rho)
+    calibrated_total = primitives.DPGaussianCountConfig().configure(
+        zcdp_rho=per_col_rho,
+        max_records_per_user=self.experimental_max_records_per_user,
+    )
     calibrated_discrete = dataclasses.replace(
         self.discrete_mechanism,
         max_records_per_user=self.experimental_max_records_per_user,

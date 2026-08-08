@@ -133,15 +133,17 @@ class NumericalInitializer(primitives.DPMechanism):
   ) -> NumericalInitializer:
     """Returns a copy calibrated to the given zCDP budget."""
     lower, upper, _ = self._grid_spec
-    mechanism = primitives.DPQuantiles(
+    mechanism = primitives.DPQuantilesConfig(
         num_partitions=self.num_partitions,
         lower=lower,
         upper=upper,
         jitter_strategy=(
             'refine' if self.attribute.dtype == 'int' else 'symmetric'
         ),
-        max_records_per_user=self.max_records_per_user,
-    ).configure(zcdp_rho=zcdp_rho, epsilon_ratio=epsilon_ratio)
+        epsilon_ratio=epsilon_ratio,
+    ).configure(
+        zcdp_rho=zcdp_rho, max_records_per_user=self.max_records_per_user
+    )
     return dataclasses.replace(self, mechanism=mechanism)
 
   @property
@@ -300,10 +302,11 @@ class CategoricalInitializer(primitives.DPMechanism):
       self, *, zcdp_rho: float, delta: float = 0.0
   ) -> CategoricalInitializer:
     """Returns a copy calibrated to the given zCDP budget."""
-    mechanism = primitives.DPGaussianHistogram(
+    mechanism = primitives.DPGaussianHistogramConfig(
         domain_size=self.attribute.size,
-        max_records_per_user=self.max_records_per_user,
-    ).configure(zcdp_rho=zcdp_rho)
+    ).configure(
+        zcdp_rho=zcdp_rho, max_records_per_user=self.max_records_per_user
+    )
     return dataclasses.replace(self, mechanism=mechanism)
 
   @property
@@ -372,11 +375,12 @@ class OpenSetCategoricalInitializer(primitives.DPMechanism):
   ) -> OpenSetCategoricalInitializer:
     """Returns a copy calibrated to the given zCDP budget."""
     # max_records_per_user > 1 is supported via a naive, conservative threshold.
-    mechanism = primitives.DPPartitionSelection(
+    mechanism = primitives.DPPartitionSelectionConfig(
         delta=self.delta,
         min_count=self.min_count,
-        max_records_per_user=self.max_records_per_user,
-    ).configure(zcdp_rho=zcdp_rho)
+    ).configure(
+        zcdp_rho=zcdp_rho, max_records_per_user=self.max_records_per_user
+    )
     return dataclasses.replace(self, mechanism=mechanism)
 
   @property
