@@ -36,7 +36,7 @@ def generate(
     *,
     discrete_config: (
         discrete_mechanisms.DiscreteMechanism
-    ) = discrete_mechanisms.MSTMechanism(),
+    ) = discrete_mechanisms.MSTMechanismConfig(),
     numerical_bins: int = 32,
     one_way_marginal_budget_fraction: float = 0.1,
     cross_attribute_constraints: Sequence[constraints.Constraint] = (),

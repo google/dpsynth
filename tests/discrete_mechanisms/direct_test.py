@@ -25,7 +25,7 @@ class DirectTest(absltest.TestCase):
     data = mbi.Dataset.synthetic(mbi.Domain(['a', 'b', 'c'], [3, 4, 5]), N=1000)
 
     prespecified_queries = [('a', 'b'), ('a', 'c'), ('b', 'c')]
-    config = direct.DirectMechanism(
+    config = direct.DirectMechanismConfig(
         prespecified_marginal_queries=prespecified_queries,
         pgm_iters=500,
     )

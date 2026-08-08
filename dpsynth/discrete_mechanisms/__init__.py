@@ -17,19 +17,26 @@
 # pylint: disable=g-importing-member
 
 from dpsynth.discrete_mechanisms.aim import AIMMechanism
+from dpsynth.discrete_mechanisms.aim import AIMMechanismConfig
 from dpsynth.discrete_mechanisms.aim_gdp import AIMGDPMechanism
+from dpsynth.discrete_mechanisms.aim_gdp import AIMGDPMechanismConfig
 from dpsynth.discrete_mechanisms.base import DiscreteMechanism
+from dpsynth.discrete_mechanisms.base import DiscreteMechanismConfig
 from dpsynth.discrete_mechanisms.common import DiscreteMechanismResult
 from dpsynth.discrete_mechanisms.common import MechanismDiagnostics
 from dpsynth.discrete_mechanisms.direct import DirectMechanism
+from dpsynth.discrete_mechanisms.direct import DirectMechanismConfig
 from dpsynth.discrete_mechanisms.independent import IndependentMechanism
+from dpsynth.discrete_mechanisms.independent import IndependentMechanismConfig
 from dpsynth.discrete_mechanisms.mst import MSTMechanism
+from dpsynth.discrete_mechanisms.mst import MSTMechanismConfig
 from dpsynth.discrete_mechanisms.swift import SWIFTMechanism
+from dpsynth.discrete_mechanisms.swift import SWIFTMechanismConfig
 
 # Backwards-compatible aliases.
-AIMConfig = AIMMechanism
-AIMGDPConfig = AIMGDPMechanism
-DirectConfig = DirectMechanism
-IndependentConfig = IndependentMechanism
-MSTConfig = MSTMechanism
-SWIFTConfig = SWIFTMechanism
+AIMConfig = AIMMechanismConfig
+AIMGDPConfig = AIMGDPMechanismConfig
+DirectConfig = DirectMechanismConfig
+IndependentConfig = IndependentMechanismConfig
+MSTConfig = MSTMechanismConfig
+SWIFTConfig = SWIFTMechanismConfig
