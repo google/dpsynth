@@ -18,32 +18,8 @@
 
 This module provides a lightweight bridge between the local-mode
 TabularSynthesizer and Apache Beam, enabling local-mode features to
-run on datasets too large to fit in memory. It is *not* a replacement
-for a hardened, pipeline-native DP framework such as PipelineDP,
-which should be preferred for production pipelines.
-
-This module may serve as a temporary stopgap until there is better
-alignment between the pipeline DP implementations and the local-mode
-NumPy-based implementations. How it fits within the broader ecosystem
-long-term is an open question.
-
-Compared to the pipeline DP approach, this module:
-
-  - Is limited to Apache Beam (no Apache Spark or other runners).
-  - Does not go through the hardened privacy-verification path that
-    PipelineDP provides, which offers stronger guarantees around DP
-    primitive correctness and audited randomness.
-  - Requires the full marginal workload to fit on the driver, since
-    the discrete mechanism runs locally after Beam materializes the
-    marginals.
-
-However, it can be useful when:
-
-  - You want the TabularSynthesizer API (calibrate -> generate) but
-    your data lives in a Beam pipeline rather than a DataFrame.
-  - You need a feature that is currently only available in local mode
-    (e.g. a specific mechanism, constraint, or transformation) and
-    want to apply it to large-scale data.
+run on datasets too large to fit in memory. See the adapters README
+for more information.
 """
 
 from __future__ import annotations

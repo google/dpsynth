@@ -19,7 +19,7 @@ from typing import Literal
 from absl.testing import absltest
 from dpsynth import data_generation_v3
 from dpsynth import domain
-from dpsynth import pydantic_api
+from dpsynth.adapters import pydantic_api
 import numpy as np
 import pydantic
 
