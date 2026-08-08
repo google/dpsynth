@@ -30,6 +30,8 @@ from dpsynth.local_mode import _quantiles
 import numpy as np
 import scipy.stats
 
+CalibratedMechanism = api.CalibratedMechanism
+MechanismConfig = api.MechanismConfig
 DPMechanism = api.DPMechanism
 
 
@@ -46,11 +48,6 @@ class PartitionSelectionResult:
 
   selected_partitions: np.ndarray
   estimated_counts: np.ndarray
-
-
-_UNCALIBRATED_MSG = (
-    '{param} has not been set. Set it directly or call calibrate().'
-)
 
 
 def _contribution_bound(prng, user_ids, max_part):
@@ -278,18 +275,9 @@ def _select_partitions_sips(
   return selected_partitions, selected_counts, max_sigma
 
 
-# ---------------------------------------------------------------------------
-# DPMechanism subclasses
-# ---------------------------------------------------------------------------
-
-
-@dataclasses.dataclass
-class DPQuantiles(DPMechanism):
-  """Differentially private quantiles via composed exponential mechanisms.
-
-  Computes quantile edges by recursive median bisection on a dense histogram.
-  The ``__call__`` method takes a 1D histogram of counts and returns the
-  quantile edge values.
+@dataclasses.dataclass(frozen=True)
+class DPQuantilesConfig(MechanismConfig):
+  """Recipe for differentially private quantiles.
 
   Attributes:
     num_partitions: Number of quantile partitions (must be a power of 2).
@@ -297,24 +285,14 @@ class DPQuantiles(DPMechanism):
     upper: Upper bound of the data domain (exclusive).
     jitter_strategy: Tie-breaking jitter passed to ``quantiles_from_histogram``:
       ``'refine'`` for integer attributes, ``'symmetric'`` for continuous ones.
-    max_records_per_user: Assumed upper bound on the number of records a single
-      user contributes. Added noise (and mechanism sensitivity) is scaled by
-      this factor to provide user-level rather than record-level DP; the privacy
-      accounting is unchanged. Soundness relies on the caller enforcing this
-      bound.
+    epsilon_ratio: Factor by which epsilon grows at each deeper level.
   """
 
   num_partitions: int
   lower: float
   upper: float
   jitter_strategy: Literal['symmetric', 'refine'] = 'symmetric'
-  max_records_per_user: int = 1
-  _epsilon_levels: tuple[float, ...] | None = dataclasses.field(
-      default=None, repr=False
-  )
-
-  def __post_init__(self):
-    api.validate_max_records_per_user(self.max_records_per_user)
+  epsilon_ratio: float = 2.0
 
   @property
   def _num_levels(self) -> int:
@@ -323,74 +301,94 @@ class DPQuantiles(DPMechanism):
       raise ValueError(f'{self.num_partitions=} must be a power of 2.')
     return result
 
-  @property
-  def zcdp_rho(self) -> float:
-    """Total zCDP rho consumed, derived from the per-level epsilons."""
-    if self._epsilon_levels is None:
-      raise ValueError(_UNCALIBRATED_MSG.format(param='_epsilon_levels'))
-    return sum(e**2 / 8.0 for e in self._epsilon_levels)
-
-  def configure(  # pyrefly: ignore[bad-override]
-      self, *, zcdp_rho: float, delta: float = 0.0, epsilon_ratio: float = 2.0
-  ) -> DPQuantiles:
-    """Returns a copy calibrated to the given zCDP budget.
-
-    Args:
-      zcdp_rho: The zCDP privacy budget (rho).
-      delta: Unused. Accepted for interface compatibility.
-      epsilon_ratio: Factor by which epsilon grows at each deeper level.
-    """
-    if zcdp_rho <= 0:
-      raise ValueError(f'zcdp_rho must be positive, got {zcdp_rho}.')
+  def configure(self, *, zcdp_rho, delta=0.0, max_records_per_user=1):  # pyrefly: ignore[bad-override]
+    """Returns a calibrated mechanism for the given zCDP budget."""
     levels = self._num_levels
-    if levels == 0:
-      return dataclasses.replace(self, _epsilon_levels=())
-    rho_ratio = epsilon_ratio**2
+    rho_ratio = self.epsilon_ratio**2
     budget_weights = rho_ratio ** np.arange(levels)[::-1]
     rho_levels = zcdp_rho * budget_weights / budget_weights.sum()
     eps = np.sqrt(8.0 * rho_levels)
-    return dataclasses.replace(self, _epsilon_levels=tuple(eps.tolist()))
+    return DPQuantiles(self, tuple(eps.tolist()), max_records_per_user)
+
+
+@dataclasses.dataclass(frozen=True)
+class DPQuantiles(CalibratedMechanism):
+  """Calibrated DP quantiles via composed exponential mechanisms.
+
+  Computes quantile edges by recursive median bisection on a dense histogram.
+  The ``__call__`` method takes a 1D histogram of counts and returns the
+  quantile edge values.
+
+  Attributes:
+    config: The recipe this mechanism was calibrated from.
+    epsilon_levels: Per-level exponential-mechanism epsilons.
+    max_records_per_user: Assumed upper bound on the number of records a single
+      user contributes. The per-level epsilons are divided by this factor at run
+      time to provide user-level rather than record-level DP; the privacy
+      accounting is unchanged. Soundness relies on the caller enforcing this
+      bound.
+  """
+
+  config: DPQuantilesConfig
+  epsilon_levels: tuple[float, ...]
+  max_records_per_user: int = 1
+
+  def __post_init__(self):
+    api.validate_max_records_per_user(self.max_records_per_user)
+
+  @property
+  def zcdp_rho(self) -> float:
+    """Total zCDP rho consumed, derived from the per-level epsilons."""
+    return sum(e**2 / 8.0 for e in self.epsilon_levels)
 
   @property
   def dp_event(self) -> dp_accounting.DpEvent:
     """Returns the composed privacy event for the quantile computation."""
-    if self._epsilon_levels is None:
-      raise ValueError(_UNCALIBRATED_MSG.format(param='_epsilon_levels'))
     return dp_accounting.ComposedDpEvent([
         dp_accounting.ExponentialMechanismDpEvent(epsilon=float(eps))
-        for eps in self._epsilon_levels
+        for eps in self.epsilon_levels
     ])
 
   def __call__(
       self, rng: np.random.Generator, counts: np.ndarray
   ) -> list[float]:
     """Returns quantile edges from a dense histogram of counts."""
-    if self._epsilon_levels is None:
-      raise ValueError(_UNCALIBRATED_MSG.format(param='_epsilon_levels'))
+    eps_levels = np.asarray(self.epsilon_levels) / self.max_records_per_user
     indices = _quantiles.quantiles_from_histogram(
-        rng,
-        counts,
-        epsilon_levels=(
-            np.asarray(self._epsilon_levels) / self.max_records_per_user
-        ),
-        jitter_strategy=self.jitter_strategy,
+        rng, counts, eps_levels, self.config.jitter_strategy
     )
     # Map cell indices back to domain values; delta is the grid step, which
     # equals the integer step for integer attributes so edges stay integer.
-    delta = (self.upper - self.lower) / max(1, np.asarray(counts).size - 1)
-    return [self.lower + i * delta for i in indices]
+    delta = (self.config.upper - self.config.lower) / max(1, counts.size - 1)
+    return [self.config.lower + i * delta for i in indices]
 
 
-@dataclasses.dataclass
-class DPGaussianHistogram(DPMechanism):
-  """Differentially private histogram via the Gaussian mechanism.
+@dataclasses.dataclass(frozen=True)
+class DPGaussianHistogramConfig(MechanismConfig):
+  """Recipe for a differentially private histogram via the Gaussian mechanism.
+
+  Attributes:
+    domain_size: Number of categories in the histogram domain.
+  """
+
+  domain_size: int
+
+  def configure(self, *, zcdp_rho, delta=0.0, max_records_per_user=1):  # pyrefly: ignore[bad-override]
+    """Returns a calibrated mechanism with sigma derived from the budget."""
+    sigma = math.sqrt(0.5 / zcdp_rho)
+    return DPGaussianHistogram(self, sigma, max_records_per_user)
+
+
+@dataclasses.dataclass(frozen=True)
+class DPGaussianHistogram(CalibratedMechanism):
+  """Calibrated DP histogram via the Gaussian mechanism.
 
   The natural privacy parameter is ``sigma``, the noise standard deviation.
   The conversion from zCDP is ``sigma = sqrt(0.5 / zcdp_rho)``.
 
   Attributes:
-    domain_size: Number of categories in the histogram domain.
-    sigma: Gaussian noise standard deviation. Set directly or via ``configure``.
+    config: The recipe this mechanism was calibrated from.
+    sigma: Gaussian noise standard deviation.
     max_records_per_user: Assumed upper bound on the number of records a single
       user contributes. Added noise (and mechanism sensitivity) is scaled by
       this factor to provide user-level rather than record-level DP; the privacy
@@ -398,65 +396,62 @@ class DPGaussianHistogram(DPMechanism):
       bound.
   """
 
-  domain_size: int
-  sigma: float | None = None
+  config: DPGaussianHistogramConfig
+  sigma: float
   max_records_per_user: int = 1
 
   def __post_init__(self):
     api.validate_max_records_per_user(self.max_records_per_user)
 
-  def configure(  # pyrefly: ignore[bad-override]
-      self, *, zcdp_rho: float, delta: float = 0.0
-  ) -> DPGaussianHistogram:
-    """Returns a copy with sigma derived from the zCDP budget."""
-    return dataclasses.replace(self, sigma=math.sqrt(0.5 / zcdp_rho))
-
   @property
   def dp_event(self) -> dp_accounting.DpEvent:
     """Returns the Gaussian privacy event for this mechanism."""
-    if self.sigma is None:
-      raise ValueError(_UNCALIBRATED_MSG.format(param='sigma'))
     return dp_accounting.GaussianDpEvent(noise_multiplier=self.sigma)
 
   def __call__(
       self, rng: np.random.Generator, counts: np.ndarray
   ) -> HistogramResult:
     """Adds Gaussian noise to the given counts."""
-    if self.sigma is None:
-      raise ValueError(_UNCALIBRATED_MSG.format(param='sigma'))
     noise = rng.normal(
-        scale=self.max_records_per_user * self.sigma, size=self.domain_size
+        scale=self.max_records_per_user * self.sigma,
+        size=self.config.domain_size,
     )
     return HistogramResult(counts=counts.astype(float) + noise)
 
 
-@dataclasses.dataclass
-class DPGaussianCount(DPMechanism):
-  """Differentially private count via the Gaussian mechanism."""
+@dataclasses.dataclass(frozen=True)
+class DPGaussianCountConfig(MechanismConfig):
+  """Recipe for a differentially private count via the Gaussian mechanism."""
 
-  sigma: float | None = None
+  def configure(self, *, zcdp_rho, delta=0.0, max_records_per_user=1):  # pyrefly: ignore[bad-override]
+    """Returns a calibrated mechanism with sigma derived from the budget."""
+    sigma = math.sqrt(0.5 / zcdp_rho)
+    return DPGaussianCount(sigma, max_records_per_user)
+
+
+@dataclasses.dataclass(frozen=True)
+class DPGaussianCount(CalibratedMechanism):
+  """Calibrated DP count via the Gaussian mechanism.
+
+  Attributes:
+    sigma: Gaussian noise standard deviation.
+    max_records_per_user: Assumed upper bound on the number of records a single
+      user contributes; added noise is scaled by this factor for user-level DP.
+  """
+
+  sigma: float
   max_records_per_user: int = 1
 
   def __post_init__(self):
     api.validate_max_records_per_user(self.max_records_per_user)
 
-  def configure(  # pyrefly: ignore[bad-override]
-      self, *, zcdp_rho: float, delta: float = 0.0
-  ) -> DPGaussianCount:
-    """Returns a copy with sigma derived from the zCDP budget."""
-    return dataclasses.replace(self, sigma=math.sqrt(0.5 / zcdp_rho))
-
   @property
   def dp_event(self) -> dp_accounting.DpEvent:
     """Returns the Gaussian privacy event for this mechanism."""
-    if self.sigma is None:
-      raise ValueError(_UNCALIBRATED_MSG.format(param='sigma'))
     return dp_accounting.GaussianDpEvent(noise_multiplier=self.sigma)
 
   def noisy_count(self, rng: np.random.Generator, true_count: int) -> float:
     """Returns ``true_count`` plus calibrated Gaussian noise."""
-    if self.sigma is None:
-      raise ValueError(_UNCALIBRATED_MSG.format(param='sigma'))
     return float(
         true_count + rng.normal(scale=self.max_records_per_user * self.sigma)
     )
@@ -467,9 +462,27 @@ class DPGaussianCount(DPMechanism):
     return self.noisy_count(rng, len(data))
 
 
-@dataclasses.dataclass
-class DPPartitionSelection(DPMechanism):
-  """Differentially private partition selection via Gaussian Thresholding.
+@dataclasses.dataclass(frozen=True)
+class DPPartitionSelectionConfig(MechanismConfig):
+  """Recipe for differentially private partition selection.
+
+  Attributes:
+    delta: Failure probability for the thresholding step.
+    min_count: Minimum true count for a partition to be returned.
+  """
+
+  delta: float
+  min_count: int = 1
+
+  def configure(self, *, zcdp_rho, delta=0.0, max_records_per_user=1):  # pyrefly: ignore[bad-override]
+    """Returns a calibrated mechanism with sigma derived from the budget."""
+    sigma = math.sqrt(0.5 / zcdp_rho)
+    return DPPartitionSelection(self, sigma, max_records_per_user)
+
+
+@dataclasses.dataclass(frozen=True)
+class DPPartitionSelection(CalibratedMechanism):
+  """Calibrated DP partition selection via Gaussian Thresholding.
 
   Because partition selection is an approximate (delta > 0) mechanism, the
   ``dp_event`` composes the Gaussian event with an ``EpsilonDeltaDpEvent``
@@ -480,9 +493,8 @@ class DPPartitionSelection(DPMechanism):
   suboptimal, since tighter bounding would require a user->record mapping.
 
   Attributes:
-    delta: Failure probability for the thresholding step.
-    min_count: Minimum true count for a partition to be returned.
-    sigma: Gaussian noise standard deviation. Set directly or via ``configure``.
+    config: The recipe this mechanism was calibrated from.
+    sigma: Gaussian noise standard deviation.
     max_records_per_user: Assumed upper bound on the number of records a single
       user contributes. Added noise (and mechanism sensitivity) is scaled by
       this factor to provide user-level rather than record-level DP; the privacy
@@ -490,47 +502,36 @@ class DPPartitionSelection(DPMechanism):
       bound.
   """
 
-  delta: float
-  min_count: int = 1
-  sigma: float | None = None
+  config: DPPartitionSelectionConfig
+  sigma: float
   max_records_per_user: int = 1
 
   def __post_init__(self):
     api.validate_max_records_per_user(self.max_records_per_user)
 
-  def configure(  # pyrefly: ignore[bad-override]
-      self, *, zcdp_rho: float, delta: float = 0.0
-  ) -> DPPartitionSelection:
-    """Returns a copy with sigma derived from the zCDP budget."""
-    return dataclasses.replace(self, sigma=math.sqrt(0.5 / zcdp_rho))
-
   @property
   def dp_event(self) -> dp_accounting.DpEvent:
     """Returns the privacy event including thresholding delta."""
-    if self.sigma is None:
-      raise ValueError(_UNCALIBRATED_MSG.format(param='sigma'))
     main_event = dp_accounting.GaussianDpEvent(noise_multiplier=self.sigma)
-    failure_event = dp_accounting.dp_event.EpsilonDeltaDpEvent(0, self.delta)
+    failure_event = dp_accounting.dp_event.EpsilonDeltaDpEvent(
+        0, self.config.delta
+    )
     return dp_accounting.ComposedDpEvent([main_event, failure_event])
 
   def __call__(
       self, rng: np.random.Generator, data: np.ndarray
   ) -> PartitionSelectionResult:
     """Runs partition selection on integer-encoded partition IDs."""
-    if self.sigma is None:
-      raise ValueError(_UNCALIBRATED_MSG.format(param='sigma'))
     gdp_budget = np.inf if self.sigma == 0.0 else 1.0 / (self.sigma**2)
     parts, counts, _ = select_partitions_gaussian_thresholding(
         rng,
         data,
         gdp_budget,
-        self.delta,
-        min_count=self.min_count,
+        self.config.delta,
+        min_count=self.config.min_count,
         max_records_per_user=self.max_records_per_user,
     )
-    return PartitionSelectionResult(
-        selected_partitions=parts, estimated_counts=counts
-    )
+    return PartitionSelectionResult(parts, counts)
 
   def from_summary(
       self,
@@ -547,9 +548,7 @@ class DPPartitionSelection(DPMechanism):
       A PartitionSelectionResult with indices into `counts` as the
       selected_partitions and their noisy counts.
     """
-    if self.sigma is None:
-      raise ValueError(_UNCALIBRATED_MSG.format(param='sigma'))
-    above_min = counts >= self.min_count
+    above_min = counts >= self.config.min_count
     eligible_idx = np.where(above_min)[0]
     eligible_counts = counts[above_min].astype(float)
     stddev = self.max_records_per_user * self.sigma
@@ -560,10 +559,7 @@ class DPPartitionSelection(DPMechanism):
     # Tight shift: one user can push a partition's count to
     # (min_count - 1) + max_records_per_user (see that function for the
     # full derivation).
-    base = float(self.max_records_per_user + self.min_count - 1)
-    threshold = base + stddev * scipy.stats.norm.ppf(1.0 - self.delta)
+    base = float(self.max_records_per_user + self.config.min_count - 1)
+    threshold = base + stddev * scipy.stats.norm.ppf(1.0 - self.config.delta)
     passed = noisy_counts >= threshold
-    return PartitionSelectionResult(
-        selected_partitions=eligible_idx[passed],
-        estimated_counts=noisy_counts[passed],
-    )
+    return PartitionSelectionResult(eligible_idx[passed], noisy_counts[passed])

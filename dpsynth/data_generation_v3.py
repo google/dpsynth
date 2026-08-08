@@ -60,22 +60,20 @@ def _create_initializers(
   initializers = {}
   for col, attr in domains.items():
     if isinstance(attr, domain.NumericalAttribute):
-      initializers[col] = initialization.NumericalInitializer(
+      initializers[col] = initialization.NumericalInitializerConfig(
           name=col,
           num_partitions=numerical_bins,
           attribute=attr,
-          max_records_per_user=max_records_per_user,
       )
     elif isinstance(attr, domain.CategoricalAttribute):
-      initializers[col] = initialization.CategoricalInitializer(
-          name=col, attribute=attr, max_records_per_user=max_records_per_user
+      initializers[col] = initialization.CategoricalInitializerConfig(
+          name=col, attribute=attr
       )
     elif isinstance(attr, domain.OpenSetCategoricalAttribute):
-      initializers[col] = initialization.OpenSetCategoricalInitializer(
+      initializers[col] = initialization.OpenSetCategoricalInitializerConfig(
           name=col,
           attribute=attr,
           delta=init_delta,
-          max_records_per_user=max_records_per_user,
       )
     else:
       raise ValueError(
@@ -299,27 +297,22 @@ class TabularSynthesizer(primitives.DPMechanism):
           per_col_delta,
           self.experimental_max_records_per_user,
       )
-    elif self.experimental_max_records_per_user > 1:
-      # The synthesizer's experimental_max_records_per_user is the single
-      # source of truth: the total-count and discrete mechanisms already use it,
-      # so propagate it to caller-supplied initializers too.
-      propagated = {}
-      for col, init in inits.items():
-        propagated[col] = dataclasses.replace(  # pytype: disable=wrong-arg-types
-            init, max_records_per_user=self.experimental_max_records_per_user
-        )
-      inits = propagated
     init_rho = self.init_budget_fraction * zcdp_rho
     # +1 for the DPGaussianCount that always measures the total.
     per_col_rho = init_rho / (len(inits) + 1)
     discrete_rho = zcdp_rho - init_rho
 
     calibrated_inits = {
-        col: init.configure(zcdp_rho=per_col_rho) for col, init in inits.items()
+        col: init.configure(
+            zcdp_rho=per_col_rho,
+            max_records_per_user=self.experimental_max_records_per_user,
+        )
+        for col, init in inits.items()
     }
-    calibrated_total = primitives.DPGaussianCount(
-        max_records_per_user=self.experimental_max_records_per_user
-    ).configure(zcdp_rho=per_col_rho)
+    calibrated_total = primitives.DPGaussianCountConfig().configure(
+        zcdp_rho=per_col_rho,
+        max_records_per_user=self.experimental_max_records_per_user,
+    )
     calibrated_discrete = dataclasses.replace(
         self.discrete_mechanism,
         max_records_per_user=self.experimental_max_records_per_user,
@@ -385,7 +378,7 @@ class TabularSynthesizer(primitives.DPMechanism):
     total_measurement = mbi.LinearMeasurement(
         np.array([total]),  # pyrefly: ignore[bad-argument-type]
         (),
-        stddev=k * self.total_count_mechanism.sigma,  # pyrefly: ignore[unsupported-operation]
+        stddev=k * self.total_count_mechanism.sigma,
     )
 
     results: dict[str, initialization.ColumnMeasurement] = {}
