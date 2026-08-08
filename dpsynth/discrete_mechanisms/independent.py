@@ -22,8 +22,8 @@ from dpsynth.discrete_mechanisms import base
 import mbi
 
 
-@dataclasses.dataclass
-class IndependentMechanism(base.DiscreteMechanism):
+@dataclasses.dataclass(frozen=True)
+class IndependentMechanismConfig(base.DiscreteMechanismConfig):
   """Measures only one-way marginals, allocating the entire budget to them."""
 
   one_way_budget_fraction: float = 1.0
@@ -32,10 +32,17 @@ class IndependentMechanism(base.DiscreteMechanism):
     """Returns the one-way marginals this mechanism will measure."""
     return [(a,) for a in domain.attributes]
 
+  def _create_mechanism(self, **kwargs) -> 'IndependentMechanism':
+    return IndependentMechanism(**kwargs)
+
+
+@dataclasses.dataclass(frozen=True)
+class IndependentMechanism(base.DiscreteMechanism):
+  config: IndependentMechanismConfig
+
   @property
   def dp_event(self) -> dp_accounting.DpEvent:
     """Returns the DP event for the independent mechanism."""
-    self._check_calibration()
     return dp_accounting.GaussianDpEvent(
         noise_multiplier=accounting.zcdp_gaussian_sigma(self.one_way_rho)  # pyrefly: ignore[bad-argument-type]
     )

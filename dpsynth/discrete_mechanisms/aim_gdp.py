@@ -143,8 +143,8 @@ def _worst_approximated(
 
 
 # select loop, injecting the budgeting strategy (zCDP vs. GDP) as configuration.
-@dataclasses.dataclass
-class AIMGDPMechanism(base.DiscreteMechanism):
+@dataclasses.dataclass(frozen=True)
+class AIMGDPMechanismConfig(base.DiscreteMechanismConfig):
   """Configuration for the AIM mechanism with Gaussian DP.
 
   Details are described in the paper:
@@ -186,7 +186,6 @@ class AIMGDPMechanism(base.DiscreteMechanism):
   anneal_factor: float = 4.0
   select_budget_fraction: float = 0.1
   pgm_iters: int = 1000
-  _loop_rho: float | None = dataclasses.field(default=None, repr=False)
 
   def supporting_cliques(self, domain: mbi.Domain) -> list[mbi.Clique]:
     """Returns the workload cliques filtered by max_marginal_size."""
@@ -202,10 +201,20 @@ class AIMGDPMechanism(base.DiscreteMechanism):
     """Allocates the entire remaining budget to the adaptive loop."""
     return {'_loop_rho': remaining_rho}
 
+  def _create_mechanism(self, **kwargs) -> 'AIMGDPMechanism':
+    return AIMGDPMechanism(**kwargs)
+
+
+@dataclasses.dataclass(frozen=True, kw_only=True)
+class AIMGDPMechanism(base.DiscreteMechanism):
+  """Calibrated AIMGDPMechanism instance."""
+
+  config: AIMGDPMechanismConfig
+  _loop_rho: float
+
   @property
   def dp_event(self) -> dp_accounting.DpEvent:
     """Returns the DP event for the AIM-GDP mechanism."""
-    self._check_calibration()
     events = self._one_way_dp_event()
     # The loop's privacy cost in zCDP terms.
     events.append(dp_accounting.ZCDpEvent(self._loop_rho))  # pyrefly: ignore[bad-argument-type]
@@ -220,22 +229,25 @@ class AIMGDPMechanism(base.DiscreteMechanism):
 
     terminate = False
     budget_remaining = gdp_budget
-    max_rounds = self.max_rounds or 16 * len(data.domain)
+    max_rounds = self.config.max_rounds or 16 * len(data.domain)
     budget_per_round = budget_remaining / max_rounds
 
     #########################################################################
     # Compile workload into candidate measurements, and precompute answers. #
     #########################################################################
     candidates = common.compiled_workload(
-        data.domain, self.workload, self.max_marginal_size
+        data.domain, self.config.workload, self.config.max_marginal_size
     )
     answers = mbi.CliqueVector.from_projectable(data, candidates)  # pyrefly: ignore[bad-argument-type]
     logging.info('[AIM] Calculated workload-query answers.')
     domain = data.domain
 
-    estimator = mbi.estimation.MirrorDescent(self.marginal_oracle)
+    estimator = mbi.estimation.MirrorDescent(self.config.marginal_oracle)
     model = estimator.estimate(
-        domain, measurements, iters=self.pgm_iters, constraints=constraints
+        domain,
+        measurements,
+        iters=self.config.pgm_iters,
+        constraints=constraints,
     )
     assert isinstance(model, mbi.MarkovRandomField)
     logging.info('[AIM] Estimated initial model.')
@@ -244,12 +256,9 @@ class AIMGDPMechanism(base.DiscreteMechanism):
     # independence model. compute_independence_errors is much faster than
     # bulk_variable_elimination for this case (pure numpy, no XLA compilation).
     budget_remaining -= 0.5 * budget_per_round
-    per_candidate_sigma = (
-        self.max_records_per_user
-        * accounting.gdp_gaussian_sigma(
-            0.5 * budget_per_round / len(candidates)
-        )
-    )
+    per_candidate_sigma = int(
+        self.contribution_scale
+    ) * accounting.gdp_gaussian_sigma(0.5 * budget_per_round / len(candidates))
     errors = common.compute_independence_errors(data, model, list(candidates))  # pyrefly: ignore[bad-argument-type]
     for cl in errors:
       errors[cl] += rng.normal(loc=0.0, scale=per_candidate_sigma)
@@ -268,11 +277,13 @@ class AIMGDPMechanism(base.DiscreteMechanism):
       ########################################################################
       with common.timed(phase_times, 'selection'):
         budget_remaining -= budget_per_round
-        measure_budget = budget_per_round * (1 - self.select_budget_fraction)
-        select_budget = budget_per_round * self.select_budget_fraction
+        measure_budget = budget_per_round * (
+            1 - self.config.select_budget_fraction
+        )
+        select_budget = budget_per_round * self.config.select_budget_fraction
         measure_sigma = accounting.gdp_gaussian_sigma(measure_budget)
         percent_used = (gdp_budget - budget_remaining) / gdp_budget
-        size_limit = self.max_model_size * percent_used
+        size_limit = self.config.max_model_size * percent_used
         small_candidates = _filter_candidates(candidates, model, size_limit)
 
         marginal_query = _worst_approximated(
@@ -283,8 +294,8 @@ class AIMGDPMechanism(base.DiscreteMechanism):
             model=model,
             select_budget=select_budget,
             measure_sigma=measure_sigma,
-            max_new_evals=self.max_candidates_per_round,
-            max_records_per_user=self.max_records_per_user,
+            max_new_evals=self.config.max_candidates_per_round,
+            max_records_per_user=int(self.contribution_scale),
         )
 
       summary = mbi.summarize(
@@ -323,7 +334,7 @@ class AIMGDPMechanism(base.DiscreteMechanism):
             domain,
             measurements,
             potentials=warm_start,
-            iters=self.pgm_iters,
+            iters=self.config.pgm_iters,
             callback_fn=callback_fn,
             constraints=constraints,
         )
@@ -337,14 +348,14 @@ class AIMGDPMechanism(base.DiscreteMechanism):
       # See Alg 4 of https://arxiv.org/pdf/2201.12677.
       # of just the largest error candidate), we can maybe simplify this logic.
       threshold = (
-          self.max_records_per_user
+          int(self.contribution_scale)
           * measure_sigma
           * (2 / np.pi) ** 0.5
           * domain.size(marginal_query)
       )
       if np.linalg.norm(new_estimate - old_estimate, ord=1) <= threshold:
         # No useful information at this noise level, increase budget per round.
-        budget_per_round *= self.anneal_factor
+        budget_per_round *= self.config.anneal_factor
         logging.info(
             '[AIM] Increasing budget per round: %.5f', budget_per_round
         )

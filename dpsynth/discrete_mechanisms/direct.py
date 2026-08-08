@@ -23,8 +23,8 @@ from dpsynth.discrete_mechanisms import base
 import mbi
 
 
-@dataclasses.dataclass
-class DirectMechanism(base.DiscreteMechanism):
+@dataclasses.dataclass(frozen=True)
+class DirectMechanismConfig(base.DiscreteMechanismConfig):
   """Configuration for the direct mechanism.
 
   The direct mechanism measures a prespecified set of marginal queries,
@@ -54,13 +54,19 @@ class DirectMechanism(base.DiscreteMechanism):
     """Allocates the full remaining budget to the prespecified queries."""
     return {'measurement_rho': remaining_rho}
 
+  def _create_mechanism(self, **kwargs) -> 'DirectMechanism':
+    return DirectMechanism(**kwargs)
+
+
+@dataclasses.dataclass(frozen=True)
+class DirectMechanism(base.DiscreteMechanism):
+  config: DirectMechanismConfig
   @property
   def dp_event(self) -> dp_accounting.DpEvent:
     """Returns the DP event for the direct mechanism."""
-    self._check_calibration()
     return dp_accounting.GaussianDpEvent(
         noise_multiplier=accounting.zcdp_gaussian_sigma(self.measurement_rho)  # pyrefly: ignore[bad-argument-type]
     )
 
   def _select(self, rng, data, measurements, phase_times):
-    return list(self.prespecified_marginal_queries)
+    return list(self.config.prespecified_marginal_queries)

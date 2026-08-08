@@ -38,7 +38,6 @@ def _create_initializers(
     domains: Mapping[str, domain.AttributeType],
     numerical_bins: int,
     init_delta: float,
-    max_records_per_user: int = 1,
 ) -> dict[str, primitives.DPMechanism]:
   """Creates per-column initializers from the domain specification.
 
@@ -60,22 +59,20 @@ def _create_initializers(
   initializers = {}
   for col, attr in domains.items():
     if isinstance(attr, domain.NumericalAttribute):
-      initializers[col] = initialization.NumericalInitializer(
+      initializers[col] = initialization.NumericalInitializerConfig(
           name=col,
           num_partitions=numerical_bins,
           attribute=attr,
-          max_records_per_user=max_records_per_user,
       )
     elif isinstance(attr, domain.CategoricalAttribute):
-      initializers[col] = initialization.CategoricalInitializer(
-          name=col, attribute=attr, max_records_per_user=max_records_per_user
+      initializers[col] = initialization.CategoricalInitializerConfig(
+          name=col, attribute=attr
       )
     elif isinstance(attr, domain.OpenSetCategoricalAttribute):
-      initializers[col] = initialization.OpenSetCategoricalInitializer(
+      initializers[col] = initialization.OpenSetCategoricalInitializerConfig(
           name=col,
           attribute=attr,
           delta=init_delta,
-          max_records_per_user=max_records_per_user,
       )
     else:
       raise ValueError(
@@ -225,9 +222,10 @@ class TabularSynthesizer(primitives.DPMechanism):
   """
 
   domains: Mapping[str, domain.AttributeType]
-  discrete_mechanism: discrete_mechanisms.DiscreteMechanism = dataclasses.field(
-      default_factory=discrete_mechanisms.MSTMechanism
-  )
+  discrete_mechanism: (
+      discrete_mechanisms.DiscreteMechanismConfig
+      | discrete_mechanisms.DiscreteMechanism
+  ) = dataclasses.field(default_factory=discrete_mechanisms.MSTMechanismConfig)
   numerical_bins: int = 32
   init_budget_fraction: float = 0.1
   initializers: dict[str, primitives.DPMechanism] | None = None
@@ -297,33 +295,27 @@ class TabularSynthesizer(primitives.DPMechanism):
           self.domains,
           self.numerical_bins,
           per_col_delta,
-          self.experimental_max_records_per_user,
       )
-    elif self.experimental_max_records_per_user > 1:
-      # The synthesizer's experimental_max_records_per_user is the single
-      # source of truth: the total-count and discrete mechanisms already use it,
-      # so propagate it to caller-supplied initializers too.
-      propagated = {}
-      for col, init in inits.items():
-        propagated[col] = dataclasses.replace(  # pytype: disable=wrong-arg-types
-            init, max_records_per_user=self.experimental_max_records_per_user
-        )
-      inits = propagated
     init_rho = self.init_budget_fraction * zcdp_rho
     # +1 for the DPGaussianCount that always measures the total.
     per_col_rho = init_rho / (len(inits) + 1)
     discrete_rho = zcdp_rho - init_rho
 
     calibrated_inits = {
-        col: init.configure(zcdp_rho=per_col_rho) for col, init in inits.items()
+        col: init.configure(
+            zcdp_rho=per_col_rho,
+            max_records_per_user=self.experimental_max_records_per_user,
+        )
+        for col, init in inits.items()
     }
-    calibrated_total = primitives.DPGaussianCount(
-        max_records_per_user=self.experimental_max_records_per_user
-    ).configure(zcdp_rho=per_col_rho)
-    calibrated_discrete = dataclasses.replace(
-        self.discrete_mechanism,
+    calibrated_total = primitives.DPGaussianCountConfig().configure(
+        zcdp_rho=per_col_rho,
         max_records_per_user=self.experimental_max_records_per_user,
-    ).configure(zcdp_rho=discrete_rho)
+    )
+    calibrated_discrete = self.discrete_mechanism.configure(  # pyrefly: ignore[missing-attribute]
+        zcdp_rho=discrete_rho,
+        max_records_per_user=self.experimental_max_records_per_user,
+    )
     return dataclasses.replace(
         self,
         initializers=calibrated_inits,
@@ -347,7 +339,7 @@ class TabularSynthesizer(primitives.DPMechanism):
       )
     events = [init.dp_event for init in self.initializers.values()]
     events.append(self.total_count_mechanism.dp_event)
-    events.append(self.discrete_mechanism.dp_event)
+    events.append(self.discrete_mechanism.dp_event)  # pyrefly: ignore[missing-attribute]
     return dp_accounting.ComposedDpEvent(events)
 
   def __call__(
@@ -385,7 +377,7 @@ class TabularSynthesizer(primitives.DPMechanism):
     total_measurement = mbi.LinearMeasurement(
         np.array([total]),  # pyrefly: ignore[bad-argument-type]
         (),
-        stddev=k * self.total_count_mechanism.sigma,  # pyrefly: ignore[unsupported-operation]
+        stddev=k * self.total_count_mechanism.sigma,
     )
 
     results: dict[str, initialization.ColumnMeasurement] = {}
@@ -408,7 +400,7 @@ class TabularSynthesizer(primitives.DPMechanism):
     mbi_constraints = tuple(
         c.to_mbi() for c in self.cross_attribute_constraints
     )
-    mechanism_result = self.discrete_mechanism(
+    mechanism_result = self.discrete_mechanism(  # pyrefly: ignore[not-callable]
         rng,
         data=discrete,
         initial_measurements=initial_measurements,
