@@ -42,24 +42,58 @@ import warnings
 import dp_accounting
 
 
-class DPMechanism(abc.ABC):
-  """Abstract base class for differentially private mechanisms.
+class CalibratedMechanism(abc.ABC):
+  """A privacy-calibrated, runnable differentially private mechanism.
 
-  A DPMechanism encapsulates a randomized algorithm that satisfies differential
-  privacy. Usage follows a three-phase pattern:
+  Produced by ``MechanismConfig.configure()`` / ``.calibrate()``: its natural
+  privacy parameter (e.g. Gaussian sigma) is populated and it is ready to run.
+  It exposes the exact ``DpEvent`` characterizing its privacy cost and is
+  directly callable on data.
 
-  1. **Construct**: Create the mechanism with algorithm-specific parameters
-     (e.g., ``AIMMechanism(pgm_iters=500)``).
+  Subclasses must implement:
+
+  - ``dp_event``: return the exact ``DpEvent`` characterizing the mechanism.
+  - ``__call__``: run the mechanism on data.
+  """
+
+  @property
+  @abc.abstractmethod
+  def dp_event(self) -> dp_accounting.DpEvent:
+    """The DpEvent characterizing the privacy cost of this mechanism."""
+
+  @abc.abstractmethod
+  def __call__(self, *args: Any, **kwargs: Any) -> Any:
+    """Runs the mechanism on the given data.
+
+    Subclass signatures vary, but typically accept at least the data to operate
+    on and a source of randomness.
+
+    Args:
+      *args: Positional arguments (subclass-specific).
+      **kwargs: Keyword arguments (subclass-specific).
+    """
+
+
+class MechanismConfig(abc.ABC):
+  """A recipe that produces a calibrated, runnable mechanism.
+
+  A config holds the mechanism's structural and hyperparameter fields (the
+  parts a user writes, logs, and serializes) and knows how to turn a privacy
+  budget into a runnable ``CalibratedMechanism``. Usage follows a three-phase
+  pattern:
+
+  1. **Construct**: Create the config with algorithm-specific parameters
+     (e.g., ``AIMConfig(pgm_iters=500)``).
   2. **Calibrate**: Call ``calibrate(epsilon=..., delta=...)`` or
-     ``configure(zcdp_rho=...)`` to bind a privacy budget, returning a new
-     frozen instance with the mechanism's natural privacy parameter set.
+     ``configure(zcdp_rho=...)`` to bind a privacy budget, returning a
+     ``CalibratedMechanism`` with the mechanism's natural privacy parameter set.
   3. **Run**: Call the calibrated mechanism on data via ``__call__``.
 
   **Design: configure vs calibrate.**  The API separates two concerns:
 
   - ``configure(zcdp_rho, **kwargs)`` is the low-level primitive that each
-    mechanism must implement. It maps a zCDP budget to the mechanism's natural
-    privacy parameter (e.g., Gaussian sigma) and returns a new frozen instance.
+    config must implement. It maps a zCDP budget to the mechanism's natural
+    privacy parameter (e.g., Gaussian sigma) and returns a runnable mechanism.
     This is lightweight — just arithmetic — and produces reasonably tight
     parameter settings for most mechanisms.
 
@@ -82,24 +116,17 @@ class DPMechanism(abc.ABC):
   search exploits this: it evaluates each candidate's raw ``dp_event`` rather
   than relying on the zCDP conversion, so the final calibration is as tight
   as the mechanism's own privacy characterization allows.
-
-  Subclasses must implement:
-
-  - ``configure(zcdp_rho, **kwargs)``: set the mechanism's natural privacy
-    parameter (e.g., Gaussian sigma) from a zCDP budget.
-  - ``dp_event``: return the exact ``DpEvent`` characterizing the mechanism.
-  - ``__call__``: run the mechanism on data.
   """
 
   @abc.abstractmethod
   def configure(
-      self, *, zcdp_rho: float, delta: float = 0.0, **kwargs: Any
-  ) -> DPMechanism:
-    """Returns a new mechanism configured with the given zCDP budget.
+      self, *, zcdp_rho, delta=0.0, max_records_per_user=1
+  ) -> CalibratedMechanism:
+    """Returns a calibrated mechanism for the given zCDP budget.
 
     Converts the zCDP budget into the mechanism's natural privacy parameter
-    (e.g., Gaussian sigma) and returns a new frozen instance with that
-    parameter set.
+    (e.g., Gaussian sigma) and returns a runnable ``CalibratedMechanism`` with
+    that parameter set.
 
     Most mechanisms are pure zCDP and ignore ``delta``. Mechanisms that
     consume approximate DP budget (e.g., partition selection with Gaussian
@@ -111,27 +138,11 @@ class DPMechanism(abc.ABC):
       delta: Approximate DP delta consumed by the mechanism itself (e.g., for
         thresholding). Defaults to 0 (pure zCDP). Mechanisms that need delta
         should raise if it is 0.
-      **kwargs: Mechanism-specific hyperparameters.
+      **kwargs: Mechanism-specific hyperparameters (e.g.
+        ``max_records_per_user`` for mechanisms that support user-level DP).
 
     Returns:
-      A new DPMechanism instance configured for the given budget.
-    """
-
-  @property
-  @abc.abstractmethod
-  def dp_event(self) -> dp_accounting.DpEvent:
-    """The DpEvent characterizing the privacy cost of this mechanism."""
-
-  @abc.abstractmethod
-  def __call__(self, *args: Any, **kwargs: Any) -> Any:
-    """Runs the mechanism on the given data.
-
-    Subclass signatures vary, but typically accept at least the data to operate
-    on and a source of randomness.
-
-    Args:
-      *args: Positional arguments (subclass-specific).
-      **kwargs: Keyword arguments (subclass-specific).
+      A calibrated, runnable mechanism.
     """
 
   def _find_optimal_rho(
@@ -193,7 +204,7 @@ class DPMechanism(abc.ABC):
       delta: float | None = None,
       zcdp_rho: float | None = None,
       **kwargs: Any,
-  ) -> DPMechanism:
+  ) -> CalibratedMechanism:
     """Calibrate the mechanism to a target (epsilon, delta)-DP guarantee.
 
     Performs a binary search over zCDP budgets, calling ``configure`` at each
@@ -211,7 +222,7 @@ class DPMechanism(abc.ABC):
       **kwargs: Forwarded to ``configure()``.
 
     Returns:
-      A new calibrated DPMechanism instance.
+      A calibrated, runnable mechanism.
 
     Raises:
       ValueError: If neither (epsilon, delta) nor zcdp_rho is specified, or
@@ -241,6 +252,20 @@ class DPMechanism(abc.ABC):
         target_delta=delta,
     )
     return self.configure(zcdp_rho=optimal_rho, delta=delta, **kwargs)
+
+
+class DPMechanism(MechanismConfig, CalibratedMechanism, abc.ABC):
+  """Transitional monolithic base: both a config and a runnable mechanism.
+
+  Historically every mechanism was a single class that was constructed, then
+  ``configure``d in place, then run. That design is being split into a
+  ``MechanismConfig`` recipe and a ``CalibratedMechanism`` runnable (so a
+  calibrated instance can never be un-calibrated and needs no nullable
+  privacy-parameter fields or guards). Mechanisms are migrated one layer at a
+  time; those not yet split still subclass this monolith, which exposes exactly
+  the historical abstract surface (``configure`` + ``dp_event`` + ``__call__``,
+  with ``calibrate`` inherited). Remove once every mechanism is split.
+  """
 
 
 def validate_max_records_per_user(value: int) -> None:
