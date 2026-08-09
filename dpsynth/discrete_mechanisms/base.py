@@ -41,14 +41,16 @@ import numpy as np
 # hard-codes `mbi.estimation.MirrorDescent` as the estimator; abstract this
 # (e.g. an injectable optimizer strategy) to support other synthesizers such as
 # PrivSyn and GEM.
-@dataclasses.dataclass
-class DiscreteMechanism(api.DPMechanism):
+
+
+@dataclasses.dataclass(frozen=True)
+class DiscreteMechanismConfig(api.MechanismConfig):
   """Base class for mechanisms following the select-measure-estimate paradigm.
 
   Subclasses implement ``_select`` to define which marginals to measure.
   The base ``__call__`` orchestrates the full pipeline::
 
-      check_calibration → measure_one_way → compress → run → result
+      measure_one_way → compress → run → result
 
   where ``_run`` performs select → measure → estimate → generate.  One-shot
   mechanisms need only override ``_select``; adaptive mechanisms (e.g. AIM) or
@@ -59,27 +61,12 @@ class DiscreteMechanism(api.DPMechanism):
     pgm_iters: Number of mirror descent iterations for estimation.
     compress_columns: Domain compression config. True = all, list = specific.
     one_way_budget_fraction: Fraction of zCDP budget for one-way marginals.
-    max_records_per_user: Assumed upper bound on the number of records a single
-      user contributes. Added noise (and mechanism sensitivity) is scaled by
-      this factor to provide user-level rather than record-level DP; the privacy
-      accounting is unchanged. Soundness relies on the caller enforcing this
-      bound.
-    zcdp_rho: Total zCDP budget (set by configure).
-    one_way_rho: zCDP budget for one-way measurements (set by configure).
-    measurement_rho: zCDP budget for selected marginal measurements.
   """
 
   marginal_oracle: mbi.MarginalOracle | None = None
   pgm_iters: int = 5000
   compress_columns: bool | Sequence[str] = False
   one_way_budget_fraction: float = 1 / 3
-  max_records_per_user: int = 1
-  zcdp_rho: float | None = None
-  one_way_rho: float | None = dataclasses.field(default=None, repr=False)
-  measurement_rho: float | None = dataclasses.field(default=None, repr=False)
-
-  def __post_init__(self):
-    api.validate_max_records_per_user(self.max_records_per_user)
 
   @abc.abstractmethod
   def supporting_cliques(self, domain: mbi.Domain) -> list[mbi.Clique]:
@@ -91,11 +78,15 @@ class DiscreteMechanism(api.DPMechanism):
     the mechanism's coverage without having to run it.
 
     Args:
-      domain: The data domain the mechanism will run on.
+      domain: Information about the tabular columns and their types.
 
     Returns:
-      The list of cliques supported by this mechanism for ``domain``.
+      A list of cliques.
     """
+
+  @abc.abstractmethod
+  def _create_mechanism(self, **kwargs) -> 'DiscreteMechanism':
+    """Instantiates the calibrated mechanism object."""
 
   def configure(
       self,
@@ -103,41 +94,56 @@ class DiscreteMechanism(api.DPMechanism):
       zcdp_rho: float,
       delta: float = 0.0,
       initial_measurements: Sequence[mbi.LinearMeasurement] | None = None,
+      max_records_per_user: int = 1,
       **kwargs,
-  ) -> DiscreteMechanism:
+  ) -> 'DiscreteMechanism':
     """Configures the mechanism with a zCDP budget."""
+    if max_records_per_user <= 0:
+      raise ValueError('max_records_per_user must be positive')
     if initial_measurements is not None or self.one_way_budget_fraction <= 0:
       one_way_rho = None
     else:
       one_way_rho = zcdp_rho * self.one_way_budget_fraction
     remaining_rho = zcdp_rho - (one_way_rho or 0.0)
-    return dataclasses.replace(
-        self,
+
+    return self._create_mechanism(
+        config=self,
         zcdp_rho=zcdp_rho,
         one_way_rho=one_way_rho,
+        max_records_per_user=max_records_per_user,
         **self._allocate_budget(remaining_rho),
     )
 
   def _allocate_budget(self, remaining_rho: float) -> Mapping[str, float]:
-    """Splits the post-one-way budget into mechanism-specific rho fields.
-
-    Subclasses override this to distribute ``remaining_rho`` across their own
-    budget fields (e.g. ``measurement_rho``, ``_select_rho``); the returned
-    mapping is applied as field overrides in ``configure``.
-
-    Args:
-      remaining_rho: zCDP budget left after the shared one-way measurement.
-
-    Returns:
-      A mapping from dataclass field name to allocated zCDP budget.
-    """
+    """Splits the post-one-way budget into mechanism-specific rho fields."""
     return {}
 
-  @property
-  def remaining_rho(self):
-    """zCDP budget remaining after one-way measurements."""
-    one_way_rho = 0.0 if self.one_way_rho is None else self.one_way_rho
-    return self.zcdp_rho - one_way_rho  # pyrefly: ignore[unsupported-operation]
+
+@dataclasses.dataclass(frozen=True)
+class DiscreteMechanism(api.CalibratedMechanism):
+  """Calibrated, runnable select-measure-estimate mechanism."""
+
+  config: DiscreteMechanismConfig
+  zcdp_rho: float
+  one_way_rho: float | None = dataclasses.field(default=None, repr=False)
+  measurement_rho: float | None = dataclasses.field(default=None, repr=False)
+  max_records_per_user: int = 1
+
+  def supporting_cliques(self, domain: mbi.Domain) -> list[mbi.Clique]:
+    """Returns the cliques whose marginals this mechanism supports.
+
+    These are the cliques that the graphical model produced by this mechanism
+    is guaranteed to represent for the given domain, i.e. the marginal queries
+    the resulting synthetic data can answer. Callers use them to reason about
+    the mechanism's coverage without having to run it.
+
+    Args:
+      domain: Information about the tabular columns and their types.
+
+    Returns:
+      A list of cliques.
+    """
+    return self.config.supporting_cliques(domain)
 
   def _one_way_dp_event(self):
     """DpEvents for the shared one-way measurement ([] if there is none)."""
@@ -149,16 +155,11 @@ class DiscreteMechanism(api.DPMechanism):
         )
     ]
 
-  def _check_calibration(self):
-    """Raises ValueError if the mechanism has not been configured."""
-    if self.zcdp_rho is None:
-      raise ValueError('Must call calibrate() before using the mechanism.')
-
   def _one_way_cliques(self, data):
     """Returns the one-way cliques to measure."""
     cliques = [(a,) for a in data.domain]
     if hasattr(data, 'cliques'):
-      supported = common.downward_closure(data.cliques)  # pytype: disable=attribute-error
+      supported = common.downward_closure(data.cliques)  # pyrefly: ignore[attribute-error]
       cliques = [cl for cl in cliques if cl in supported]
     return cliques
 
@@ -184,10 +185,10 @@ class DiscreteMechanism(api.DPMechanism):
   def _compress(self, data, measurements, constraints):
     """Compresses the domain by merging rare values."""
     mappings = common.compression_mappings(
-        measurements, self.compress_columns, constraints
+        measurements, self.config.compress_columns, constraints
     )
     if mappings and hasattr(data, 'compress'):
-      data = data.compress(mappings)  # pytype: disable=attribute-error
+      data = data.compress(mappings)  # pyrefly: ignore[attribute-error]
       measurements = [m.compress(mappings, data.domain) for m in measurements]
     return data, measurements, mappings
 
@@ -204,7 +205,6 @@ class DiscreteMechanism(api.DPMechanism):
       constraints: Sequence[mbi.Constraint] = (),
   ) -> common.DiscreteMechanismResult:
     """Runs the select-measure-estimate pipeline."""
-    self._check_calibration()
     phase_times = {}
     measurements = self._measure_one_way(
         rng, data, phase_times, initial_measurements=initial_measurements
@@ -217,10 +217,10 @@ class DiscreteMechanism(api.DPMechanism):
     )
     if mappings:
       synthetic_data = synthetic_data.decompress(mappings)
-    diagnostics = common.clique_stats(model)  # pytype: disable=wrong-arg-types
+    diagnostics = common.clique_stats(model)  # pyrefly: ignore[wrong-arg-types]
     diagnostics.phase_times = phase_times
     return common.DiscreteMechanismResult(
-        model=model,  # pytype: disable=wrong-arg-types
+        model=model,  # pyrefly: ignore[wrong-arg-types]
         synthetic_data=synthetic_data,
         measurements=measurements,
         diagnostics=diagnostics,
@@ -240,7 +240,7 @@ class DiscreteMechanism(api.DPMechanism):
     )
 
     # Kick off async AOT compilation of the estimator while we measure.
-    estimator = mbi.estimation.MirrorDescent(self.marginal_oracle)
+    estimator = mbi.estimation.MirrorDescent(self.config.marginal_oracle)
     futures = None
     try:
       futures = estimator.precompile(
@@ -269,7 +269,7 @@ class DiscreteMechanism(api.DPMechanism):
       model = estimator.estimate(
           data.domain,
           measurements,
-          iters=self.pgm_iters,
+          iters=self.config.pgm_iters,
           callback_fn=mbi.callbacks.default(measurements, data.domain),
           constraints=constraints,
       )

@@ -32,14 +32,14 @@ _ZCDP_RHO = 10000
 _WORKLOAD = [('a', 'b'), ('b', 'c'), ('a',), ('b',), ('c',)]
 
 _MECHANISMS = {
-    'AIM': aim.AIMMechanism(workload=_WORKLOAD, max_rounds=4, pgm_iters=500),
-    'AIM_GDP': aim_gdp.AIMGDPMechanism(
+    'AIM': aim.AIMConfig(workload=_WORKLOAD, max_rounds=4, pgm_iters=500),
+    'AIM_GDP': aim_gdp.AIMGDPConfig(
         workload=_WORKLOAD, max_rounds=4, pgm_iters=500
     ),
-    'MST': mst.MSTMechanism(pgm_iters=500),
-    'SWIFT': swift.SWIFTMechanism(workload=_WORKLOAD, pgm_iters=500),
-    'Independent': independent.IndependentMechanism(pgm_iters=500),
-    'Direct': direct.DirectMechanism(
+    'MST': mst.MSTConfig(pgm_iters=500),
+    'SWIFT': swift.SWIFTConfig(workload=_WORKLOAD, pgm_iters=500),
+    'Independent': independent.IndependentConfig(pgm_iters=500),
+    'Direct': direct.DirectConfig(
         prespecified_marginal_queries=_WORKLOAD, pgm_iters=500
     ),
 }
@@ -71,7 +71,7 @@ class SupportingCliquesSufficiencyTest(parameterized.TestCase):
     rng = np.random.default_rng(42)
 
     calibrated = mechanism.calibrate(zcdp_rho=_ZCDP_RHO)
-    cliques = calibrated.supporting_cliques(domain)
+    cliques = mechanism.supporting_cliques(domain)
 
     precomputed = mbi.CliqueVector.from_projectable(data, cliques)
 
@@ -145,9 +145,7 @@ class MaxRecordsPerUserTest(parameterized.TestCase):
     # Scaling max_records_per_user must not change the accounting: only the
     # actual noise magnitude scales, while the reported dp_event is identical.
     base = mechanism.configure(zcdp_rho=_ZCDP_RHO)
-    scaled = dataclasses.replace(mechanism, max_records_per_user=4).configure(
-        zcdp_rho=_ZCDP_RHO
-    )
+    scaled = mechanism.configure(zcdp_rho=_ZCDP_RHO, max_records_per_user=4)
     self.assertEqual(repr(scaled.dp_event), repr(base.dp_event))
 
   @parameterized.named_parameters(
@@ -162,9 +160,9 @@ class MaxRecordsPerUserTest(parameterized.TestCase):
     base = mechanism.configure(zcdp_rho=_ZCDP_RHO)(
         np.random.default_rng(1), data
     )
-    scaled = dataclasses.replace(mechanism, max_records_per_user=k).configure(
-        zcdp_rho=_ZCDP_RHO
-    )(np.random.default_rng(1), data)
+    scaled = mechanism.configure(zcdp_rho=_ZCDP_RHO, max_records_per_user=k)(
+        np.random.default_rng(1), data
+    )
     self.assertNotEmpty(base.measurements)
     self.assertLen(scaled.measurements, len(base.measurements))
     for base_m, scaled_m in zip(base.measurements, scaled.measurements):
@@ -173,7 +171,7 @@ class MaxRecordsPerUserTest(parameterized.TestCase):
   @parameterized.named_parameters(('zero', 0), ('negative', -3))
   def test_invalid_k_raises(self, k):
     with self.assertRaises(ValueError):
-      mst.MSTMechanism(max_records_per_user=k)
+      mst.MSTConfig().configure(zcdp_rho=_ZCDP_RHO, max_records_per_user=k)
 
 
 if __name__ == '__main__':
