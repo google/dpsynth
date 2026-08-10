@@ -115,6 +115,44 @@ DP Synth deliberately keeps its dependency footprint small:
 - If your contribution requires a new dependency, discuss it in the issue
   tracker first.
 
+## Development Setup
+
+We use [uv](https://docs.astral.sh/uv/) for managing your development
+environment. It provides support for managing `pylock.toml` lock files and
+is significantly faster than `pip`.
+
+> [!NOTE]
+> The `pylock.toml` file is generated using `uv`, but it follows standard
+> specifications as per PEP 751 and should work with modern package managers
+> that support it.
+
+1.  **Install uv:** Follow the [official instructions](https://docs.astral.sh/uv/getting-started/installation/).
+2.  **Create an environment and install dependencies:**
+
+    ```bash
+    # Create a virtual environment with Python 3.12
+    uv venv --python 3.12
+    # Activate it (Linux/macOS)
+    source .venv/bin/activate
+    # Install all dependencies from the lockfile and install the project in editable mode
+    uv pip install -r pylock.toml
+    uv pip install -e .
+    ```
+
+3.  **Updating `pylock.toml`:** Regenerate `pylock.toml` using `uv` periodically
+    or when modifying dependencies in `pyproject.toml`:
+
+    ```bash
+    uv export --format pylock.toml --all-extras --default-index https://pypi.org/simple -o pylock.toml --python 3.12
+    go run github.com/google/addlicense@v1.1.1 -c "Google LLC" -y "2026" -l apache pylock.toml
+    ```
+
+    Commit the updated `pylock.toml` to ensure CI and contributors remain in
+    sync.
+
+    Note that any update to `pyproject.toml` must be accompanied by a
+    regeneration of `pylock.toml`.
+
 ## Contributor License Agreement
 
 Contributions to this project must be accompanied by a Contributor License
