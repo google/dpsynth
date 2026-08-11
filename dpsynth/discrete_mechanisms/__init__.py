@@ -16,20 +16,27 @@
 
 # pylint: disable=g-importing-member
 
-from dpsynth.discrete_mechanisms.aim import AIMMechanism
-from dpsynth.discrete_mechanisms.aim_gdp import AIMGDPMechanism
+from dpsynth.discrete_mechanisms.aim import AIM
+from dpsynth.discrete_mechanisms.aim import AIMConfig
+from dpsynth.discrete_mechanisms.aim_gdp import AIMGDP
+from dpsynth.discrete_mechanisms.aim_gdp import AIMGDPConfig
 from dpsynth.discrete_mechanisms.base import DiscreteMechanism
+from dpsynth.discrete_mechanisms.base import DiscreteMechanismConfig
 from dpsynth.discrete_mechanisms.common import DiscreteMechanismResult
 from dpsynth.discrete_mechanisms.common import MechanismDiagnostics
-from dpsynth.discrete_mechanisms.direct import DirectMechanism
-from dpsynth.discrete_mechanisms.independent import IndependentMechanism
-from dpsynth.discrete_mechanisms.mst import MSTMechanism
-from dpsynth.discrete_mechanisms.swift import SWIFTMechanism
+from dpsynth.discrete_mechanisms.direct import Direct
+from dpsynth.discrete_mechanisms.direct import DirectConfig
+from dpsynth.discrete_mechanisms.independent import Independent
+from dpsynth.discrete_mechanisms.independent import IndependentConfig
+from dpsynth.discrete_mechanisms.mst import MST
+from dpsynth.discrete_mechanisms.mst import MSTConfig
+from dpsynth.discrete_mechanisms.swift import SWIFT
+from dpsynth.discrete_mechanisms.swift import SWIFTConfig
 
 # Backwards-compatible aliases.
-AIMConfig = AIMMechanism
-AIMGDPConfig = AIMGDPMechanism
-DirectConfig = DirectMechanism
-IndependentConfig = IndependentMechanism
-MSTConfig = MSTMechanism
-SWIFTConfig = SWIFTMechanism
+AIMMechanism = AIMConfig
+AIMGDPMechanism = AIMGDPConfig
+DirectMechanism = DirectConfig
+IndependentMechanism = IndependentConfig
+MSTMechanism = MSTConfig
+SWIFTMechanism = SWIFTConfig

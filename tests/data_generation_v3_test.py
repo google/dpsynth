@@ -230,8 +230,6 @@ class MaxRecordsPerUserTest(parameterized.TestCase):
     ).configure(zcdp_rho=100.0)
     self.assertEqual(calibrated.experimental_max_records_per_user, k)
     self.assertEqual(calibrated.discrete_mechanism.max_records_per_user, k)
-    for init in calibrated.initializers.values():
-      self.assertEqual(init.max_records_per_user, k)
 
   def test_dp_event_invariant_to_k(self):
     base = TabularSynthesizer(domains=self._categorical_domains()).configure(

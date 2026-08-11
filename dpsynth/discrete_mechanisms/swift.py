@@ -45,8 +45,8 @@ import networkx as nx
 import numpy as np
 
 
-@dataclasses.dataclass
-class SWIFTMechanism(base.DiscreteMechanism):
+@dataclasses.dataclass(frozen=True)
+class SWIFTConfig(base.DiscreteMechanismConfig):
   """Configuration for the SWIFT mechanism.
 
   Attributes:
@@ -72,7 +72,6 @@ class SWIFTMechanism(base.DiscreteMechanism):
   one_way_budget_fraction: float = 0.1
 
   # Internal state set by configure.
-  _select_rho: float | None = dataclasses.field(default=None, repr=False)
 
   def supporting_cliques(self, domain: mbi.Domain) -> list[mbi.Clique]:
     """Returns the workload cliques filtered by max_marginal_size."""
@@ -88,10 +87,20 @@ class SWIFTMechanism(base.DiscreteMechanism):
         'measurement_rho': remaining_rho - select_rho,
     }
 
+  def _create_mechanism(self, **kwargs) -> 'SWIFT':
+    return SWIFT(**kwargs)
+
+
+@dataclasses.dataclass(frozen=True, kw_only=True)
+class SWIFT(base.DiscreteMechanism):
+  """Calibrated SWIFT instance."""
+
+  config: SWIFTConfig
+  _select_rho: float
+
   @property
   def dp_event(self) -> dp_accounting.DpEvent:
     """Returns the DP event for the SWIFT mechanism."""
-    self._check_calibration()
     # SWIFT's budget is split between one-way, selection, and measurement.
     # All three are Gaussian mechanism applications.
     return dp_accounting.ZCDpEvent(self.zcdp_rho)  # pyrefly: ignore[bad-argument-type]
@@ -110,8 +119,8 @@ class SWIFTMechanism(base.DiscreteMechanism):
     with common.timed(phase_times, 'compiled_workload'):
       candidates = common.compiled_workload(
           data.domain,
-          self.workload,
-          self.max_marginal_size,
+          self.config.workload,
+          self.config.max_marginal_size,
       )
     logging.info('[SWIFT] %d candidates.', len(candidates))
 
@@ -120,9 +129,12 @@ class SWIFTMechanism(base.DiscreteMechanism):
     domain = data.domain
 
     with common.timed(phase_times, 'initial_mirror_descent'):
-      estimator = mbi.estimation.MirrorDescent(self.marginal_oracle)
+      estimator = mbi.estimation.MirrorDescent(self.config.marginal_oracle)
       model = estimator.estimate(
-          domain, measurements, iters=self.pgm_iters, constraints=constraints
+          domain,
+          measurements,
+          iters=self.config.pgm_iters,
+          constraints=constraints,
       )
       model = typing.cast(mbi.MarkovRandomField, model)
 
@@ -145,7 +157,11 @@ class SWIFTMechanism(base.DiscreteMechanism):
 
       with common.timed(phase_times, 'select_queries'):
         selected, jtree = select_queries(
-            errors, candidates, domain, self.max_clique_size, budget_remaining
+            errors,
+            candidates,
+            domain,
+            self.config.max_clique_size,
+            budget_remaining,
         )
 
     all_cliques = [m.clique for m in measurements] + list(selected)
@@ -201,7 +217,7 @@ class SWIFTMechanism(base.DiscreteMechanism):
       final_model = estimator.estimate(
           domain,
           measurements,
-          iters=self.pgm_iters,
+          iters=self.config.pgm_iters,
           callback_fn=callback_fn,
           constraints=constraints,
       )

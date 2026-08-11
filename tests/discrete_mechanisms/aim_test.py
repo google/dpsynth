@@ -61,7 +61,7 @@ class AIMTest(absltest.TestCase):
   def test_fits_one_way_marginals_with_aim(self):
     data = mbi.Dataset.synthetic(mbi.Domain(["a", "b", "c"], [3, 4, 5]), N=1000)
     workload = [("a",), ("b",), ("c",)]
-    config = aim.AIMMechanism(workload=workload, max_rounds=4, pgm_iters=500)
+    config = aim.AIMConfig(workload=workload, max_rounds=4, pgm_iters=500)
 
     calibrated = config.configure(zcdp_rho=10000)
     result = calibrated(np.random.default_rng(0), data)
@@ -77,7 +77,7 @@ class AIMTest(absltest.TestCase):
     data = mbi.Dataset.synthetic(mbi.Domain(["a", "b", "c"], [3, 4, 5]), N=1000)
     workload = [("a",), ("b",), ("c",)]
 
-    config = aim_gdp.AIMGDPMechanism(
+    config = aim_gdp.AIMGDPConfig(
         workload=workload, max_rounds=4, pgm_iters=500
     )
     calibrated = config.configure(zcdp_rho=10000)
@@ -90,26 +90,10 @@ class AIMTest(absltest.TestCase):
       actual = result.model.project([col]).datavector()
       np.testing.assert_allclose(actual, expected, atol=1)
 
-  def test_uncalibrated_aim_raises(self):
-    config = aim.AIMMechanism()
-    with self.assertRaisesRegex(ValueError, "calibrate"):
-      _ = config.dp_event
-    data = mbi.Dataset.synthetic(mbi.Domain(["a"], [3]), N=10)
-    with self.assertRaisesRegex(ValueError, "calibrate"):
-      config(np.random.default_rng(0), data)
-
-  def test_uncalibrated_aim_gdp_raises(self):
-    config = aim_gdp.AIMGDPMechanism()
-    with self.assertRaisesRegex(ValueError, "calibrate"):
-      _ = config.dp_event
-    data = mbi.Dataset.synthetic(mbi.Domain(["a"], [3]), N=10)
-    with self.assertRaisesRegex(ValueError, "calibrate"):
-      config(np.random.default_rng(0), data)
-
   def test_correlated_workload_regression_with_aim(self):
     workload = [("a",), ("b",), ("c",), ("a", "b"), ("a", "c"), ("b", "c")]
-    config = aim.AIMMechanism(workload=workload, max_rounds=4, pgm_iters=500)
-    baseline_config = independent.IndependentMechanism(pgm_iters=500)
+    config = aim.AIMConfig(workload=workload, max_rounds=4, pgm_iters=500)
+    baseline_config = independent.IndependentConfig(pgm_iters=500)
     mechanism_error, baseline_error = (
         _correlated_workload_mechanism_baseline_errors(
             config, baseline_config, workload
@@ -119,10 +103,10 @@ class AIMTest(absltest.TestCase):
 
   def test_correlated_workload_regression_with_aim_gdp(self):
     workload = [("a",), ("b",), ("c",), ("a", "b"), ("a", "c"), ("b", "c")]
-    config = aim_gdp.AIMGDPMechanism(
+    config = aim_gdp.AIMGDPConfig(
         workload=workload, max_rounds=4, pgm_iters=500
     )
-    baseline_config = independent.IndependentMechanism(pgm_iters=500)
+    baseline_config = independent.IndependentConfig(pgm_iters=500)
     mechanism_error, baseline_error = (
         _correlated_workload_mechanism_baseline_errors(
             config, baseline_config, workload
@@ -131,10 +115,10 @@ class AIMTest(absltest.TestCase):
     self.assertLess(mechanism_error, 0.05 * baseline_error)
 
   def test_default_configuration_values(self):
-    config = aim.AIMMechanism()
+    config = aim.AIMConfig()
     self.assertEqual(config.pgm_iters, 1000)
 
-    gdp_config = aim_gdp.AIMGDPMechanism()
+    gdp_config = aim_gdp.AIMGDPConfig()
     self.assertEqual(gdp_config.pgm_iters, 1000)
 
 

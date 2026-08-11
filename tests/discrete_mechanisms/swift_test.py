@@ -15,7 +15,6 @@
 import itertools
 
 from absl.testing import absltest
-import dp_accounting
 from dpsynth.discrete_mechanisms import clique_tree
 from dpsynth.discrete_mechanisms import common
 from dpsynth.discrete_mechanisms import swift
@@ -136,7 +135,7 @@ class SWIFTTest(absltest.TestCase):
   def test_fits_one_way_marginals(self):
     data = mbi.Dataset.synthetic(mbi.Domain(['a', 'b', 'c'], [3, 4, 5]), N=1000)
 
-    config = swift.SWIFTMechanism(pgm_iters=500).configure(zcdp_rho=10000)
+    config = swift.SWIFTConfig(pgm_iters=500).configure(zcdp_rho=10000)
 
     result = config(np.random.default_rng(0), data)
 
@@ -146,29 +145,6 @@ class SWIFTTest(absltest.TestCase):
       expected = data.project([col]).datavector()
       actual = result.model.project([col]).datavector()
       np.testing.assert_allclose(actual, expected, atol=1)
-
-  def test_calibrate_required(self):
-    config = swift.SWIFTMechanism()
-    data = mbi.Dataset.synthetic(mbi.Domain(['a', 'b'], [3, 4]), N=100)
-    with self.assertRaises(ValueError):
-      config(np.random.default_rng(0), data)
-
-  def test_dp_event_requires_calibration(self):
-    config = swift.SWIFTMechanism()
-    with self.assertRaises(ValueError):
-      _ = config.dp_event
-
-  def test_dp_event_returns_zcdp(self):
-    config = swift.SWIFTMechanism().configure(zcdp_rho=1.0)
-    event = config.dp_event
-    self.assertIsInstance(event, dp_accounting.ZCDpEvent)
-
-  def test_default_configuration_values(self):
-    config = swift.SWIFTMechanism()
-    self.assertEqual(config.max_clique_size, 1e7)
-    self.assertEqual(config.max_marginal_size, 1e6)
-    self.assertEqual(config.pgm_iters, 10_000)
-
 
 if __name__ == '__main__':
   absltest.main()

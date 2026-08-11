@@ -78,52 +78,78 @@ def _validate_mechanism(mechanism: _M | None) -> _M:
   return mechanism
 
 
-@dataclasses.dataclass
-class NumericalInitializer(api.DPMechanism):
-  """Mechanism that creates the data encoding transform for numerical data.
-
-  Under the hood, this mechanism uses the Exponential Mechanism to privately
-  identify quantile-based bin edges. These edges partition the continuous
-  numerical domain into a discrete set of bins that maximize the uniform
-  distribution of density.
-
-  Internally calibrates and computes quantiles for privacy accounting.
-
-  Attributes:
-    name: Attribute name used as the clique key in the measurement.
-    num_partitions: Number of quantile partitions (must be a power of 2).
-    attribute: The NumericalAttribute defining the data domain.
-    max_grid_size: Maximum size of the grid.
-    max_records_per_user: Assumed upper bound on the number of records a single
-      user contributes. Added noise (and mechanism sensitivity) is scaled by
-      this factor to provide user-level rather than record-level DP; the privacy
-      accounting is unchanged. Soundness relies on the caller enforcing this
-      bound.
-  """
+@dataclasses.dataclass(frozen=True, kw_only=True)
+class NumericalInitializerConfig(api.MechanismConfig):
+  """Configuration for initializing numerical attributes."""
 
   name: str
   num_partitions: int
   attribute: domain.NumericalAttribute
   max_grid_size: int = 10_000_000
-  max_records_per_user: int = 1
-  _epsilon_levels: tuple[float, ...] | None = dataclasses.field(
-      default=None, repr=False
-  )
 
-  def __post_init__(self):
-    api.validate_max_records_per_user(self.max_records_per_user)
+  @property
+  def grid_spec(self) -> tuple[float, float, int]:
+    """Returns (lower, upper, grid_size) for the quantile candidate grid."""
+    attr = self.attribute
+    if attr.dtype == 'int':
+      import math
+      from dpsynth.local_mode import _quantiles
+
+      m = _quantiles.jitter_factor(self.num_partitions)
+      budget = max(2, self.max_grid_size // m)
+      int_range = int(attr.max_value - attr.min_value + 1)
+      step = max(1, math.ceil(int_range / budget))
+      gs = math.ceil(int_range / step)
+      return (
+          float(attr.min_value),
+          float(attr.min_value + (gs - 1) * step),
+          gs,
+      )
+    return (
+        float(attr.min_value),
+        float(attr.exclusive_max_value),
+        self.max_grid_size,
+    )
+
+  @property
+  def grid_size(self) -> int:
+    return self.grid_spec[2]
+
+  def configure(
+      self,
+      *,
+      zcdp_rho: float,
+      delta: float = 0.0,
+      max_records_per_user: int = 1,
+      epsilon_ratio: float = 2.0,
+  ) -> 'NumericalInitializer':
+    api.validate_max_records_per_user(max_records_per_user)
     if self.max_grid_size < 2:
       raise ValueError(f'max_grid_size must be >= 2, got {self.max_grid_size}.')
 
-  @property
-  def _num_levels(self) -> int:
-    result = int(np.log2(self.num_partitions))
-    if 2**result != self.num_partitions:
+    levels = int(np.log2(self.num_partitions))
+    if 2**levels != self.num_partitions:
       raise ValueError(f'{self.num_partitions=} must be a power of 2.')
-    return result
+
+    if levels == 0:
+      return NumericalInitializer(
+          config=self,
+          max_records_per_user=max_records_per_user,
+          _epsilon_levels=(),
+      )
+
+    rho_ratio = epsilon_ratio**2
+    budget_weights = rho_ratio ** np.arange(levels)[::-1]
+    rho_levels = zcdp_rho * budget_weights / budget_weights.sum()
+    eps = np.sqrt(8.0 * rho_levels)
+    return NumericalInitializer(
+        config=self,
+        max_records_per_user=max_records_per_user,
+        _epsilon_levels=tuple(eps.tolist()),
+    )
 
   @property
-  def _grid_spec(self) -> tuple[float, float, int]:
+  def grid_spec(self) -> tuple[float, float, int]:
     """Returns (lower, upper, grid_size) for the quantile candidate grid."""
     attr = self.attribute
     if attr.dtype == 'int':
@@ -139,26 +165,32 @@ class NumericalInitializer(api.DPMechanism):
   @property
   def grid_size(self) -> int:
     """Grid size used for histogram construction."""
-    return self._grid_spec[2]
+    return self.grid_spec[2]
+
+
+@dataclasses.dataclass(frozen=True, kw_only=True)
+class NumericalInitializer(api.CalibratedMechanism):
+  """Calibrated mechanism for initializing numerical attributes."""
+
+  config: NumericalInitializerConfig
+  max_records_per_user: int = 1
+  _epsilon_levels: tuple[float, ...] | None = dataclasses.field(
+      default=None, repr=False
+  )
+
+  @property
+  def _num_levels(self) -> int:
+    return int(np.log2(self.config.num_partitions))
+
+  @property
+  def grid_size(self) -> int:
+    return self.config.grid_size
 
   @property
   def zcdp_rho(self) -> float:
     if self._epsilon_levels is None:
       raise ValueError('Mechanism is uncalibrated.')
     return sum(e**2 / 8.0 for e in self._epsilon_levels)
-
-  def configure(  # pyrefly: ignore[bad-override]
-      self, *, zcdp_rho: float, delta: float = 0.0, epsilon_ratio: float = 2.0
-  ) -> NumericalInitializer:
-    """Returns a copy calibrated to the given zCDP budget."""
-    levels = self._num_levels
-    if levels == 0:
-      return dataclasses.replace(self, _epsilon_levels=())
-    rho_ratio = epsilon_ratio**2
-    budget_weights = rho_ratio ** np.arange(levels)[::-1]
-    rho_levels = zcdp_rho * budget_weights / budget_weights.sum()
-    eps = np.sqrt(8.0 * rho_levels)
-    return dataclasses.replace(self, _epsilon_levels=tuple(eps.tolist()))
 
   @property
   def dp_event(self) -> dp_accounting.DpEvent:
@@ -184,9 +216,9 @@ class NumericalInitializer(api.DPMechanism):
   def _grid_histogram(self, data):
     """Returns the quantile candidate-grid histogram (length grid_size)."""
     # Applies NumericalAttribute.standardize semantics in a vectorized manner.
-    lower, upper, gs = self._grid_spec
+    lower, upper, gs = self.config.grid_spec
     delta = (upper - lower) / (gs - 1)
-    attr = self.attribute
+    attr = self.config.attribute
     values = np.asarray(data, dtype=float)
     if attr.clip_to_range:
       values = np.where(np.isnan(values), attr.min_value, values)
@@ -208,7 +240,9 @@ class NumericalInitializer(api.DPMechanism):
     """Returns a ColumnMeasurement from pre-aggregated histogram counts."""
     if self._epsilon_levels is None:
       raise ValueError('Mechanism is uncalibrated.')
-    jitter_strategy = 'refine' if self.attribute.dtype == 'int' else 'symmetric'
+    jitter_strategy = (
+        'refine' if self.config.attribute.dtype == 'int' else 'symmetric'
+    )
     scaled_epsilon_levels = (
         np.asarray(self._epsilon_levels) / self.max_records_per_user
     )
@@ -218,14 +252,14 @@ class NumericalInitializer(api.DPMechanism):
         epsilon_levels=scaled_epsilon_levels,
         jitter_strategy=jitter_strategy,
     )
-    lower, upper, _ = self._grid_spec
+    lower, upper, _ = self.config.grid_spec
     delta = (upper - lower) / max(1, np.asarray(counts).size - 1)
     raw_edges = [lower + i * delta for i in indices]
 
     return edges_to_column_measurement(
         raw_edges=raw_edges,
-        attribute=self.attribute,
-        name=self.name,
+        attribute=self.config.attribute,
+        name=self.config.name,
         zcdp_rho=self.zcdp_rho,
         estimated_total=estimated_total,
         max_records_per_user=self.max_records_per_user,
@@ -293,37 +327,35 @@ def edges_to_column_measurement(
   return ColumnMeasurement(cat_attr, bin_edges, measurement=measurement)
 
 
-@dataclasses.dataclass
-class CategoricalInitializer(api.DPMechanism):
-  """Mechanism that measures a noisy histogram for categorical data.
-
-  Under the hood, this mechanism uses the standard Gaussian Mechanism. It adds
-  normally distributed noise to the exact counts of each closed-set category to
-  produce a noisy marginal measurement.
-
-  Attributes:
-    name: Attribute name used as the clique key in the measurement.
-    attribute: The CategoricalAttribute defining the closed domain.
-    max_records_per_user: Assumed upper bound on the number of records a single
-      user contributes. Added noise (and mechanism sensitivity) is scaled by
-      this factor to provide user-level rather than record-level DP; the privacy
-      accounting is unchanged. Soundness relies on the caller enforcing this
-      bound.
-  """
+@dataclasses.dataclass(frozen=True, kw_only=True)
+class CategoricalInitializerConfig(api.MechanismConfig):
+  """Configuration for initializing categorical attributes."""
 
   name: str
   attribute: domain.CategoricalAttribute
+
+  def configure(
+      self,
+      *,
+      zcdp_rho: float,
+      delta: float = 0.0,
+      max_records_per_user: int = 1,
+  ) -> 'CategoricalInitializer':
+    api.validate_max_records_per_user(max_records_per_user)
+    return CategoricalInitializer(
+        config=self,
+        max_records_per_user=max_records_per_user,
+        sigma=math.sqrt(0.5 / zcdp_rho),
+    )
+
+
+@dataclasses.dataclass(frozen=True, kw_only=True)
+class CategoricalInitializer(api.CalibratedMechanism):
+  """Calibrated mechanism for initializing categorical attributes."""
+
+  config: CategoricalInitializerConfig
   max_records_per_user: int = 1
   sigma: float | None = dataclasses.field(default=None, repr=False)
-
-  def __post_init__(self):
-    api.validate_max_records_per_user(self.max_records_per_user)
-
-  def configure(  # pyrefly: ignore[bad-override]
-      self, *, zcdp_rho: float, delta: float = 0.0
-  ) -> CategoricalInitializer:
-    """Returns a copy calibrated to the given zCDP budget."""
-    return dataclasses.replace(self, sigma=math.sqrt(0.5 / zcdp_rho))
 
   @property
   def dp_event(self) -> dp_accounting.DpEvent:
@@ -336,8 +368,8 @@ class CategoricalInitializer(api.DPMechanism):
       self, rng: np.random.Generator, data: np.ndarray
   ) -> ColumnMeasurement:
     """Returns a ColumnMeasurement with the noisy histogram."""
-    encoded = vtx.discrete_encode(data, self.attribute)
-    counts = np.bincount(encoded, minlength=self.attribute.size)
+    encoded = vtx.discrete_encode(data, self.config.attribute)
+    counts = np.bincount(encoded, minlength=self.config.attribute.size)
     return self.from_summary(rng, counts)
 
   def from_summary(
@@ -352,53 +384,43 @@ class CategoricalInitializer(api.DPMechanism):
     noisy_counts = np.asarray(noisy)
     measurement = mbi.LinearMeasurement(
         noisy_counts,
-        (self.name,),
+        (self.config.name,),
         stddev=self.max_records_per_user * self.sigma,
     )
-    return ColumnMeasurement(self.attribute, measurement=measurement)
+    return ColumnMeasurement(self.config.attribute, measurement=measurement)
 
 
-@dataclasses.dataclass
-class OpenSetCategoricalInitializer(api.DPMechanism):
-  """Mechanism that discovers and measures an open-set categorical domain.
-
-  Uses Gaussian Thresholding (Algorithm 2 from the DP-SIPS paper) to privately
-  select significant partitions from the data and simultaneously obtain noisy
-  counts for each discovered partition. The discovered partitions, together
-  with the attribute's default_value (used as a catch-all for undiscovered
-  values), form a CategoricalAttribute used for downstream synthesis.
-
-  Under the hood, this mechanism relies on Gaussian Thresholding discovery to
-  privately filter low-count tokens and outputs standard Gaussian noisy counts
-  for only the tokens that cross the discovery threshold.
-
-  Attributes:
-    name: Attribute name used as the clique key in the measurement.
-    attribute: The OpenSetCategoricalAttribute specifying the default value.
-    delta: Failure probability for the partition selection threshold.
-    min_count: Minimum true count for a partition to be discovered.
-    max_records_per_user: Assumed upper bound on the number of records a single
-      user contributes. Added noise (and mechanism sensitivity) is scaled by
-      this factor to provide user-level rather than record-level DP; the privacy
-      accounting is unchanged. Soundness relies on the caller enforcing this
-      bound.
-  """
+@dataclasses.dataclass(frozen=True, kw_only=True)
+class OpenSetCategoricalInitializerConfig(api.MechanismConfig):
+  """Configuration for initializing open-set categorical attributes."""
 
   name: str
   attribute: domain.OpenSetCategoricalAttribute
   delta: float
   min_count: int = 1
+
+  def configure(
+      self,
+      *,
+      zcdp_rho: float,
+      delta: float = 0.0,
+      max_records_per_user: int = 1,
+  ) -> 'OpenSetCategoricalInitializer':
+    api.validate_max_records_per_user(max_records_per_user)
+    return OpenSetCategoricalInitializer(
+        config=self,
+        max_records_per_user=max_records_per_user,
+        sigma=math.sqrt(0.5 / zcdp_rho),
+    )
+
+
+@dataclasses.dataclass(frozen=True, kw_only=True)
+class OpenSetCategoricalInitializer(api.CalibratedMechanism):
+  """Calibrated mechanism for initializing open-set categorical attributes."""
+
+  config: OpenSetCategoricalInitializerConfig
   max_records_per_user: int = 1
   sigma: float | None = dataclasses.field(default=None, repr=False)
-
-  def __post_init__(self):
-    api.validate_max_records_per_user(self.max_records_per_user)
-
-  def configure(  # pyrefly: ignore[bad-override]
-      self, *, zcdp_rho: float, delta: float = 0.0
-  ) -> OpenSetCategoricalInitializer:
-    """Returns a copy calibrated to the given zCDP budget."""
-    return dataclasses.replace(self, sigma=math.sqrt(0.5 / zcdp_rho))
 
   @property
   def dp_event(self) -> dp_accounting.DpEvent:
@@ -406,7 +428,9 @@ class OpenSetCategoricalInitializer(api.DPMechanism):
     if self.sigma is None:
       raise ValueError('Mechanism is uncalibrated.')
     main_event = dp_accounting.GaussianDpEvent(noise_multiplier=self.sigma)
-    failure_event = dp_accounting.dp_event.EpsilonDeltaDpEvent(0, self.delta)
+    failure_event = dp_accounting.dp_event.EpsilonDeltaDpEvent(
+        0, self.config.delta
+    )
     return dp_accounting.ComposedDpEvent([main_event, failure_event])
 
   def __call__(
@@ -427,7 +451,7 @@ class OpenSetCategoricalInitializer(api.DPMechanism):
     if self.sigma is None:
       raise ValueError('Mechanism is uncalibrated.')
 
-    above_min = counts >= self.min_count
+    above_min = counts >= self.config.min_count
     eligible_idx = np.where(above_min)[0]
     eligible_counts = counts[above_min].astype(float)
 
@@ -437,8 +461,8 @@ class OpenSetCategoricalInitializer(api.DPMechanism):
     noisy_counts = np.asarray(noisy)
 
     stddev = self.max_records_per_user * self.sigma
-    base = float(self.max_records_per_user + self.min_count - 1)
-    threshold = base + stddev * scipy.stats.norm.ppf(1.0 - self.delta)
+    base = float(self.max_records_per_user + self.config.min_count - 1)
+    threshold = base + stddev * scipy.stats.norm.ppf(1.0 - self.config.delta)
     passed = noisy_counts >= threshold
 
     selected_partitions = eligible_idx[passed]
@@ -448,8 +472,8 @@ class OpenSetCategoricalInitializer(api.DPMechanism):
         [str(v) for v in unique_values[selected_partitions]]
     )
 
-    if self.attribute.public_possible_values:
-      pub = np.array(self.attribute.public_possible_values)
+    if self.config.attribute.public_possible_values:
+      pub = np.array(self.config.attribute.public_possible_values)
       selected_values, estimated_counts = primitives.ensure_public_partitions(
           rng,
           selected_values,
@@ -459,7 +483,9 @@ class OpenSetCategoricalInitializer(api.DPMechanism):
       )
 
     # Build the discovered domain: default first, then selected values.
-    possible_values = [self.attribute.default_value] + selected_values.tolist()
+    possible_values = [
+        self.config.attribute.default_value
+    ] + selected_values.tolist()
     cat_attr = domain.CategoricalAttribute(
         possible_values=possible_values,  # pyrefly: ignore[unexpected-keyword]
         out_of_domain_index=0,  # pyrefly: ignore[unexpected-keyword]
@@ -469,7 +495,7 @@ class OpenSetCategoricalInitializer(api.DPMechanism):
     # not the unmeasured default at index 0.
     measurement = mbi.LinearMeasurement(
         estimated_counts,  # pyrefly: ignore[bad-argument-type]
-        (self.name,),
+        (self.config.name,),
         stddev=stddev,
         query=mbi.SlicedQuery(start=1),
     )

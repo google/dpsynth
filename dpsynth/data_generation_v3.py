@@ -19,6 +19,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 import dataclasses
 import math
+import typing
 
 from absl import logging
 import dp_accounting
@@ -39,8 +40,8 @@ def _create_initializers(
     domains: Mapping[str, domain.AttributeType],
     numerical_bins: int,
     init_delta: float,
-    max_records_per_user: int = 1,
-) -> dict[str, api.DPMechanism]:
+    # max_records_per_user is passed during the calibration phase instead.
+) -> dict[str, api.MechanismConfig]:
   """Creates per-column initializers from the domain specification.
 
   Args:
@@ -61,22 +62,21 @@ def _create_initializers(
   initializers = {}
   for col, attr in domains.items():
     if isinstance(attr, domain.NumericalAttribute):
-      initializers[col] = initialization.NumericalInitializer(
+      initializers[col] = initialization.NumericalInitializerConfig(
           name=col,
           num_partitions=numerical_bins,
           attribute=attr,
-          max_records_per_user=max_records_per_user,
       )
     elif isinstance(attr, domain.CategoricalAttribute):
-      initializers[col] = initialization.CategoricalInitializer(
-          name=col, attribute=attr, max_records_per_user=max_records_per_user
+      initializers[col] = initialization.CategoricalInitializerConfig(
+          name=col,
+          attribute=attr,
       )
     elif isinstance(attr, domain.OpenSetCategoricalAttribute):
-      initializers[col] = initialization.OpenSetCategoricalInitializer(
+      initializers[col] = initialization.OpenSetCategoricalInitializerConfig(
           name=col,
           attribute=attr,
           delta=init_delta,
-          max_records_per_user=max_records_per_user,
       )
     else:
       raise ValueError(
@@ -226,9 +226,10 @@ class TabularSynthesizer(api.DPMechanism):
   """
 
   domains: Mapping[str, domain.AttributeType]
-  discrete_mechanism: discrete_mechanisms.DiscreteMechanism = dataclasses.field(
-      default_factory=discrete_mechanisms.MSTMechanism
-  )
+  discrete_mechanism: (
+      discrete_mechanisms.DiscreteMechanismConfig
+      | discrete_mechanisms.DiscreteMechanism
+  ) = dataclasses.field(default_factory=discrete_mechanisms.MSTConfig)
   numerical_bins: int = 32
   init_budget_fraction: float = 0.1
   initializers: dict[str, api.DPMechanism] | None = None
@@ -301,28 +302,29 @@ class TabularSynthesizer(api.DPMechanism):
           self.experimental_max_records_per_user,
       )
     elif self.experimental_max_records_per_user > 1:
-      # The synthesizer's experimental_max_records_per_user is the single
-      # source of truth: the total-count and discrete mechanisms already use it,
-      # so propagate it to caller-supplied initializers too.
-      propagated = {}
-      for col, init in inits.items():
-        propagated[col] = dataclasses.replace(  # pyrefly: ignore[bad-specialization]
-            init, max_records_per_user=self.experimental_max_records_per_user
-        )
-      inits = propagated
+      pass
     init_rho = self.init_budget_fraction * zcdp_rho
     # +1 for the DPGaussianCount that always measures the total.
     per_col_rho = init_rho / (len(inits) + 1)
     discrete_rho = zcdp_rho - init_rho
 
     calibrated_inits = {
-        col: init.configure(zcdp_rho=per_col_rho) for col, init in inits.items()
+        col: init.configure(
+            zcdp_rho=per_col_rho,
+            delta=per_col_delta,
+            max_records_per_user=self.experimental_max_records_per_user,
+        )
+        for col, init in inits.items()
     }
     total_count_sigma = math.sqrt(0.5 / per_col_rho)
-    calibrated_discrete = dataclasses.replace(
-        self.discrete_mechanism,
+
+    discrete_config = typing.cast(
+        discrete_mechanisms.DiscreteMechanismConfig, self.discrete_mechanism
+    )
+    calibrated_discrete = discrete_config.configure(
         max_records_per_user=self.experimental_max_records_per_user,
-    ).configure(zcdp_rho=discrete_rho)
+        zcdp_rho=discrete_rho,
+    )
     return dataclasses.replace(
         self,
         initializers=calibrated_inits,
@@ -348,7 +350,11 @@ class TabularSynthesizer(api.DPMechanism):
     events.append(
         dp_accounting.GaussianDpEvent(noise_multiplier=self.total_count_sigma)
     )
-    events.append(self.discrete_mechanism.dp_event)
+    events.append(
+        typing.cast(
+            discrete_mechanisms.DiscreteMechanism, self.discrete_mechanism
+        ).dp_event
+    )
     return dp_accounting.ComposedDpEvent(events)
 
   def __call__(
@@ -415,7 +421,9 @@ class TabularSynthesizer(api.DPMechanism):
     mbi_constraints = tuple(
         c.to_mbi() for c in self.cross_attribute_constraints
     )
-    mechanism_result = self.discrete_mechanism(
+    mechanism_result = typing.cast(
+        discrete_mechanisms.DiscreteMechanism, self.discrete_mechanism
+    )(
         rng,
         data=discrete,
         initial_measurements=initial_measurements,
