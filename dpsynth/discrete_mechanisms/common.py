@@ -20,7 +20,8 @@ import dataclasses
 import functools
 import itertools
 import time
-from typing import TypeAlias
+import typing
+from typing import Any, Protocol, TypeAlias
 
 from absl import logging
 from dpsynth import transformations
@@ -32,6 +33,23 @@ import numpy as np
 import scipy
 import scipy.special
 import tqdm
+
+
+class DiscreteMechanismProtocol(Protocol):
+  """Protocol for DP mechanisms operating on integer-coded mbi.Datasets."""
+
+  def __call__(
+      self,
+      rng: np.random.Generator,
+      data: mbi.Dataset | mbi.CliqueVector,
+      *,
+      initial_measurements: Sequence[mbi.LinearMeasurement] | None = None,
+      constraints: Sequence[mbi.Constraint] = (),
+  ) -> 'DiscreteMechanismResult':
+    ...
+
+  def supporting_cliques(self, domain: mbi.Domain) -> list[mbi.Clique]:
+    ...
 
 
 @dataclasses.dataclass
@@ -65,7 +83,9 @@ def timed(phase_times: dict[str, float], name: str):
   logging.info('[%s] %.2fs', name, elapsed)
 
 
-def clique_stats(model: mbi.Model) -> MechanismDiagnostics:
+def clique_stats(
+    model: mbi.Model, phase_times: dict[str, float] | None = None
+) -> MechanismDiagnostics:
   """Compute structural diagnostics from a fitted model and log them.
 
   Args:
@@ -91,6 +111,7 @@ def clique_stats(model: mbi.Model) -> MechanismDiagnostics:
       total_clique_size=sum(sizes),
       max_jtree_node_size=max(jtree_sizes, default=0),
       total_jtree_size=sum(jtree_sizes),
+      phase_times=phase_times or {},
   )
   logging.info(
       'Cliques: %d, max_size: %d, total_size: %d',

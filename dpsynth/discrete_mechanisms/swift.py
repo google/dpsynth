@@ -35,6 +35,7 @@ import typing
 
 from absl import logging
 import dp_accounting
+from dpsynth import api
 from dpsynth.discrete_mechanisms import accounting
 from dpsynth.discrete_mechanisms import base
 from dpsynth.discrete_mechanisms import clique_tree
@@ -46,7 +47,17 @@ import numpy as np
 
 
 @dataclasses.dataclass
-class SWIFTMechanism(base.DiscreteMechanism):
+class SWIFTMechanism(api.DPMechanism):
+  """DP Mechanism for tabular data using SWIFT."""
+
+  marginal_oracle: mbi.MarginalOracle | None = None
+  zcdp_rho: float | None = None
+  max_records_per_user: int = 1
+
+  def __post_init__(self):
+    api.validate_max_records_per_user(self.max_records_per_user)
+
+  pgm_iters: int = 5000
   """Configuration for the SWIFT mechanism.
 
   Attributes:
@@ -80,29 +91,40 @@ class SWIFTMechanism(base.DiscreteMechanism):
         domain, self.workload, self.max_marginal_size
     )
 
-  def _allocate_budget(self, remaining_rho: float) -> Mapping[str, float]:
-    """Splits the remaining budget between selection and measurement."""
-    select_rho = remaining_rho * self.select_budget_frac
-    return {
-        '_select_rho': select_rho,
-        'measurement_rho': remaining_rho - select_rho,
-    }
+  _measurement_rho: float | None = dataclasses.field(default=None, repr=False)
+
+  def configure(self, *, zcdp_rho: float, **kwargs) -> 'SWIFTMechanism':
+    select_rho = zcdp_rho * self.select_budget_frac
+    measurement_rho = zcdp_rho - select_rho
+    return dataclasses.replace(
+        self,
+        zcdp_rho=zcdp_rho,
+        _select_rho=select_rho,
+        _measurement_rho=measurement_rho,
+    )
 
   @property
   def dp_event(self) -> dp_accounting.DpEvent:
     """Returns the DP event for the SWIFT mechanism."""
-    self._check_calibration()
+    if self.zcdp_rho is None:
+      raise ValueError('Must call configure() before using the mechanism.')
     # SWIFT's budget is split between one-way, selection, and measurement.
     # All three are Gaussian mechanism applications.
     return dp_accounting.ZCDpEvent(self.zcdp_rho)  # pyrefly: ignore[bad-argument-type]
 
-  def _run(self, rng, data, measurements, constraints, phase_times):
+  def __call__(self, rng, data, *, initial_measurements=None, constraints=()):
+    if self.zcdp_rho is None:
+      raise ValueError('Must call configure() before using the mechanism.')
+    phase_times = {}
+    measurements = list(initial_measurements or [])
     """Runs SWIFT's select-measure-estimate pipeline in a single pass."""
     assert self._select_rho is not None
-    assert self.measurement_rho is not None
+    assert self._measurement_rho is not None
 
     # Budgets in GDP units, derived from the zCDP allocation set by configure.
-    gdp_budget = accounting.zcdp_to_gdp(self._select_rho + self.measurement_rho)
+    gdp_budget = accounting.zcdp_to_gdp(
+        self._select_rho + self._measurement_rho
+    )
 
     #########################################################################
     # Compile workload into candidate measurements, and precompute answers. #
@@ -218,7 +240,14 @@ class SWIFTMechanism(base.DiscreteMechanism):
 
     syn = mbi.extensions.synthetic_data(final_model, rows)
     logging.info('[SWIFT] Generated %d synthetic records.', rows)
-    return final_model, syn, measurements
+
+    diagnostics = common.MechanismDiagnostics(phase_times=phase_times)
+    return common.DiscreteMechanismResult(
+        model=final_model,
+        synthetic_data=syn,
+        measurements=measurements,
+        diagnostics=diagnostics,
+    )
 
 
 def _is_supported(clique: mbi.Clique, tree: nx.Graph) -> bool:

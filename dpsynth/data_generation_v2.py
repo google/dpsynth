@@ -35,8 +35,10 @@ def generate(
     delta: float,
     *,
     discrete_config: (
-        discrete_mechanisms.DiscreteMechanism
-    ) = discrete_mechanisms.MSTMechanism(),
+        discrete_mechanisms.DiscreteSynthesizer
+    ) = discrete_mechanisms.DiscreteSynthesizer(
+        mechanism=discrete_mechanisms.MSTMechanism()
+    ),
     numerical_bins: int = 32,
     one_way_marginal_budget_fraction: float = 0.1,
     cross_attribute_constraints: Sequence[constraints.Constraint] = (),

@@ -14,31 +14,96 @@
 
 """This mechanisms measures all 1-way marginals via the Gaussian mechanism."""
 
+from collections.abc import Sequence
 import dataclasses
 
+from absl import logging
 import dp_accounting
+from dpsynth import api
 from dpsynth.discrete_mechanisms import accounting
-from dpsynth.discrete_mechanisms import base
+from dpsynth.discrete_mechanisms import common
 import mbi
+import numpy as np
 
 
 @dataclasses.dataclass
-class IndependentMechanism(base.DiscreteMechanism):
+class IndependentMechanism(api.DPMechanism):
   """Measures only one-way marginals, allocating the entire budget to them."""
+  marginal_oracle: mbi.MarginalOracle | None = None
+  pgm_iters: int = 5000
+  max_records_per_user: int = 1
 
-  one_way_budget_fraction: float = 1.0
+  def __post_init__(self):
+    api.validate_max_records_per_user(self.max_records_per_user)
+
+  zcdp_rho: float | None = None
+
+  def configure(self, *, zcdp_rho: float, **kwargs) -> IndependentMechanism:
+    return dataclasses.replace(self, zcdp_rho=zcdp_rho)
 
   def supporting_cliques(self, domain: mbi.Domain) -> list[mbi.Clique]:
-    """Returns the one-way marginals this mechanism will measure."""
     return [(a,) for a in domain.attributes]
 
   @property
   def dp_event(self) -> dp_accounting.DpEvent:
-    """Returns the DP event for the independent mechanism."""
-    self._check_calibration()
+    if self.zcdp_rho is None:
+      raise ValueError('Must call configure() before using the mechanism.')
     return dp_accounting.GaussianDpEvent(
-        noise_multiplier=accounting.zcdp_gaussian_sigma(self.one_way_rho)  # pyrefly: ignore[bad-argument-type]
+        noise_multiplier=accounting.zcdp_gaussian_sigma(self.zcdp_rho)
     )
 
-  def _select(self, rng, data, measurements, phase_times):
-    return []
+  def __call__(
+      self,
+      rng: np.random.Generator,
+      data: mbi.Dataset | mbi.CliqueVector,
+      *,
+      initial_measurements: Sequence[mbi.LinearMeasurement] | None = None,
+      constraints: Sequence[mbi.Constraint] = (),
+  ) -> common.DiscreteMechanismResult:
+    phase_times = {}
+    selected = []
+
+    all_cliques = [m.clique for m in initial_measurements or []]
+    logging.info(
+        '[%s]:\n%s',
+        type(self).__name__,
+        mbi.summarize(data.domain, all_cliques),
+    )
+
+    estimator = mbi.estimation.MirrorDescent(self.marginal_oracle)
+    futures = None
+    try:
+      futures = estimator.precompile(
+          data.domain, list(initial_measurements or []), extra_cliques=list()
+      )
+    except Exception as e:  # pylint: disable=broad-exception-caught
+      logging.warning('Precompile failed (non-fatal): %s', e)
+
+    measurements = list(initial_measurements or [])
+
+    with common.timed(phase_times, 'estimation'):
+      if futures is not None:
+        try:
+          futures.result()
+        except Exception as e:  # pylint: disable=broad-exception-caught
+          logging.warning('Precompile wait failed (non-fatal): %s', e)
+      model = estimator.estimate(
+          data.domain,
+          measurements,
+          iters=self.pgm_iters,
+          callback_fn=mbi.callbacks.default(measurements, data.domain),
+          constraints=constraints,
+      )
+      import typing
+
+      model = typing.cast(mbi.MarkovRandomField, model)
+
+    diagnostics = common.clique_stats(model)
+    diagnostics.phase_times = phase_times
+
+    return common.DiscreteMechanismResult(
+        model=model,
+        synthetic_data=model.synthetic_data(),
+        measurements=measurements,
+        diagnostics=diagnostics,
+    )

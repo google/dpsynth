@@ -13,6 +13,7 @@
 # limitations under the License.
 
 from absl.testing import absltest
+from dpsynth.discrete_mechanisms import base
 from dpsynth.discrete_mechanisms import common
 from dpsynth.discrete_mechanisms import independent
 import mbi
@@ -24,10 +25,12 @@ class IndependentTest(absltest.TestCase):
   def test_fits_one_way_marginals(self):
     data = mbi.Dataset.synthetic(mbi.Domain(['a', 'b', 'c'], [3, 4, 5]), N=1000)
 
-    config = independent.IndependentMechanism(pgm_iters=500)
+    config = base.DiscreteSynthesizer(
+        mechanism=independent.IndependentMechanism(pgm_iters=500)
+    )
     result = config.configure(zcdp_rho=10000)(np.random.default_rng(0), data)
 
-    self.assertIsInstance(result, common.DiscreteMechanismResult)
+    self.assertIsInstance(result, common.DiscreteSynthesizerResult)
     self.assertLen(result.measurements, len(data.domain))
     for col in data.domain:
       expected = data.project([col]).datavector()

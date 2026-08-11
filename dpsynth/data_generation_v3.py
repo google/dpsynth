@@ -188,7 +188,7 @@ class DataGenerationResult:
   """Result of end-to-end DP synthetic data generation."""
 
   synthetic_data: pd.DataFrame
-  discrete_mechanism_result: dm_common.DiscreteMechanismResult
+  discrete_mechanism_result: dm_common.DiscreteSynthesizerResult
   codec: TabularCodec
 
 
@@ -227,13 +227,14 @@ class TabularSynthesizer(api.DPMechanism):
   """
 
   domains: Mapping[str, domain.AttributeType]
-  discrete_mechanism: discrete_mechanisms.DiscreteMechanism = dataclasses.field(
+  discrete_mechanism: dm_common.DiscreteSynthesizerProtocol = dataclasses.field(
       default_factory=discrete_mechanisms.MSTMechanism
   )
   numerical_bins: int = 32
   init_budget_fraction: float = 0.1
   initializers: dict[str, api.DPMechanism] | None = None
   total_count_sigma: float | None = dataclasses.field(default=None, repr=False)
+  compress_columns: bool | Sequence[str] = False
   cross_attribute_constraints: Sequence[constraints.Constraint] = ()
   experimental_max_records_per_user: int = 1
 
@@ -324,6 +325,19 @@ class TabularSynthesizer(api.DPMechanism):
         self.discrete_mechanism,
         max_records_per_user=self.experimental_max_records_per_user,
     ).configure(zcdp_rho=discrete_rho)
+
+    if hasattr(self.discrete_mechanism, '__dataclass_fields__'):
+      calibrated_discrete = dataclasses.replace(  # pytype: disable=wrong-arg-types
+          self.discrete_mechanism,
+          max_records_per_user=self.experimental_max_records_per_user,
+      ).configure(
+          zcdp_rho=discrete_rho
+      )
+    else:
+      # Some mechanisms (or mocks) might not be dataclasses. Just configure them.
+      calibrated_discrete = self.discrete_mechanism.configure(
+          zcdp_rho=discrete_rho
+      )
     return dataclasses.replace(
         self,
         initializers=calibrated_inits,
@@ -416,6 +430,16 @@ class TabularSynthesizer(api.DPMechanism):
     mbi_constraints = tuple(
         c.to_mbi() for c in self.cross_attribute_constraints
     )
+
+    mappings = dm_common.compression_mappings(
+        initial_measurements, self.compress_columns, constraints=mbi_constraints
+    )
+    if mappings and hasattr(discrete, 'compress'):
+      discrete = discrete.compress(mappings)  # pyrefly: ignore[bad-argument-type]
+      initial_measurements = [
+          m.compress(mappings, discrete.domain) for m in initial_measurements  # pyrefly: ignore[bad-argument-type]
+      ]
+
     mechanism_result = self.discrete_mechanism(
         rng,
         data=discrete,
@@ -423,6 +447,13 @@ class TabularSynthesizer(api.DPMechanism):
         constraints=mbi_constraints,
     )
     logging.info('[DPSynth]: Generated discrete synthetic data.')
+
+    if mappings:
+      mechanism_result = dataclasses.replace(
+          mechanism_result,
+          synthetic_data=mechanism_result.synthetic_data.decompress(mappings),
+          mappings=mappings,
+      )
 
     synthetic_data = codec.decode(
         mechanism_result.synthetic_data, rng, column_order

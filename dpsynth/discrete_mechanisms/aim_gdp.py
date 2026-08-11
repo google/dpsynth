@@ -20,6 +20,7 @@ import typing
 
 from absl import logging
 import dp_accounting
+from dpsynth import api
 from dpsynth.discrete_mechanisms import accounting
 from dpsynth.discrete_mechanisms import base
 from dpsynth.discrete_mechanisms import common
@@ -144,7 +145,15 @@ def _worst_approximated(
 
 # select loop, injecting the budgeting strategy (zCDP vs. GDP) as configuration.
 @dataclasses.dataclass
-class AIMGDPMechanism(base.DiscreteMechanism):
+class AIMGDPMechanism(api.DPMechanism):
+
+  marginal_oracle: mbi.MarginalOracle | None = None
+  zcdp_rho: float | None = None
+  max_records_per_user: int = 1
+
+  def __post_init__(self):
+    api.validate_max_records_per_user(self.max_records_per_user)
+
   """Configuration for the AIM mechanism with Gaussian DP.
 
   Details are described in the paper:
@@ -198,6 +207,9 @@ class AIMGDPMechanism(base.DiscreteMechanism):
     """Returns only the workload-specified one-way cliques."""
     return common.one_way_cliques(self.workload, data.domain)
 
+  def configure(self, *, zcdp_rho: float, **kwargs) -> AIMGDPMechanism:
+    return dataclasses.replace(self, zcdp_rho=zcdp_rho, _loop_rho=zcdp_rho)
+
   def _allocate_budget(self, remaining_rho: float) -> Mapping[str, float]:
     """Allocates the entire remaining budget to the adaptive loop."""
     return {'_loop_rho': remaining_rho}
@@ -205,13 +217,18 @@ class AIMGDPMechanism(base.DiscreteMechanism):
   @property
   def dp_event(self) -> dp_accounting.DpEvent:
     """Returns the DP event for the AIM-GDP mechanism."""
-    self._check_calibration()
-    events = self._one_way_dp_event()
+    if self.zcdp_rho is None:
+      raise ValueError('Must call configure() before using the mechanism.')
+    events = []
     # The loop's privacy cost in zCDP terms.
     events.append(dp_accounting.ZCDpEvent(self._loop_rho))  # pyrefly: ignore[bad-argument-type]
     return dp_accounting.ComposedDpEvent(events)
 
-  def _run(self, rng, data, measurements, constraints, phase_times):
+  def __call__(self, rng, data, *, initial_measurements=None, constraints=()):
+    if self.zcdp_rho is None:
+      raise ValueError('Must call configure() before using the mechanism.')
+    phase_times = {}
+    measurements = list(initial_measurements or [])
     """Adaptively selects, measures, and estimates in an annealed loop (GDP)."""
     logging.info('[AIM] Starting Mechanism.')
 
@@ -348,4 +365,9 @@ class AIMGDPMechanism(base.DiscreteMechanism):
         )
 
     synthetic_data = model.synthetic_data()
-    return model, synthetic_data, measurements
+    return common.DiscreteMechanismResult(
+        model=model,
+        synthetic_data=synthetic_data,
+        measurements=measurements,
+        diagnostics=common.clique_stats(model, phase_times),
+    )

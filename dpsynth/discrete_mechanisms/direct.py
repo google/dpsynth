@@ -15,52 +15,118 @@
 """Implementation of the direct mechanism."""
 
 from collections.abc import Mapping
+from collections.abc import Sequence
 import dataclasses
+import typing
 
+from absl import logging
 import dp_accounting
+from dpsynth import api
 from dpsynth.discrete_mechanisms import accounting
-from dpsynth.discrete_mechanisms import base
+from dpsynth.discrete_mechanisms import common
 import mbi
+import numpy as np
 
 
 @dataclasses.dataclass
-class DirectMechanism(base.DiscreteMechanism):
-  """Configuration for the direct mechanism.
+class DirectMechanism(api.DPMechanism):
+  """DP Mechanism that directly measures the 1-way marginals and queries."""
 
-  The direct mechanism measures a prespecified set of marginal queries,
-  allocating the entire privacy budget to those measurements.  It does not
-  measure its own one-way marginals, but can incorporate externally supplied
-  ``initial_measurements`` (e.g. compressed one-ways from an orchestration
-  layer) at no additional budget cost.
+  marginal_oracle: mbi.MarginalOracle | None = None
+  pgm_iters: int = 5000
+  max_records_per_user: int = 1
 
-  Attributes:
-    prespecified_marginal_queries: A list of k-way marginals that a user has
-      specified.  Only these will be measured with privacy budget.
-    one_way_budget_fraction: Fraction of the zCDP budget allocated to one-way
-      marginals.  Overridden to 0.0 because this mechanism does not measure its
-      own one-way marginals.
-  """
+  def __post_init__(self):
+    api.validate_max_records_per_user(self.max_records_per_user)
 
   prespecified_marginal_queries: list[tuple[str, ...]] = dataclasses.field(
       default_factory=list
   )
-  one_way_budget_fraction: float = 0.0
+  zcdp_rho: float | None = None
+
+  def configure(self, *, zcdp_rho: float, **kwargs) -> DirectMechanism:
+    return dataclasses.replace(self, zcdp_rho=zcdp_rho)
 
   def supporting_cliques(self, domain: mbi.Domain) -> list[mbi.Clique]:
-    """Returns the prespecified marginal queries."""
     return list(self.prespecified_marginal_queries)
-
-  def _allocate_budget(self, remaining_rho: float) -> Mapping[str, float]:
-    """Allocates the full remaining budget to the prespecified queries."""
-    return {'measurement_rho': remaining_rho}
 
   @property
   def dp_event(self) -> dp_accounting.DpEvent:
-    """Returns the DP event for the direct mechanism."""
-    self._check_calibration()
+    if self.zcdp_rho is None:
+      raise ValueError('Must call configure() before using the mechanism.')
     return dp_accounting.GaussianDpEvent(
-        noise_multiplier=accounting.zcdp_gaussian_sigma(self.measurement_rho)  # pyrefly: ignore[bad-argument-type]
+        noise_multiplier=accounting.zcdp_gaussian_sigma(self.zcdp_rho)
     )
 
-  def _select(self, rng, data, measurements, phase_times):
-    return list(self.prespecified_marginal_queries)
+  def __call__(
+      self,
+      rng: np.random.Generator,
+      data: mbi.Dataset | mbi.CliqueVector,
+      *,
+      initial_measurements: Sequence[mbi.LinearMeasurement] | None = None,
+      constraints: Sequence[mbi.Constraint] = (),
+  ) -> common.DiscreteMechanismResult:
+    if self.zcdp_rho is None:
+      raise ValueError('Must call configure() before using the mechanism.')
+    phase_times = {}
+    selected = list(self.prespecified_marginal_queries)
+
+    all_cliques = [m.clique for m in initial_measurements or []] + list(
+        selected
+    )
+    logging.info(
+        '[%s]:\n%s',
+        type(self).__name__,
+        mbi.summarize(data.domain, all_cliques),
+    )
+
+    estimator = mbi.estimation.MirrorDescent(self.marginal_oracle)
+    futures = None
+    try:
+      futures = estimator.precompile(
+          data.domain,
+          list(initial_measurements or []),
+          extra_cliques=list(selected),
+      )
+    except Exception as e:  # pylint: disable=broad-exception-caught
+      logging.warning('Precompile failed (non-fatal): %s', e)
+
+    measurements = list(initial_measurements or [])
+    if selected:
+      with common.timed(phase_times, 'measurement'):
+        sigma = accounting.zcdp_gaussian_sigma(self.zcdp_rho)
+        measurements.extend(
+            common.measure_marginals_with_noise(
+                rng,
+                data,  # pyrefly: ignore[bad-argument-type]
+                selected,
+                sigma,
+                max_records_per_user=self.max_records_per_user,
+            )
+        )
+
+    with common.timed(phase_times, 'estimation'):
+      if futures is not None:
+        try:
+          futures.result()
+        except Exception as e:  # pylint: disable=broad-exception-caught
+          logging.warning('Precompile wait failed (non-fatal): %s', e)
+      model = estimator.estimate(
+          data.domain,
+          measurements,
+          iters=self.pgm_iters,
+          callback_fn=mbi.callbacks.default(measurements, data.domain),
+          constraints=constraints,
+      )
+
+      model = typing.cast(mbi.MarkovRandomField, model)
+
+    diagnostics = common.clique_stats(model)
+    diagnostics.phase_times = phase_times
+
+    return common.DiscreteMechanismResult(
+        model=model,
+        synthetic_data=model.synthetic_data(),
+        measurements=measurements,
+        diagnostics=diagnostics,
+    )
