@@ -19,6 +19,7 @@ import dataclasses
 
 from absl import logging
 import dp_accounting
+from dpsynth import api
 from dpsynth.discrete_mechanisms import accounting
 from dpsynth.discrete_mechanisms import base
 from dpsynth.discrete_mechanisms import common
@@ -87,7 +88,16 @@ def _worst_approximated(
 
 
 @dataclasses.dataclass
-class AIMMechanism(base.DiscreteMechanism):
+class AIMMechanism(api.DPMechanism):
+  """AIM mechanism."""
+
+  marginal_oracle: mbi.MarginalOracle | None = None
+  zcdp_rho: float | None = None
+  max_records_per_user: int = 1
+
+  def __post_init__(self):
+    api.validate_max_records_per_user(self.max_records_per_user)
+
   """Configuration for the AIM mechanism.
 
   Details are described in the paper:
@@ -124,6 +134,9 @@ class AIMMechanism(base.DiscreteMechanism):
   pgm_iters: int = 1000
   _loop_rho: float | None = dataclasses.field(default=None, repr=False)
 
+  def configure(self, *, zcdp_rho: float, **kwargs) -> AIMMechanism:
+    return dataclasses.replace(self, zcdp_rho=zcdp_rho, _loop_rho=zcdp_rho)
+
   def supporting_cliques(self, domain: mbi.Domain) -> list[mbi.Clique]:
     """Returns the workload cliques filtered by max_marginal_size."""
     return common.supporting_cliques(
@@ -141,12 +154,17 @@ class AIMMechanism(base.DiscreteMechanism):
   @property
   def dp_event(self) -> dp_accounting.DpEvent:
     """Returns the DP event for the AIM mechanism."""
-    self._check_calibration()
-    events = self._one_way_dp_event()
+    if self.zcdp_rho is None:
+      raise ValueError('Must call configure() before using the mechanism.')
+    events = []
     events.append(dp_accounting.ZCDpEvent(self._loop_rho))  # pyrefly: ignore[bad-argument-type]
     return dp_accounting.ComposedDpEvent(events)
 
-  def _run(self, rng, data, measurements, constraints, phase_times):
+  def __call__(self, rng, data, *, initial_measurements=None, constraints=()):
+    if self.zcdp_rho is None:
+      raise ValueError('Must call configure() before using the mechanism.')
+    phase_times = {}
+    measurements = list(initial_measurements or [])
     """Adaptively selects, measures, and estimates in an annealed loop."""
     logging.info('[AIM]: Starting Mechanism.')
     zcdp_rho = self.zcdp_rho
@@ -266,4 +284,9 @@ class AIMMechanism(base.DiscreteMechanism):
         logging.info('[AIM] Reducing sigma: %.1f', sigma)
 
     synthetic_data = model.synthetic_data()
-    return model, synthetic_data, measurements
+    return common.DiscreteMechanismResult(
+        model=model,
+        synthetic_data=synthetic_data,
+        measurements=measurements,
+        diagnostics=common.clique_stats(model, phase_times),
+    )

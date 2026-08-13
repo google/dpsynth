@@ -15,6 +15,7 @@
 from absl.testing import absltest
 from dpsynth.discrete_mechanisms import aim
 from dpsynth.discrete_mechanisms import aim_gdp
+from dpsynth.discrete_mechanisms import base
 from dpsynth.discrete_mechanisms import common
 import mbi
 import numpy as np
@@ -25,12 +26,16 @@ class AIMTest(absltest.TestCase):
   def test_fits_one_way_marginals_with_aim(self):
     data = mbi.Dataset.synthetic(mbi.Domain(["a", "b", "c"], [3, 4, 5]), N=1000)
     workload = [("a",), ("b",), ("c",)]
-    config = aim.AIMMechanism(workload=workload, max_rounds=4, pgm_iters=500)
+    config = base.DiscreteSynthesizer(
+        mechanism=aim.AIMMechanism(
+            workload=workload, max_rounds=4, pgm_iters=500
+        )
+    )
 
     calibrated = config.configure(zcdp_rho=10000)
     result = calibrated(np.random.default_rng(0), data)
 
-    self.assertIsInstance(result, common.DiscreteMechanismResult)
+    self.assertIsInstance(result, common.DiscreteSynthesizerResult)
     self.assertNotEmpty(result.measurements)
     for col in data.domain:
       expected = data.project([col]).datavector()
@@ -41,13 +46,15 @@ class AIMTest(absltest.TestCase):
     data = mbi.Dataset.synthetic(mbi.Domain(["a", "b", "c"], [3, 4, 5]), N=1000)
     workload = [("a",), ("b",), ("c",)]
 
-    config = aim_gdp.AIMGDPMechanism(
-        workload=workload, max_rounds=4, pgm_iters=500
+    config = base.DiscreteSynthesizer(
+        mechanism=aim_gdp.AIMGDPMechanism(
+            workload=workload, max_rounds=4, pgm_iters=500
+        )
     )
     calibrated = config.configure(zcdp_rho=10000)
     result = calibrated(np.random.default_rng(0), data)
 
-    self.assertIsInstance(result, common.DiscreteMechanismResult)
+    self.assertIsInstance(result, common.DiscreteSynthesizerResult)
     self.assertNotEmpty(result.measurements)
     for col in data.domain:
       expected = data.project([col]).datavector()
@@ -56,18 +63,18 @@ class AIMTest(absltest.TestCase):
 
   def test_uncalibrated_aim_raises(self):
     config = aim.AIMMechanism()
-    with self.assertRaisesRegex(ValueError, "calibrate"):
+    with self.assertRaisesRegex(ValueError, "configure"):
       _ = config.dp_event
     data = mbi.Dataset.synthetic(mbi.Domain(["a"], [3]), N=10)
-    with self.assertRaisesRegex(ValueError, "calibrate"):
+    with self.assertRaisesRegex(ValueError, "configure"):
       config(np.random.default_rng(0), data)
 
   def test_uncalibrated_aim_gdp_raises(self):
     config = aim_gdp.AIMGDPMechanism()
-    with self.assertRaisesRegex(ValueError, "calibrate"):
+    with self.assertRaisesRegex(ValueError, "configure"):
       _ = config.dp_event
     data = mbi.Dataset.synthetic(mbi.Domain(["a"], [3]), N=10)
-    with self.assertRaisesRegex(ValueError, "calibrate"):
+    with self.assertRaisesRegex(ValueError, "configure"):
       config(np.random.default_rng(0), data)
 
 

@@ -14,6 +14,7 @@
 
 from absl.testing import absltest
 import dp_accounting
+from dpsynth.discrete_mechanisms import base
 from dpsynth.discrete_mechanisms import common
 from dpsynth.discrete_mechanisms import mst
 import mbi
@@ -77,11 +78,13 @@ class MSTTest(absltest.TestCase):
   def test_fits_one_way_marginals(self):
     data = mbi.Dataset.synthetic(mbi.Domain(['a', 'b', 'c'], [3, 4, 5]), N=1000)
 
-    config = mst.MSTMechanism(pgm_iters=500).configure(zcdp_rho=10000)
+    config = base.DiscreteSynthesizer(
+        mechanism=mst.MSTMechanism(pgm_iters=500)
+    ).configure(zcdp_rho=10000)
 
     result = config(np.random.default_rng(0), data)
 
-    self.assertIsInstance(result, common.DiscreteMechanismResult)
+    self.assertIsInstance(result, common.DiscreteSynthesizerResult)
     self.assertLen(result.measurements, 2 * len(data.domain) - 1)
     for col in data.domain:
       expected = data.project([col]).datavector()
@@ -89,9 +92,9 @@ class MSTTest(absltest.TestCase):
       np.testing.assert_allclose(actual, expected, atol=1)
 
   def test_dp_event_returns_zcdp(self):
-    config = mst.MSTMechanism().configure(zcdp_rho=1.0)
-    event = config.dp_event
+    event = mst.MSTMechanism().configure(zcdp_rho=1.0).dp_event
     self.assertIsInstance(event, dp_accounting.ZCDpEvent)
+    self.assertEqual(event.rho, 1.0)
 
 
 if __name__ == '__main__':

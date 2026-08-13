@@ -13,6 +13,7 @@
 # limitations under the License.
 
 from absl.testing import absltest
+from dpsynth.discrete_mechanisms import base
 from dpsynth.discrete_mechanisms import common
 from dpsynth.discrete_mechanisms import direct
 import mbi
@@ -25,14 +26,18 @@ class DirectTest(absltest.TestCase):
     data = mbi.Dataset.synthetic(mbi.Domain(['a', 'b', 'c'], [3, 4, 5]), N=1000)
 
     prespecified_queries = [('a', 'b'), ('a', 'c'), ('b', 'c')]
-    config = direct.DirectMechanism(
-        prespecified_marginal_queries=prespecified_queries,
-        pgm_iters=500,
+    config = base.DiscreteSynthesizer(
+        mechanism=direct.DirectMechanism(
+            prespecified_marginal_queries=prespecified_queries,
+            pgm_iters=500,
+        )
     )
     result = config.configure(zcdp_rho=10000)(np.random.default_rng(0), data)
 
-    self.assertIsInstance(result, common.DiscreteMechanismResult)
-    self.assertLen(result.measurements, len(prespecified_queries))
+    self.assertIsInstance(result, common.DiscreteSynthesizerResult)
+    self.assertLen(
+        result.measurements, len(prespecified_queries) + len(data.domain)
+    )
     for col in data.domain:
       expected = data.project([col]).datavector()
       actual = result.model.project([col]).datavector()

@@ -20,6 +20,7 @@ from absl.testing import absltest
 from absl.testing import parameterized
 from dpsynth.discrete_mechanisms import aim
 from dpsynth.discrete_mechanisms import aim_gdp
+from dpsynth.discrete_mechanisms import base
 from dpsynth.discrete_mechanisms import common
 from dpsynth.discrete_mechanisms import direct
 from dpsynth.discrete_mechanisms import independent
@@ -32,15 +33,27 @@ _ZCDP_RHO = 10000
 _WORKLOAD = [('a', 'b'), ('b', 'c'), ('a',), ('b',), ('c',)]
 
 _MECHANISMS = {
-    'AIM': aim.AIMMechanism(workload=_WORKLOAD, max_rounds=4, pgm_iters=500),
-    'AIM_GDP': aim_gdp.AIMGDPMechanism(
-        workload=_WORKLOAD, max_rounds=4, pgm_iters=500
+    'AIM': base.DiscreteSynthesizer(
+        mechanism=aim.AIMMechanism(
+            workload=_WORKLOAD, max_rounds=4, pgm_iters=500
+        )
     ),
-    'MST': mst.MSTMechanism(pgm_iters=500),
-    'SWIFT': swift.SWIFTMechanism(workload=_WORKLOAD, pgm_iters=500),
-    'Independent': independent.IndependentMechanism(pgm_iters=500),
-    'Direct': direct.DirectMechanism(
-        prespecified_marginal_queries=_WORKLOAD, pgm_iters=500
+    'AIM_GDP': base.DiscreteSynthesizer(
+        mechanism=aim_gdp.AIMGDPMechanism(
+            workload=_WORKLOAD, max_rounds=4, pgm_iters=500
+        )
+    ),
+    'MST': base.DiscreteSynthesizer(mechanism=mst.MSTMechanism(pgm_iters=500)),
+    'SWIFT': base.DiscreteSynthesizer(
+        mechanism=swift.SWIFTMechanism(workload=_WORKLOAD, pgm_iters=500)
+    ),
+    'Independent': base.DiscreteSynthesizer(
+        mechanism=independent.IndependentMechanism(pgm_iters=500)
+    ),
+    'Direct': base.DiscreteSynthesizer(
+        mechanism=direct.DirectMechanism(
+            prespecified_marginal_queries=_WORKLOAD, pgm_iters=500
+        )
     ),
 }
 
@@ -76,7 +89,7 @@ class SupportingCliquesSufficiencyTest(parameterized.TestCase):
     precomputed = mbi.CliqueVector.from_projectable(data, cliques)
 
     result = calibrated(rng, precomputed)
-    self.assertIsInstance(result, common.DiscreteMechanismResult)
+    self.assertIsInstance(result, common.DiscreteSynthesizerResult)
     self.assertIsNotNone(result.model)
 
 
@@ -119,14 +132,14 @@ class CalibrationTest(parameterized.TestCase):
     rng = np.random.default_rng(0)
     data = _make_skewed_dataset(rng)
     result = mechanism.calibrate(zcdp_rho=_ZCDP_RHO)(rng, data)
-    self.assertIsInstance(result, common.DiscreteMechanismResult)
+    self.assertIsInstance(result, common.DiscreteSynthesizerResult)
 
   @parameterized.named_parameters(*_MECHANISMS.items())
   def test_zero_epsilon_calibration(self, mechanism):
     rng = np.random.default_rng(0)
     data = _make_skewed_dataset(rng)
     result = mechanism.calibrate(epsilon=0.0, delta=0.01)(rng, data)
-    self.assertIsInstance(result, common.DiscreteMechanismResult)
+    self.assertIsInstance(result, common.DiscreteSynthesizerResult)
 
   @parameterized.named_parameters(*_MECHANISMS.items())
   def test_low_epsilon_calibration(self, mechanism):
@@ -134,7 +147,7 @@ class CalibrationTest(parameterized.TestCase):
     rng = np.random.default_rng(0)
     data = _make_skewed_dataset(rng)
     result = mechanism.calibrate(epsilon=1e-3, delta=1e-5)(rng, data)
-    self.assertIsInstance(result, common.DiscreteMechanismResult)
+    self.assertIsInstance(result, common.DiscreteSynthesizerResult)
 
 
 class MaxRecordsPerUserTest(parameterized.TestCase):
@@ -144,11 +157,18 @@ class MaxRecordsPerUserTest(parameterized.TestCase):
   def test_dp_event_invariant_to_max_records_per_user(self, mechanism):
     # Scaling max_records_per_user must not change the accounting: only the
     # actual noise magnitude scales, while the reported dp_event is identical.
-    base = mechanism.configure(zcdp_rho=_ZCDP_RHO)
-    scaled = dataclasses.replace(mechanism, max_records_per_user=4).configure(
-        zcdp_rho=_ZCDP_RHO
+    baseline = mechanism.configure(zcdp_rho=_ZCDP_RHO)
+    scaled_sub = (
+        dataclasses.replace(mechanism.mechanism, max_records_per_user=4)
+        if hasattr(mechanism, 'mechanism')
+        else mechanism
     )
-    self.assertEqual(repr(scaled.dp_event), repr(base.dp_event))
+    scaled = dataclasses.replace(
+        mechanism,
+        mechanism=scaled_sub,
+        max_records_per_user=4,
+    ).configure(zcdp_rho=_ZCDP_RHO)
+    self.assertEqual(repr(scaled.dp_event), repr(baseline.dp_event))
 
   @parameterized.named_parameters(
       ('Independent', _MECHANISMS['Independent']),
@@ -159,21 +179,30 @@ class MaxRecordsPerUserTest(parameterized.TestCase):
     # so the recorded stddevs line up one-to-one and must scale linearly in k.
     k = 4
     data = _make_skewed_dataset(np.random.default_rng(0))
-    base = mechanism.configure(zcdp_rho=_ZCDP_RHO)(
+    baseline = mechanism.configure(zcdp_rho=_ZCDP_RHO)(
         np.random.default_rng(1), data
     )
-    scaled = dataclasses.replace(mechanism, max_records_per_user=k).configure(
-        zcdp_rho=_ZCDP_RHO
-    )(np.random.default_rng(1), data)
-    self.assertNotEmpty(base.measurements)
-    self.assertLen(scaled.measurements, len(base.measurements))
-    for base_m, scaled_m in zip(base.measurements, scaled.measurements):
+    scaled_sub = (
+        dataclasses.replace(mechanism.mechanism, max_records_per_user=k)
+        if hasattr(mechanism, 'mechanism')
+        else mechanism
+    )
+    scaled = dataclasses.replace(
+        mechanism,
+        mechanism=scaled_sub,
+        max_records_per_user=k,
+    ).configure(zcdp_rho=_ZCDP_RHO)(np.random.default_rng(1), data)
+    self.assertNotEmpty(baseline.measurements)
+    self.assertLen(scaled.measurements, len(baseline.measurements))
+    for base_m, scaled_m in zip(baseline.measurements, scaled.measurements):
       self.assertAlmostEqual(scaled_m.stddev, k * base_m.stddev)
 
   @parameterized.named_parameters(('zero', 0), ('negative', -3))
   def test_invalid_k_raises(self, k):
     with self.assertRaises(ValueError):
-      mst.MSTMechanism(max_records_per_user=k)
+      base.DiscreteSynthesizer(
+          mechanism=mst.MSTMechanism(), max_records_per_user=k
+      )
 
 
 if __name__ == '__main__':
