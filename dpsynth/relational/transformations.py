@@ -613,6 +613,83 @@ def create_slot_linear_chain_constraints(
   return constraints
 
 
+def _extract_slot_indices(clique: Sequence[str | int]) -> list[int]:
+  """Extracts unique sorted 1-based slot indices present in a measurement clique.
+
+    - Returns sorted unique integer slot indices
+      ('income', 'slot_2.age', 'slot_1.gender') -> [1, 2]).
+    - Attributes not adhering to the 'slot_<idx>.<attr>' pattern
+      (such as parent features or 'group_size') are cleanly ignored.
+
+  Example:
+    Household -> Person -> Activity running schema:
+      >>> _extract_slot_indices(('income', 'region'))
+      []
+      >>> _extract_slot_indices(('income', 'slot_1.age', 'slot_1.gender'))
+      [1]
+      >>> _extract_slot_indices(('group_size', 'slot_2.gender', 'slot_1.age'))
+      [1, 2]
+      >>> _extract_slot_indices(('age', 'slot_1.amount', 'slot_2.type'))
+      [1, 2]
+
+  Args:
+    clique: Sequence of attribute names defining a marginal measurement.
+
+  Returns:
+    A sorted list of unique integer slot indices present in the clique.
+  """
+  slot_indices: set[int] = set()
+  for attr in clique:
+    if isinstance(attr, str) and attr.startswith('slot_') and '.' in attr:
+      prefix = attr.split('.', 1)[0]
+      slot_str = prefix[len('slot_') :]
+      if slot_str.isdigit():
+        slot_indices.add(int(slot_str))
+  return sorted(slot_indices)
+
+
+def _remap_clique_slots(
+    clique: Sequence[str | int],
+    slot_mapping: Mapping[int, int],
+) -> tuple[str | int, ...]:
+  """Remaps slot index prefixes in a clique according to a given slot mapping.
+
+  - Order & Non-Slot Invariance: Attributes not matching 'slot_<idx>.<attr>'
+    and their relative positions in the clique tuple are strictly preserved.
+  - Deterministic Substitution: Replaces 'slot_{orig_idx}.{col}' with
+    'slot_{target_idx}.{col}' for any orig_idx in slot_mapping.
+
+  Example:
+    Household -> Person -> Activity running schema:
+      >>> _remap_clique_slots(('income', 'slot_1.age'), {1: 3})
+      ('income', 'slot_3.age')
+      >>> _remap_clique_slots(('slot_1.age', 'slot_2.gender'), {1: 2, 2: 5})
+      ('slot_2.age', 'slot_5.gender')
+      >>> _remap_clique_slots(('age', 'slot_1.amount'), {1: 2})
+      ('age', 'slot_2.amount')
+
+  Args:
+    clique: Sequence of attribute names defining a marginal measurement.
+    slot_mapping: Dictionary mapping original 1-based slot indices to target
+      slot indices.
+
+  Returns:
+    A tuple of attribute names with remapped slot indices.
+  """
+  new_attrs: list[str | int] = []
+  for attr in clique:
+    if isinstance(attr, str) and attr.startswith('slot_') and '.' in attr:
+      prefix, col_name = attr.split('.', 1)
+      slot_str = prefix[len('slot_') :]
+      if slot_str.isdigit():
+        orig_slot = int(slot_str)
+        target_slot = slot_mapping.get(orig_slot, orig_slot)
+        new_attrs.append(f'slot_{target_slot}.{col_name}')
+        continue
+    new_attrs.append(attr)
+  return tuple(new_attrs)
+
+
 def symmetrize_to_wide_domain(
     measurements: Sequence[mbi.LinearMeasurement],
     max_children_per_parent: int,
@@ -620,21 +697,84 @@ def symmetrize_to_wide_domain(
 ) -> list[mbi.LinearMeasurement]:
   """Replicates selected exploration measurements across all generation slots.
 
-  Equivariantly replicates candidate measurements from (S_1) and (S_1, S_2)
-  to all s slots and all comb(s, 2) sibling pairs in the wide generation MRF.
+  Candidate selection (e.g. AIM, MST) explores dependencies in a compact
+  o-slot exploration table (typically o = 2). In generation, families can have
+  up to s = max_children_per_parent slots. Because child records within a parent
+  are exchangeable, this function equivariantly replicates measurements across
+  all single slots and all comb(s, r) multi-slot combinations:
+    - Single-slot measurements (P, S_1) replicate symmetrically across all s
+      slots: (P, S_1), ..., (P, S_s).
+    - Multi-slot measurements (S_1, S_2) replicate symmetrically across all
+      comb(s, 2) sibling pairs: (S_i, S_j) for 1 <= i < j <= s.
+    - Parent-only and metadata measurements (e.g. ('income', 'region') or
+      ('group_size',)) are passed through directly without duplication.
+    - Preserves noisy_measurement datavector and stddev across all copies.
+
+  Example:
+    3-Tier Hierarchy: Household -> Person (s=3) -> Activity (s=2):
+
+    Exploration Measurements (Household -> Person, o=2):
+      - M1: ('income', 'group_size')
+          -> ('income', 'group_size') [1 copy]
+      - M2: ('income', 'slot_1.age')
+          -> ('income', 'slot_1.age'), ('income', 'slot_2.age'),
+             ('income', 'slot_3.age') [3 copies]
+      - M3: ('slot_1.age', 'slot_1.gender')
+          -> ('slot_1.age', 'slot_1.gender'), ('slot_2.age', 'slot_2.gender'),
+             ('slot_3.age', 'slot_3.gender') [3 copies]
+      - M4: ('slot_1.age', 'slot_2.age')
+          -> ('slot_1.age', 'slot_2.age'), ('slot_1.age', 'slot_3.age'),
+             ('slot_2.age', 'slot_3.age') [3 copies]
+
+    Exploration Measurements (Person -> Activity, o=2, s=2):
+      - M5: ('age', 'slot_1.amount')
+          -> ('age', 'slot_1.amount'), ('age', 'slot_2.amount') [2 copies]
 
   Args:
     measurements: Noisy marginal measurements from exploration candidate
       selection.
-    max_children_per_parent: Maximum group capacity bound (s).
-    num_permutation_slots: Number of permutation exploration slots (o), default
-      2.
+    max_children_per_parent: Maximum group capacity bound (s >= 1).
+    num_permutation_slots: Number of permutation exploration slots (o >= 1),
+      default 2.
 
   Returns:
     A list of expanded LinearMeasurement objects for the wide generation MRF.
+
+  Raises:
+    ValueError: If max_children_per_parent < 1 or num_permutation_slots < 1.
   """
-  del measurements, max_children_per_parent, num_permutation_slots
-  raise NotImplementedError('symmetrize_to_wide_domain is not yet implemented.')
+  if max_children_per_parent < 1:
+    raise ValueError(
+        f'max_children_per_parent must be >= 1, got {max_children_per_parent}'
+    )
+  if num_permutation_slots < 1:
+    raise ValueError(
+        f'num_permutation_slots must be >= 1, got {num_permutation_slots}'
+    )
+
+  s = max_children_per_parent
+  expanded: list[mbi.LinearMeasurement] = []
+
+  for m in measurements:
+    slots = _extract_slot_indices(m.clique)
+    r = len(slots)
+
+    if r == 0:
+      expanded.append(m)
+    elif r <= s:
+      for target_combo in itertools.combinations(range(1, s + 1), r):
+        mapping = dict(zip(slots, target_combo))
+        new_clique = _remap_clique_slots(m.clique, mapping)
+        expanded.append(
+            mbi.LinearMeasurement(
+                noisy_measurement=m.noisy_measurement,
+                clique=new_clique,
+                stddev=m.stddev,
+                query=m.query,
+            )
+        )
+
+  return expanded
 
 
 def quantile_copula_coupling(

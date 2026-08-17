@@ -14,6 +14,8 @@
 
 """Unit tests for dpsynth.relational.transformations."""
 
+import itertools
+import math
 from typing import Literal
 
 from absl.testing import absltest
@@ -1102,6 +1104,249 @@ class TransformationsTest(absltest.TestCase):
           child_domain=child_dom, num_permutation_slots=-1
       )
 
+  def test_extract_slot_indices(self):
+    # Empty clique
+    self.assertEqual(transformations._extract_slot_indices(()), [])
+
+    # Parent attributes and group_size only
+    self.assertEqual(
+        transformations._extract_slot_indices(('income', 'region')), []
+    )
+    self.assertEqual(
+        transformations._extract_slot_indices(('income', 'group_size')), []
+    )
+
+    # Single slot
+    self.assertEqual(
+        transformations._extract_slot_indices(('slot_1.age',)), [1]
+    )
+    self.assertEqual(
+        transformations._extract_slot_indices(
+            ('income', 'slot_1.age', 'slot_1.gender')
+        ),
+        [1],
+    )
+
+    # Multi-slot sibling pairs
+    self.assertEqual(
+        transformations._extract_slot_indices(('slot_1.age', 'slot_2.age')),
+        [1, 2],
+    )
+    self.assertEqual(
+        transformations._extract_slot_indices(
+            ('group_size', 'slot_2.gender', 'slot_1.age')
+        ),
+        [1, 2],
+    )
+
+    # Higher slot numbers and sorting
+    self.assertEqual(
+        transformations._extract_slot_indices(
+            ('slot_4.b', 'slot_1.a', 'slot_3.c', 'slot_2.d')
+        ),
+        [1, 2, 3, 4],
+    )
+
+    # Adversarial / malformed column names
+    self.assertEqual(
+        transformations._extract_slot_indices(
+            ('slot_abc.x', 'slot_1', 'my_slot_1.x', 'slot_0.y')
+        ),
+        [0],
+    )
+
+  def test_remap_clique_slots(self):
+    # Empty clique
+    self.assertEqual(transformations._remap_clique_slots((), {1: 2}), ())
+
+    # Parent attributes and group_size only (unchanged)
+    self.assertEqual(
+        transformations._remap_clique_slots(('income', 'region'), {1: 2}),
+        ('income', 'region'),
+    )
+    self.assertEqual(
+        transformations._remap_clique_slots(('group_size',), {1: 3}),
+        ('group_size',),
+    )
+
+    # Single slot substitution
+    self.assertEqual(
+        transformations._remap_clique_slots(('slot_1.age',), {1: 3}),
+        ('slot_3.age',),
+    )
+    self.assertEqual(
+        transformations._remap_clique_slots(
+            ('income', 'slot_1.age', 'slot_1.gender'), {1: 4}
+        ),
+        ('income', 'slot_4.age', 'slot_4.gender'),
+    )
+
+    # Multi-slot sibling substitution
+    self.assertEqual(
+        transformations._remap_clique_slots(
+            ('slot_1.age', 'slot_2.gender'), {1: 2, 2: 5}
+        ),
+        ('slot_2.age', 'slot_5.gender'),
+    )
+    self.assertEqual(
+        transformations._remap_clique_slots(
+            ('group_size', 'slot_2.gender', 'slot_1.age'), {1: 3, 2: 1}
+        ),
+        ('group_size', 'slot_1.gender', 'slot_3.age'),
+    )
+
+    # Slot not in mapping remains unchanged
+    self.assertEqual(
+        transformations._remap_clique_slots(('slot_1.a', 'slot_2.b'), {1: 5}),
+        ('slot_5.a', 'slot_2.b'),
+    )
+
+    # Non-standard / malformed names remain unchanged
+    self.assertEqual(
+        transformations._remap_clique_slots(
+            ('slot_abc.x', 'slot_1', 'my_slot_1.x'), {1: 2}
+        ),
+        ('slot_abc.x', 'slot_1', 'my_slot_1.x'),
+    )
+
+  def test_symmetrize_to_wide_domain_running_example(self):
+    # Running example: Household -> Person (s=3, o=2)
+    m1 = mbi.LinearMeasurement(
+        np.array([100.0, 50.0]), ('income', 'group_size'), stddev=1.0
+    )
+    m2 = mbi.LinearMeasurement(
+        np.array([40.0, 60.0]), ('income', 'slot_1.age'), stddev=1.5
+    )
+    m3 = mbi.LinearMeasurement(
+        np.array([30.0, 70.0]), ('slot_1.age', 'slot_1.gender'), stddev=1.5
+    )
+    m4 = mbi.LinearMeasurement(
+        np.array([20.0, 80.0]), ('slot_1.age', 'slot_2.age'), stddev=2.0
+    )
+
+    expanded = transformations.symmetrize_to_wide_domain(
+        [m1, m2, m3, m4], max_children_per_parent=3, num_permutation_slots=2
+    )
+
+    # Expected:
+    # m1: 1 copy on ('income', 'group_size')
+    # m2: 3 copies on ('income', 'slot_1.age'), ('income', 'slot_2.age'),
+    #     ('income', 'slot_3.age')
+    # m3: 3 copies on ('slot_1.age', 'slot_1.gender'),
+    #     ('slot_2.age', 'slot_2.gender'), ('slot_3.age', 'slot_3.gender')
+    # m4: 3 copies (comb(3, 2)) on (1,2), (1,3), (2,3)
+    # Total = 1 + 3 + 3 + 3 = 10 measurements
+    self.assertLen(expanded, 10)
+
+    cliques = [m.clique for m in expanded]
+
+    # m1 passthrough
+    self.assertIn(('income', 'group_size'), cliques)
+
+    # m2 single slot copies
+    self.assertIn(('income', 'slot_1.age'), cliques)
+    self.assertIn(('income', 'slot_2.age'), cliques)
+    self.assertIn(('income', 'slot_3.age'), cliques)
+
+    # m3 intra-child copies
+    self.assertIn(('slot_1.age', 'slot_1.gender'), cliques)
+    self.assertIn(('slot_2.age', 'slot_2.gender'), cliques)
+    self.assertIn(('slot_3.age', 'slot_3.gender'), cliques)
+
+    # m4 sibling pairwise copies
+    self.assertIn(('slot_1.age', 'slot_2.age'), cliques)
+    self.assertIn(('slot_1.age', 'slot_3.age'), cliques)
+    self.assertIn(('slot_2.age', 'slot_3.age'), cliques)
+
+    # Stddev and measurement values preserved
+    for m in expanded:
+      if m.clique == ('income', 'slot_3.age'):
+        self.assertEqual(m.stddev, 1.5)
+        np.testing.assert_allclose(m.noisy_measurement, [40.0, 60.0])
+      elif m.clique == ('slot_2.age', 'slot_3.age'):
+        self.assertEqual(m.stddev, 2.0)
+        np.testing.assert_allclose(m.noisy_measurement, [20.0, 80.0])
+
+  def test_symmetrize_to_wide_domain_person_activity(self):
+    # Person -> Activity (s=2, o=2)
+    m_root = mbi.LinearMeasurement(np.array([500.0]), (), stddev=0.5)
+    m_single = mbi.LinearMeasurement(
+        np.array([10.0, 20.0]), ('age', 'slot_1.amount'), stddev=1.0
+    )
+    m_pair = mbi.LinearMeasurement(
+        np.array([5.0, 15.0]), ('slot_1.amount', 'slot_2.type'), stddev=1.2
+    )
+
+    expanded = transformations.symmetrize_to_wide_domain(
+        [m_root, m_single, m_pair],
+        max_children_per_parent=2,
+        num_permutation_slots=2,
+    )
+
+    # m_root -> 1, m_single -> 2, m_pair -> 1 (comb(2, 2)) = 4 total
+    self.assertLen(expanded, 4)
+    cliques = [m.clique for m in expanded]
+    self.assertIn((), cliques)
+    self.assertIn(('age', 'slot_1.amount'), cliques)
+    self.assertIn(('age', 'slot_2.amount'), cliques)
+    self.assertIn(('slot_1.amount', 'slot_2.type'), cliques)
+
+  def test_symmetrize_to_wide_domain_large_s5_and_tri_slot(self):
+    # s = 5, pairwise sibling query (comb(5, 2) = 10 copies)
+    m_pair = mbi.LinearMeasurement(
+        np.array([1.0]), ('slot_1.a', 'slot_2.b'), stddev=1.0
+    )
+    expanded_pair = transformations.symmetrize_to_wide_domain(
+        [m_pair], max_children_per_parent=5, num_permutation_slots=2
+    )
+    self.assertLen(expanded_pair, 10)
+    expected_pairs = [
+        (f'slot_{i}.a', f'slot_{j}.b')
+        for i, j in itertools.combinations(range(1, 6), 2)
+    ]
+
+    self.assertCountEqual([m.clique for m in expanded_pair], expected_pairs)
+
+    # s = 4, tri-slot sibling query (comb(4, 3) = 4 copies)
+    m_triple = mbi.LinearMeasurement(
+        np.array([1.0]), ('slot_1.a', 'slot_2.b', 'slot_3.c'), stddev=1.0
+    )
+    expanded_triple = transformations.symmetrize_to_wide_domain(
+        [m_triple], max_children_per_parent=4, num_permutation_slots=3
+    )
+    self.assertLen(expanded_triple, 4)
+    expected_triples = [
+        ('slot_1.a', 'slot_2.b', 'slot_3.c'),
+        ('slot_1.a', 'slot_2.b', 'slot_4.c'),
+        ('slot_1.a', 'slot_3.b', 'slot_4.c'),
+        ('slot_2.a', 'slot_3.b', 'slot_4.c'),
+    ]
+    self.assertCountEqual([m.clique for m in expanded_triple], expected_triples)
+
+  def test_symmetrize_to_wide_domain_capacity_s1(self):
+    # If max capacity s = 1, single slot replicates once, pairwise query is
+    # dropped (r=2 > s=1)
+    m_single = mbi.LinearMeasurement(np.array([1.0]), ('slot_1.a',), stddev=1.0)
+    m_pair = mbi.LinearMeasurement(
+        np.array([1.0]), ('slot_1.a', 'slot_2.b'), stddev=1.0
+    )
+    expanded = transformations.symmetrize_to_wide_domain(
+        [m_single, m_pair], max_children_per_parent=1, num_permutation_slots=2
+    )
+    self.assertLen(expanded, 1)
+    self.assertEqual(expanded[0].clique, ('slot_1.a',))
+
+  def test_symmetrize_to_wide_domain_validation_errors(self):
+    m = mbi.LinearMeasurement(np.array([1.0]), ('income',), stddev=1.0)
+    with self.assertRaises(ValueError):
+      transformations.symmetrize_to_wide_domain(
+          [m], max_children_per_parent=0, num_permutation_slots=2
+      )
+    with self.assertRaises(ValueError):
+      transformations.symmetrize_to_wide_domain(
+          [m], max_children_per_parent=3, num_permutation_slots=0
+      )
+
 
 class TransformationsFormalGuaranteesPropertyTest(absltest.TestCase):
   """Property-based tests verifying mathematical invariants and DP guarantees."""
@@ -1818,6 +2063,77 @@ class TransformationsFormalGuaranteesPropertyTest(absltest.TestCase):
               -np.inf,
               msg=f'Mixed state not zeroed: state={state}, shapes={shapes}',
           )
+
+  def test_property_symmetrize_to_wide_domain_exchangeability_and_count(self):
+    """Verifies that symmetrization expands cliques to exactly comb(s, r) copies and preserves properties."""
+    rng = np.random.default_rng(789)
+    for _ in range(15):
+      s = int(rng.integers(1, 7))
+      o = int(rng.integers(1, 4))
+
+      # Random measurement mix
+      m_root = mbi.LinearMeasurement(np.array([10.0]), (), stddev=0.5)
+      m_parent = mbi.LinearMeasurement(
+          np.array([5.0, 5.0]), ('p1', 'p2'), stddev=1.0
+      )
+      m_single = mbi.LinearMeasurement(
+          np.array([1.0, 2.0]), ('p1', 'slot_1.c1'), stddev=1.2
+      )
+      m_pair = mbi.LinearMeasurement(
+          np.array([3.0, 4.0]), ('slot_1.c1', 'slot_2.c2'), stddev=1.5
+      )
+
+      measurements = [m_root, m_parent, m_single, m_pair]
+      expanded = transformations.symmetrize_to_wide_domain(
+          measurements, max_children_per_parent=s, num_permutation_slots=o
+      )
+
+      # 1. Non-slot measurements: exactly 1 copy each
+      self.assertEqual(sum(1 for m in expanded if not m.clique), 1)
+      self.assertEqual(sum(1 for m in expanded if m.clique == ('p1', 'p2')), 1)
+
+      # 2. Single slot measurement: exactly s copies
+      single_copies = [
+          m
+          for m in expanded
+          if len(m.clique) == 2
+          and 'p1' in m.clique
+          and m.clique != ('p1', 'p2')
+      ]
+      self.assertLen(single_copies, s)
+      expected_single_cliques = [
+          ('p1', f'slot_{k}.c1') for k in range(1, s + 1)
+      ]
+      self.assertCountEqual(
+          [m.clique for m in single_copies], expected_single_cliques
+      )
+
+      # 3. Pairwise slot measurement: exactly comb(s, 2) copies (or 0 if s=1)
+      pair_copies = [
+          m
+          for m in expanded
+          if any(a.startswith('slot_') for a in m.clique)
+          and not any(a.startswith('p') for a in m.clique)
+      ]
+      expected_pair_count = math.comb(s, 2) if s >= 2 else 0
+      self.assertLen(pair_copies, expected_pair_count)
+      if s >= 2:
+        expected_pair_cliques = [
+            (f'slot_{i}.c1', f'slot_{j}.c2')
+            for i, j in itertools.combinations(range(1, s + 1), 2)
+        ]
+        self.assertCountEqual(
+            [m.clique for m in pair_copies], expected_pair_cliques
+        )
+
+      # 4. Invariant: Measurement vector and stddev are identical across
+      # all copies
+      for m in single_copies:
+        self.assertEqual(m.stddev, 1.2)
+        np.testing.assert_allclose(m.noisy_measurement, [1.0, 2.0])
+      for m in pair_copies:
+        self.assertEqual(m.stddev, 1.5)
+        np.testing.assert_allclose(m.noisy_measurement, [3.0, 4.0])
 
 
 if __name__ == '__main__':
