@@ -37,7 +37,7 @@ Domain Specification (``dpsynth.domain``)
 The ``domain`` module provides dataclasses for describing the schema of a
 tabular dataset.  Each column is represented by one of the attribute types
 below.  Pass a mapping of column names to attribute objects as the ``domains``
-argument to :class:`~dpsynth.TabularSynthesizer`.
+argument to :class:`~dpsynth.TabularConfig`.
 
 .. autosummary::
    :toctree: _autosummary
@@ -59,7 +59,7 @@ Cross-Attribute Constraints (``dpsynth.constraints``)
 The ``constraints`` module lets you express known relationships between columns
 so that the synthetic data honours them.  Pass a list of
 :class:`~dpsynth.constraints.Constraint` objects as
-``cross_attribute_constraints`` to :class:`~dpsynth.TabularSynthesizer`.
+``cross_attribute_constraints`` to :class:`~dpsynth.TabularConfig`.
 
 .. autosummary::
    :toctree: _autosummary
@@ -88,13 +88,30 @@ protocol shared by all DPSynth mechanisms.
 
 ----
 
+Tabular Synthesis (``dpsynth``)
+===============================
+
+.. currentmodule:: dpsynth
+
+The primary entry point for generating differentially private synthetic data from standard tabular datasets (such as Pandas DataFrames).
+
+.. autosummary::
+   :toctree: _autosummary
+   :nosignatures:
+   :template: autosummary/class.rst
+
+   TabularConfig
+   TabularMechanism
+
+----
+
 Discrete Mechanisms (``dpsynth.discrete_mechanisms``)
 ======================================================
 
 .. currentmodule:: dpsynth.discrete_mechanisms
 
 Discrete mechanisms operate on pre-discretized integer datasets
-(:class:`mbi.Dataset`).  :class:`TabularSynthesizer` applies them internally
+(:class:`mbi.Dataset`).  :class:`~dpsynth.TabularConfig` applies them internally
 after encoding your DataFrame.  Use them directly only if you already have a
 discrete dataset.
 
@@ -102,7 +119,7 @@ Mechanism Configs
 -----------------
 
 Each config class corresponds to a published DP synthesis algorithm.  Pass one
-as the ``discrete_mechanism`` argument to :class:`~dpsynth.TabularSynthesizer`,
+as the ``discrete_mechanism`` argument to :class:`~dpsynth.TabularConfig`,
 or use :class:`~dpsynth.discrete_mechanisms.DiscreteConfig` to add one-way
 marginal measurement and domain compression.
 
@@ -118,12 +135,13 @@ marginal measurement and domain compression.
    SWIFTConfig
    AIMGDPConfig
 
-DiscreteConfig
---------------
+DiscreteConfig and DiscreteMechanism
+------------------------------------
 
 :class:`DiscreteConfig` wraps any of the mechanism configs above with one-way
-marginal pre-measurement and optional domain compression.  It is the recommended
-entry point when you have a pre-discretized table.
+marginal pre-measurement and optional domain compression. When calibrated, it
+produces a runnable :class:`DiscreteMechanism`. This is the recommended entry
+point when you have a pre-discretized table.
 
 .. autosummary::
    :toctree: _autosummary
@@ -131,3 +149,4 @@ entry point when you have a pre-discretized table.
    :template: autosummary/class.rst
 
    DiscreteConfig
+   DiscreteMechanism

@@ -26,6 +26,8 @@ from dpsynth.constraints import Constraint
 from dpsynth.data_generation_v3 import TabularConfig
 from dpsynth.data_generation_v3 import TabularMechanism
 from dpsynth.data_generation_v3 import TabularSynthesizer
+from dpsynth.discrete_mechanisms.discrete import DiscreteConfig
+from dpsynth.discrete_mechanisms.discrete import DiscreteMechanism
 from dpsynth.domain import CategoricalAttribute
 from dpsynth.domain import FreeFormTextAttribute
 from dpsynth.domain import NumericalAttribute

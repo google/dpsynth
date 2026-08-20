@@ -11,13 +11,13 @@ within a single machine's RAM.
 
 --------------------------------------------------------------------------------
 
-## Python API: `dpsynth.TabularSynthesizer`
+## Python API: `dpsynth.TabularConfig`
 
 The primary entry point for in-memory synthesis is
-`dpsynth.TabularSynthesizer`. It accepts a dictionary of attribute domains,
-is calibrated with a privacy budget, and generates a fully synthetic,
-differentially private DataFrame matching the exact schema and data types of
-your input.
+`dpsynth.TabularConfig`. It accepts a dictionary of attribute domains and
+mechanism options, is calibrated with a privacy budget to produce a
+`dpsynth.TabularMechanism`, and generates a fully synthetic, differentially
+private DataFrame matching the exact schema and data types of your input.
 
 ### Usage
 
@@ -27,43 +27,45 @@ from dpsynth import discrete_mechanisms
 import numpy as np
 import pandas as pd
 
-synth = dpsynth.TabularSynthesizer(
+config = dpsynth.TabularConfig(
     domains=domains,
     discrete_mechanism=discrete_mechanisms.MSTConfig(),
 )
-result = synth.calibrate(
-    epsilon=1.0,
-    delta=1e-6,
-)(np.random.default_rng(), sensitive_df)
+mechanism = config.calibrate(epsilon=1.0, delta=1e-6)
+result = mechanism(np.random.default_rng(), sensitive_df)
 synthetic_df = result.synthetic_data
 ```
 
-### Key Arguments
+### Key Configuration Arguments
 
-*   `data`: The sensitive input `pd.DataFrame`.
+When initializing `dpsynth.TabularConfig`:
+
 *   `domains`: Mapping of column names to domain specifications
     ([`CategoricalAttribute`, `NumericalAttribute`, or `OpenSetCategoricalAttribute`](data_and_terminology.md)).
     Every key must exist in `data.columns`.
-*   `epsilon`, `delta`: Total differential privacy budget parameters.
 *   `discrete_mechanism`: Configuration object specifying which DP synthesis
     mechanism to run (e.g., `MSTConfig()`, `AIMConfig()`,
     `IndependentConfig()`).
 *   `numerical_bins`: Number of equal-frequency quantile buckets used to
     discretize continuous numerical columns (default: `32`).
-*   `one_way_marginal_budget_fraction`: Fraction of total `(epsilon, delta)`
-    allocated for one-way marginal measurements and domain compression (default:
-    `0.1`).
-*   `skip_compression`: If `True`, bypasses the rare-category merging phase.
-    Note: Compression cannot currently be used simultaneously with
-    cross-attribute constraints.
+*   `init_budget_fraction`: Fraction of total `(epsilon, delta)` budget
+    allocated for per-column initialization such as bounds computation and
+    partition selection (default: `0.1`).
+*   `cross_attribute_constraints`: Optional sequence of constraints to enforce
+    on generated data.
+
+When calling `config.calibrate(...)`:
+
+*   `epsilon`, `delta`: Total differential privacy budget parameters. Returns a
+    runnable `TabularMechanism`.
 
 --------------------------------------------------------------------------------
 
-## End-to-End Python Example
+## Standalone End-to-End Python Example
 
-Here is a complete Python script demonstrating how to load data, parse a domain
-YAML file, configure the AIM mechanism, set a fixed random seed, and generate
-synthetic records.
+Here is a complete, self-contained Python script demonstrating how to specify a
+domain, set up a `TabularConfig`, calibrate the mechanism with a privacy budget,
+load sensitive data, synthesize records, and print the first few rows.
 
 ```python
 import dpsynth
@@ -72,34 +74,64 @@ from dpsynth import domain
 import numpy as np
 import pandas as pd
 
-# 1. Load sensitive tabular data into Pandas
-sensitive_df = pd.read_csv("sensitive_transactions.csv")
-
-# 2. Load domain schema from YAML
-attribute_domains = domain.from_yaml_file("transaction_domain.yaml")
-
-# 3. Configure and calibrate the synthesizer (AIM)
-synth = dpsynth.TabularSynthesizer(
-    domains=attribute_domains,
-    discrete_mechanism=discrete_mechanisms.AIMConfig(
-        max_rounds=50,
-        pgm_iters=1000,
+# 1. Domain Specification: Define the schema of the tabular dataset
+attribute_domains = {
+    "age": domain.NumericalAttribute(lower_bound=18, upper_bound=90),
+    "workclass": domain.CategoricalAttribute(
+        allowed_values=["Private", "Self-emp", "Gov", "Other"]
     ),
-)
-calibrated = synth.calibrate(
-    epsilon=1.0,
-    delta=1e-6,
-    numerical_bins=16,  # Use 16 quantile buckets for numerical columns
+    "education": domain.CategoricalAttribute(
+        allowed_values=["HS-grad", "Bachelors", "Masters", "PhD"]
+    ),
+}
+
+# 2. Setup Config: Configure synthesizer with domain and mechanism choices
+config = dpsynth.TabularConfig(
+    domains=attribute_domains,
+    discrete_mechanism=discrete_mechanisms.MSTConfig(),
+    numerical_bins=16,
 )
 
-# 4. Generate Differentially Private synthetic data
-seed = 42
-result = calibrated(np.random.default_rng(seed), sensitive_df)
+# 3. Calibrate Mechanism: Allocate privacy budget to get runnable mechanism
+mechanism = config.calibrate(epsilon=1.0, delta=1e-5)
+
+# 4. Load Data: Create sensitive input DataFrame matching the domain schema
+sensitive_df = pd.DataFrame({
+    "age": [25, 42, 30, 55, 62, 29, 38, 47, 51, 33],
+    "workclass": [
+        "Private",
+        "Gov",
+        "Private",
+        "Self-emp",
+        "Other",
+        "Private",
+        "Gov",
+        "Private",
+        "Self-emp",
+        "Private",
+    ],
+    "education": [
+        "Bachelors",
+        "Masters",
+        "HS-grad",
+        "PhD",
+        "HS-grad",
+        "Bachelors",
+        "HS-grad",
+        "Masters",
+        "Bachelors",
+        "HS-grad",
+    ],
+})
+
+# 5. Synthesize Data: Run the calibrated mechanism on the sensitive data
+rng = np.random.default_rng(seed=42)
+result = mechanism(rng, sensitive_df)
 synthetic_df = result.synthetic_data
 
-# 5. Save the synthetic dataframe
-synthetic_df.to_csv("synthetic_transactions.csv", index=False)
-print("Synthetic data successfully generated!")
+# 6. Print the first few rows of the generated synthetic dataset
+print("Generated Synthetic Data:")
+print(synthetic_df.head())
 ```
 
 --------------------------------------------------------------------------------
@@ -141,7 +173,7 @@ python3 bin/main.py \
 
 ## Under the Hood: The In-Memory Lifecycle
 
-When you invoke `TabularSynthesizer`, the library performs the following
+When you configure and run `TabularConfig`, the library performs the following
 single-machine pipeline:
 
 1.  **Discretization**: Continuous numerical columns are bucketed into
@@ -152,11 +184,11 @@ single-machine pipeline:
 3.  **Domain Compression**: DPSynth measures 1-way marginals with Gaussian noise
     and merges rare categories into an `"Other"` bucket, producing an un-noised
     discrete dataset (`mbi.Dataset`).
-4.  **Mechanism Execution**: Calls `discrete_mechanisms.run_mechanism()` to
-    execute the selected algorithm (`AIM`, `MST`, etc.) on the discrete dataset.
-    The mechanism fits a Markov Random Field (`mbi.MarkovRandomField`) via
-    Private-PGM mirror descent.
+4.  **Mechanism Execution**: Calls the configured discrete mechanism (`AIM`,
+    `MST`, etc.) on the discrete dataset. The mechanism fits a Markov Random
+    Field (`mbi.MarkovRandomField`) via Private-PGM mirror descent.
 5.  **Sampling & Inversion**: Samples synthetic integer records from the
     graphical model, unpacks `"Other"` categories, and inverts the integer
     encoding back to original Pandas dtypes (strings, integers, floating
     points).
+

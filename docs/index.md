@@ -58,7 +58,7 @@ dataframes to massive distributed datasets across computing clusters:
                └────────────────────────────────────────┘
 ```
 
-### 1. In-Memory DataFrame API (`dpsynth.TabularSynthesizer`)
+### 1. In-Memory DataFrame API (`dpsynth.TabularConfig`)
 
 Optimized for rapid prototyping, research experimentation, and datasets that
 easily fit within single-machine memory.
@@ -128,3 +128,30 @@ APIs:
 ## Contact
 
 --------------------------------------------------------------------------------
+
+```{toctree}
+:maxdepth: 2
+:caption: Getting Started
+:hidden:
+
+data_and_terminology
+in_memory_api
+scalable_pipeline_api
+```
+
+```{toctree}
+:maxdepth: 2
+:caption: Guides
+:hidden:
+
+processing_lifecycle
+contributors_guide
+```
+
+```{toctree}
+:maxdepth: 2
+:caption: API Reference
+:hidden:
+
+api_reference
+```
