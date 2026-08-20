@@ -81,7 +81,6 @@ def save_data_local(
       save_csv(data, path, attributes)  # pytype: disable=wrong-arg-types
     case types.DataFormat.TFRECORD:
       import tensorflow as tf
-      
       os.makedirs(os.path.dirname(path), exist_ok=True)
       with tf.io.TFRecordWriter(path) as writer:
         for record in data:
@@ -172,7 +171,6 @@ def load_data_for_beam(
       return load_csv(pipeline, path)
     case types.DataFormat.TFRECORD:
       import tensorflow as tf
-      
       return pipeline | 'ReadTFRecord' >> beam.io.ReadFromTFRecord(
           path, coder=beam.coders.ProtoCoder(tf.train.Example)
       )
@@ -190,7 +188,6 @@ def save_beam_data(
   match data_format:
     case types.DataFormat.TFRECORD:
       import tensorflow as tf
-      
       _ = data | 'WriteTFRecord' >> beam.io.WriteToTFRecord(
           path, coder=beam.coders.ProtoCoder(tf.train.Example)
       )
