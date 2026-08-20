@@ -50,6 +50,7 @@ dev = [
     "chex",
     "pytest",
     "pytest-xdist",
+    "pyrefly",
 ]
 text = [
     "flax",
@@ -84,3 +85,10 @@ filterwarnings = [
     "ignore:.*JAX is running in float32 mode.*:UserWarning",
     "ignore:.*JAX persistent compilation cache is enabled.*:UserWarning",
 ]
+
+[tool.pyrefly]
+project-includes = [
+  "**/*.py",
+]
+python-version = "3.12"
+preset = "basic"
