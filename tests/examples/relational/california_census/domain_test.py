@@ -51,17 +51,15 @@ class CaliforniaCensusDomainTest(absltest.TestCase):
     self.domain_path = _find_domain_path()
 
   def test_load_california_census_domain(self):
-    table_domains, foreign_keys = rel_domain.from_yaml_file(
-        str(self.domain_path)
-    )
+    schema = rel_domain.from_yaml_file(str(self.domain_path))
 
     # Validate table set
     self.assertCountEqual(
-        list(table_domains.keys()), ['household', 'individual']
+        list(schema.tables.keys()), ['household', 'individual']
     )
 
     # Validate household attributes
-    household_schema = table_domains['household']
+    household_schema = schema.tables['household']
     self.assertLen(household_schema, 10)
     self.assertIsInstance(household_schema['FARM'], domain.CategoricalAttribute)
     self.assertEqual(household_schema['FARM'].size, 2)
@@ -72,7 +70,7 @@ class CaliforniaCensusDomainTest(absltest.TestCase):
     self.assertEqual(household_schema['PROPINSR'].max_value, 59.0)
 
     # Validate individual attributes
-    individual_schema = table_domains['individual']
+    individual_schema = schema.tables['individual']
     self.assertLen(individual_schema, 15)
     self.assertIsInstance(
         individual_schema['RELATE'], domain.CategoricalAttribute
@@ -83,8 +81,8 @@ class CaliforniaCensusDomainTest(absltest.TestCase):
     self.assertEqual(individual_schema['AGE'].max_value, 85.0)
 
     # Validate foreign keys
-    self.assertLen(foreign_keys, 1)
-    fk = foreign_keys[0]
+    self.assertLen(schema.foreign_keys, 1)
+    fk = schema.foreign_keys[0]
     self.assertEqual(fk.parent_table, 'household')
     self.assertEqual(fk.parent_primary_key, 'HOUSEHOLD')
     self.assertEqual(fk.child_table, 'individual')
@@ -93,7 +91,7 @@ class CaliforniaCensusDomainTest(absltest.TestCase):
 
     # Validate topological hierarchy
     hierarchy = rel_domain.topological_sort_hierarchy(
-        list(table_domains.keys()), foreign_keys
+        list(schema.tables.keys()), schema.foreign_keys
     )
     self.assertEqual(
         hierarchy,

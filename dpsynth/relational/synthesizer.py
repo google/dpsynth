@@ -19,6 +19,7 @@ from __future__ import annotations
 from collections.abc import Collection, Hashable, Mapping, Sequence
 import dataclasses
 import math
+import warnings
 from typing import Any, Literal
 
 from absl import logging
@@ -192,7 +193,7 @@ def _run_single_col_initializer(
     ValueError: If init is not a supported initializer type.
   """
   if isinstance(init, initialization.NumericalInitializer):
-    attr = init.config.attribute
+    attr = init.attribute
     values = np.asarray(data, dtype=float)
     if attr.clip_to_range:
       values = np.where(np.isnan(values), attr.min_value, values)
@@ -201,16 +202,16 @@ def _run_single_col_initializer(
       values, weights = values[in_domain], weights[in_domain]
     if attr.dtype == 'int':
       values = np.round(values)
-    lower, upper, gs = init.config.grid_spec
+    lower, upper, gs = init.grid_spec
     delta = (upper - lower) / (gs - 1)
     indices = initialization.encode_to_grid(values, lower, upper, delta)
     counts = np.bincount(indices, weights=weights, minlength=gs)
     return init.from_summary(rng, counts, estimated_total=estimated_total)
 
   if isinstance(init, initialization.CategoricalInitializer):
-    encoded = vtx.discrete_encode(data, init.config.attribute)
+    encoded = vtx.discrete_encode(data, init.attribute)
     counts = np.bincount(
-        encoded, weights=weights, minlength=init.config.attribute.size
+        encoded, weights=weights, minlength=init.attribute.size
     )
     return init.from_summary(rng, counts)
 
@@ -937,29 +938,41 @@ class MultiTableMechanism(api.CalibratedMechanism):
   """Calibrated, runnable multi-table relational differential privacy mechanism.
 
   Attributes:
-    domains: Mapping from table name to per-column attribute specifications.
-    foreign_keys: Sequence of foreign key relationships defining the hierarchy.
+    config: MultiTableConfig hyperparameter preset.
+    schema: RelationalSchema containing table schemas and foreign keys.
     calibrated_discrete_mechanisms: Mapping from link names to calibrated
       discrete mechanisms.
     calibrated_initializers: Mapping from table and column to calibrated
       initializers.
     total_count_sigma: Sigma for the root table total-count mechanism.
-    num_permutation_slots: Permutation exploration slot count (o), default 2.
-    exploration_strategy: Exploration strategy ('empty_token' or 'size_sliced').
     max_records_per_user: Assumed upper bound on records a single user
-      contributes to the root table. Essentially the sensitivitiy at the root.
+      contributes to the root table. Essentially the sensitivity at the root.
 
-  Note: For simplicity, user-defined contraints are not supported yet.
+  Note: For simplicity, user-defined constraints are not supported yet.
   """
 
-  domains: Mapping[str, domain.Schema]
-  foreign_keys: Sequence[rel_domain.ForeignKeyRelation]
+  config: MultiTableConfig
+  schema: rel_domain.RelationalSchema
   calibrated_discrete_mechanisms: Mapping[str, api.CalibratedMechanism]
   calibrated_initializers: Mapping[str, Mapping[str, api.CalibratedMechanism]]
   total_count_sigma: float = dataclasses.field(repr=False)
-  num_permutation_slots: int = 2
-  exploration_strategy: Literal['empty_token', 'size_sliced'] = 'empty_token'
   max_records_per_user: int = 1
+
+  @property
+  def domains(self) -> Mapping[str, domain.Schema]:
+    return self.schema.tables
+
+  @property
+  def foreign_keys(self) -> Sequence[rel_domain.ForeignKeyRelation]:
+    return self.schema.foreign_keys
+
+  @property
+  def num_permutation_slots(self) -> int:
+    return self.config.num_permutation_slots
+
+  @property
+  def exploration_strategy(self) -> Literal['empty_token', 'size_sliced']:
+    return self.config.exploration_strategy
 
   @property
   def dp_event(self) -> dp_accounting.DpEvent:
@@ -1049,14 +1062,11 @@ class MultiTableMechanism(api.CalibratedMechanism):
     )
 
 
-@dataclasses.dataclass
+@dataclasses.dataclass(frozen=True, kw_only=True)
 class MultiTableConfig(api.MechanismConfig):
   """Configuration recipe for multi-table relational differential privacy synthesis.
 
   Attributes:
-    domains: Mapping from table name to per-column attribute domain
-      specifications.
-    foreign_keys: Sequence of foreign key relationships defining the hierarchy.
     discrete_mechanism: Discrete mechanism config (e.g. AIM, MST) for relational
       links.
     numerical_bins: Number of bins for numerical attribute discretization.
@@ -1066,29 +1076,15 @@ class MultiTableConfig(api.MechanismConfig):
     exploration_strategy: Exploration strategy ('empty_token' or 'size_sliced').
   """
 
-  domains: Mapping[str, domain.Schema]
-  foreign_keys: Sequence[rel_domain.ForeignKeyRelation]
   discrete_mechanism: api.MechanismConfig = dataclasses.field(
       default_factory=discrete_mechanisms.AIMConfig
   )
   numerical_bins: int = 32
   init_budget_fraction: float = 0.1
-  initializers: Mapping[str, Mapping[str, api.MechanismConfig]] | None = None
   num_permutation_slots: int = 2
   exploration_strategy: Literal['empty_token', 'size_sliced'] = 'empty_token'
 
   def __post_init__(self):
-    if len(self.domains) < 2:
-      raise ValueError(
-          'MultiTableConfig requires at least two tables in domains, got'
-          f' {len(self.domains)}. For single-table synthesis, use'
-          ' TabularConfig.'
-      )
-    if not self.foreign_keys:
-      raise ValueError(
-          'MultiTableConfig requires at least one foreign key relationship in'
-          ' foreign_keys. For single-table synthesis, use TabularConfig.'
-      )
     if not (0.0 < self.init_budget_fraction < 1.0):
       raise ValueError(
           'init_budget_fraction must be strictly in (0.0, 1.0), got'
@@ -1113,17 +1109,30 @@ class MultiTableConfig(api.MechanismConfig):
           f' {type(self.discrete_mechanism).__name__}.'
       )
 
+  def _validate_schema(self, schema: rel_domain.RelationalSchema) -> None:
+    if len(schema.tables) < 2:
+      raise ValueError(
+          'MultiTableConfig requires at least two tables in schema, got'
+          f' {len(schema.tables)}. For single-table synthesis, use'
+          ' TabularConfig.'
+      )
+    if not schema.foreign_keys:
+      raise ValueError(
+          'MultiTableConfig requires at least one foreign key relationship in'
+          ' foreign_keys. For single-table synthesis, use TabularConfig.'
+      )
+
     # 1. Validate table names, column names, and attribute types.
-    for table_name, schema in self.domains.items():
+    for table_name, table_schema in schema.tables.items():
       if '.' in table_name:
         raise ValueError(
             f"Table name {table_name!r} must not contain '.' characters."
         )
-      if not schema:
+      if not table_schema:
         raise ValueError(
             f'Table {table_name!r} schema in domains cannot be empty.'
         )
-      for col_name, attr in schema.items():
+      for col_name, attr in table_schema.items():
         if '.' in col_name:
           raise ValueError(
               f"Table {table_name!r} column {col_name!r} must not contain '.'"
@@ -1155,7 +1164,7 @@ class MultiTableConfig(api.MechanismConfig):
     # 2. Validate DAG hierarchy (acyclicity, known tables,
     # in-degree <= 1, single root).
     hierarchy = rel_domain.topological_sort_hierarchy(
-        list(self.domains.keys()), self.foreign_keys
+        list(schema.tables.keys()), schema.foreign_keys
     )
     roots = [t for _, t, fk in hierarchy if fk is None]
     if len(roots) > 1:
@@ -1166,41 +1175,23 @@ class MultiTableConfig(api.MechanismConfig):
       )
 
     # 3. Ensure PK and FK columns are not present in domain schemas.
-    for fk in self.foreign_keys:
-      if fk.parent_primary_key in self.domains[fk.parent_table]:
+    for fk in schema.foreign_keys:
+      if fk.parent_primary_key in schema.tables[fk.parent_table]:
         raise ValueError(
             f'Primary key column {fk.parent_primary_key!r} of table'
-            f' {fk.parent_table!r} must not be in domains[{fk.parent_table!r}].'
+            f' {fk.parent_table!r} must not be in'
+            f' schema.tables[{fk.parent_table!r}].'
         )
-      if fk.child_foreign_key in self.domains[fk.child_table]:
+      if fk.child_foreign_key in schema.tables[fk.child_table]:
         raise ValueError(
             f'Foreign key column {fk.child_foreign_key!r} of table'
-            f' {fk.child_table!r} must not be in domains[{fk.child_table!r}].'
+            f' {fk.child_table!r} must not be in'
+            f' schema.tables[{fk.child_table!r}].'
         )
-
-    # 4. Validate custom initializers structure if provided.
-    if self.initializers is not None:
-      if set(self.initializers.keys()) != set(self.domains.keys()):
-        raise ValueError(
-            f'Custom initializers tables {set(self.initializers.keys())} do not'
-            f' match domains tables {set(self.domains.keys())}.'
-        )
-      for table_name, table_inits in self.initializers.items():
-        if set(table_inits.keys()) != set(self.domains[table_name].keys()):
-          raise ValueError(
-              f'Custom initializers for table {table_name!r}'
-              f' columns {set(table_inits.keys())} do not match'
-              f' domains columns {set(self.domains[table_name].keys())}.'
-          )
-        for col_name, init_cfg in table_inits.items():
-          if not isinstance(init_cfg, api.MechanismConfig):
-            raise ValueError(
-                f'Custom initializer for {table_name}.{col_name} must be an'
-                f' api.MechanismConfig, got {type(init_cfg).__name__}.'
-            )
 
   def configure(
       self,
+      schema: rel_domain.RelationalSchema | None = None,
       *,
       zcdp_rho: float,
       delta: float = 0.0,
@@ -1227,6 +1218,7 @@ class MultiTableConfig(api.MechanismConfig):
         guaranteeing root parent differential privacy without Cartesian joins.
 
     Args:
+      schema: RelationalSchema defining tables and foreign key relationships.
       zcdp_rho: The total zCDP privacy budget (rho > 0).
       delta: Approximate DP delta for open-set Gaussian partition selection.
       max_records_per_user: Upper bound on root entity contributions (>= 1).
@@ -1238,28 +1230,31 @@ class MultiTableConfig(api.MechanismConfig):
       ValueError: If configuration hyperparameters or budgets are invalid.
     """
     api.validate_max_records_per_user(max_records_per_user)
+    if schema is None:
+      raise ValueError('MultiTableConfig requires schema.')
     if zcdp_rho <= 0:
       raise ValueError(f'zcdp_rho must be positive, got {zcdp_rho}.')
 
+    if not isinstance(schema, rel_domain.RelationalSchema):
+      schema = rel_domain.RelationalSchema(schema)
+
+    self._validate_schema(schema)
+
     hierarchy = rel_domain.topological_sort_hierarchy(
-        list(self.domains.keys()), self.foreign_keys
+        list(schema.tables.keys()), schema.foreign_keys
     )
     link_sensitivities = _compute_link_sensitivities(
         hierarchy, max_records_per_user=max_records_per_user
     )
 
     per_col_deltas = _compute_table_col_deltas(
-        self.domains,
+        schema.tables,
         delta=delta,
         init_budget_fraction=self.init_budget_fraction,
     )
-    inits = (
-        self.initializers
-        if self.initializers is not None
-        else _create_table_initializers(self.domains, self.numerical_bins)
-    )
+    inits = _create_table_initializers(schema.tables, self.numerical_bins)
 
-    total_cols = sum(len(schema) for schema in self.domains.values())
+    total_cols = sum(len(s) for s in schema.tables.values())
     init_rho = self.init_budget_fraction * zcdp_rho
     per_col_rho = init_rho / (total_cols + 1)  # +1 for root table total count.
     total_count_rho = per_col_rho
@@ -1290,12 +1285,24 @@ class MultiTableConfig(api.MechanismConfig):
     }
 
     return MultiTableMechanism(
-        domains=self.domains,
-        foreign_keys=self.foreign_keys,
+        config=self,
+        schema=schema,
         calibrated_discrete_mechanisms=calibrated_discrete,
         calibrated_initializers=calibrated_inits,
         total_count_sigma=total_count_sigma,
-        num_permutation_slots=self.num_permutation_slots,
-        exploration_strategy=self.exploration_strategy,
         max_records_per_user=max_records_per_user,
     )
+
+
+class MultiTableSynthesizer(MultiTableConfig):
+  """Deprecated. Use MultiTableConfig and MultiTableMechanism instead."""
+
+  def __init__(self, *args: Any, **kwargs: Any):
+    warnings.warn(
+        'MultiTableSynthesizer is deprecated. Use MultiTableConfig for'
+        ' configuration and MultiTableMechanism for the calibrated runnable'
+        ' mechanism.',
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    super().__init__(*args, **kwargs)

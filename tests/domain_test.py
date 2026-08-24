@@ -15,6 +15,7 @@
 import math
 
 from absl.testing import absltest
+from dpsynth import constraints
 from dpsynth import domain
 import numpy as np
 
@@ -191,9 +192,9 @@ class TestDomain(absltest.TestCase):
     loaded_domain = domain.from_yaml_file(temp_file.full_path)
     self.assertEqual(loaded_domain, original_domain)
 
-  def test_freeform_text_yaml_backward_compatibility(self):
-    """A YAML file written with fewer fields can still be loaded."""
-    yaml_content = 'text:\n  max_tokens: 64\n'
+  def test_freeform_text_yaml_loading(self):
+    """A YAML file written with optional fields omitted can still be loaded."""
+    yaml_content = 'text:\n  type: FreeFormTextAttribute\n  max_tokens: 64\n'
     temp_file = self.create_tempfile('compat.yaml', content=yaml_content)
     loaded = domain.from_yaml_file(temp_file.full_path)
     self.assertEqual(
@@ -210,6 +211,35 @@ class TestDomain(absltest.TestCase):
     domain.to_yaml_file(original_domain, temp_file.full_path)
     loaded_domain = domain.from_yaml_file(temp_file.full_path)
     self.assertEqual(loaded_domain, original_domain)
+
+  def test_schema_mapping_interface(self):
+    attrs = {
+        'age': domain.NumericalAttribute(min_value=0, max_value=100),
+        'gender': domain.CategoricalAttribute(possible_values=['M', 'F']),
+    }
+    schema = domain.Schema(attributes=attrs)
+    self.assertEqual(schema['age'], attrs['age'])
+    self.assertIn('gender', schema)
+    self.assertNotIn('unknown', schema)
+    self.assertLen(schema, 2)
+    self.assertEqual(list(schema), ['age', 'gender'])
+    self.assertEqual(schema.get('age'), attrs['age'])
+    self.assertIsNone(schema.get('unknown'))
+
+  def test_schema_with_constraints(self):
+    attrs = {
+        'age': domain.NumericalAttribute(min_value=0, max_value=100),
+        'gender': domain.CategoricalAttribute(possible_values=['M', 'F']),
+    }
+    c = constraints.Constraint(
+        attribute_names=('gender',),
+        attribute_domains=(attrs['gender'],),
+        impossible_combinations=[('X',)],
+    )
+    schema = domain.Schema(attributes=attrs, constraints=(c,))
+    self.assertEqual(schema.attributes, attrs)
+    self.assertEqual(schema.constraints, (c,))
+    self.assertEqual(schema['gender'], attrs['gender'])
 
 
 if __name__ == '__main__':

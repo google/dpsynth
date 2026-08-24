@@ -119,7 +119,12 @@ class MechanismConfig(abc.ABC):
 
   @abc.abstractmethod
   def configure(
-      self, *, zcdp_rho, delta=0, max_records_per_user=1
+      self,
+      domain: Any = None,
+      *,
+      zcdp_rho: float,
+      delta: float = 0.0,
+      max_records_per_user: int = 1,
   ) -> CalibratedMechanism:
     """Returns a calibrated mechanism for the given zCDP budget.
 
@@ -133,6 +138,8 @@ class MechanismConfig(abc.ABC):
     not provided (i.e., is 0).
 
     Args:
+      domain: Mechanism-specific domain or schema specification (e.g.
+        ``domain.Schema``, ``domain.AttributeType``, or ``mbi.Domain``).
       zcdp_rho: The zCDP privacy budget (rho).
       delta: Approximate DP delta consumed by the mechanism itself (e.g., for
         thresholding). Defaults to 0 (pure zCDP). Mechanisms that need delta
@@ -203,6 +210,7 @@ class MechanismConfig(abc.ABC):
 
   def calibrate(
       self,
+      domain: Any = None,
       *,
       epsilon: float | None = None,
       delta: float | None = None,
@@ -221,6 +229,7 @@ class MechanismConfig(abc.ABC):
       ``configure(zcdp_rho=...)`` directly instead.
 
     Args:
+      domain: Mechanism-specific domain or schema specification.
       epsilon: Target epsilon for (epsilon, delta)-DP.
       delta: Target delta for (epsilon, delta)-DP.
       zcdp_rho: Deprecated. Direct zCDP budget. Use ``configure()`` instead.
@@ -252,6 +261,7 @@ class MechanismConfig(abc.ABC):
           stacklevel=2,
       )
       return self.configure(
+          domain,
           zcdp_rho=zcdp_rho,
           max_records_per_user=max_records_per_user,
       )
@@ -261,6 +271,7 @@ class MechanismConfig(abc.ABC):
 
     def make_event_fn(rho: float) -> dp_accounting.DpEvent:
       base = self.configure(
+          domain,
           zcdp_rho=rho,
           delta=delta,
           max_records_per_user=max_records_per_user,
@@ -274,6 +285,7 @@ class MechanismConfig(abc.ABC):
         target_delta=delta,
     )
     return self.configure(
+        domain,
         zcdp_rho=optimal_rho,
         delta=delta,
         max_records_per_user=max_records_per_user,

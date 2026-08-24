@@ -23,6 +23,7 @@ import warnings
 from dpsynth import constraints
 from dpsynth import discrete_mechanisms
 from dpsynth import domain
+from dpsynth.data_generation_v3 import TabularConfig
 from dpsynth.data_generation_v3 import TabularSynthesizer
 import numpy as np
 import pandas as pd
@@ -51,14 +52,17 @@ def generate(
       stacklevel=2,
   )
   del skip_compression  # Not supported by TabularSynthesizer.
-  synth = TabularSynthesizer(
-      domains=domains,
+  config = TabularConfig(
       discrete_mechanism=discrete_config,  # pyrefly: ignore[bad-argument-type]
-      cross_attribute_constraints=cross_attribute_constraints,
       numerical_bins=numerical_bins,
       init_budget_fraction=one_way_marginal_budget_fraction,
   )
-  result = synth.calibrate(
+  schema = domain.Schema(
+      attributes=domains,
+      constraints=cross_attribute_constraints or (),
+  )
+  result = config.calibrate(
+      schema,
       epsilon=epsilon,
       delta=delta,
   )(np.random.default_rng(), data)

@@ -59,6 +59,47 @@ class ForeignKeyRelation:
       )
 
 
+@dataclasses.dataclass(frozen=True)
+class RelationalSchema:
+  """Schema defining relational tables and foreign key relationships.
+
+  Attributes:
+    tables: Mapping from table name to table Schema or AttributeType mapping.
+    foreign_keys: Sequence of foreign key relationships between tables.
+  """
+
+  tables: Mapping[str, domain.Schema]
+  foreign_keys: Sequence[ForeignKeyRelation] = ()
+
+  def __post_init__(self):
+    if isinstance(self.foreign_keys, list):
+      object.__setattr__(self, 'foreign_keys', tuple(self.foreign_keys))
+    normalized_tables = {}
+    for table_name, table_schema in self.tables.items():
+      if isinstance(table_schema, domain.Schema):
+        normalized_tables[table_name] = table_schema
+      elif isinstance(table_schema, Mapping):
+        normalized_tables[table_name] = domain.Schema(table_schema)
+      else:
+        raise TypeError(
+            f'Table {table_name!r} schema must be a Schema or Mapping, got'
+            f' {type(table_schema).__name__}.'
+        )
+    object.__setattr__(self, 'tables', normalized_tables)
+
+  def __getitem__(self, key: str) -> domain.Schema:
+    return self.tables[key]
+
+  def __contains__(self, key: object) -> bool:
+    return key in self.tables
+
+  def __iter__(self) -> Any:
+    return iter(self.tables)
+
+  def __len__(self) -> int:
+    return len(self.tables)
+
+
 def topological_sort_hierarchy(
     tables: Sequence[str],
     foreign_keys: Sequence[ForeignKeyRelation],
@@ -166,14 +207,14 @@ def _parse_attribute(
 
 def from_dict(
     config: Mapping[str, Any],
-) -> tuple[dict[str, domain.Schema], list[ForeignKeyRelation]]:
+) -> RelationalSchema:
   """Parses multi-table schema and foreign keys from a dictionary.
 
   Args:
     config: Dictionary with 'tables' and optional 'foreign_keys' blocks.
 
   Returns:
-    A tuple of (table_domains, foreign_keys).
+    A RelationalSchema instance.
 
   Raises:
     ValueError: If configuration format or attribute specifications are invalid.
@@ -189,10 +230,10 @@ def from_dict(
   for table_name, table_schema in config['tables'].items():
     if not isinstance(table_schema, Mapping):
       raise ValueError(f'Table schema for {table_name!r} must be a mapping.')
-    table_domains[table_name] = {
+    table_domains[table_name] = domain.Schema({
         col_name: _parse_attribute(table_name, col_name, spec)
         for col_name, spec in table_schema.items()
-    }
+    })
 
   foreign_keys: list[ForeignKeyRelation] = []
   for fk in config.get('foreign_keys', []):
@@ -208,19 +249,19 @@ def from_dict(
       len(table_domains),
       len(foreign_keys),
   )
-  return table_domains, foreign_keys
+  return RelationalSchema(tables=table_domains, foreign_keys=foreign_keys)
 
 
 def from_yaml_file(
     filepath: str | PathType,
-) -> tuple[dict[str, domain.Schema], list[ForeignKeyRelation]]:
+) -> RelationalSchema:
   """Reads multi-table schema and foreign keys from a YAML file.
 
   Args:
     filepath: Path to the YAML schema file.
 
   Returns:
-    A tuple of (table_domains, foreign_keys).
+    A RelationalSchema instance.
   """
   logging.info('Loading relational domain schema from YAML file: %s', filepath)
   path = epath.Path(filepath)
@@ -232,52 +273,59 @@ def from_yaml_file(
 
 
 def to_dict(
-    table_domains: Mapping[str, domain.Schema],
+    schema: RelationalSchema | Mapping[str, domain.Schema],
     foreign_keys: Sequence[ForeignKeyRelation] = (),
 ) -> dict[str, Any]:
   """Converts multi-table schemas and foreign keys to a dictionary.
 
   Args:
-    table_domains: Mapping from table name to per-column AttributeType schemas.
-    foreign_keys: Optional sequence of ForeignKeyRelation objects.
+    schema: RelationalSchema or mapping from table name to table schemas.
+    foreign_keys: Optional sequence of ForeignKeyRelation objects (if schema is
+      a mapping).
 
   Returns:
     A dictionary with 'tables' and optional 'foreign_keys' blocks.
   """
+  if isinstance(schema, RelationalSchema):
+    table_domains = schema.tables
+    fks = schema.foreign_keys
+  else:
+    table_domains = schema
+    fks = foreign_keys
+
   tables_dict: dict[str, dict[str, Any]] = {}
-  for table_name, schema in table_domains.items():
+  for table_name, table_schema in table_domains.items():
     table_dict: dict[str, Any] = {}
-    for col_name, attr in schema.items():
+    for col_name, attr in table_schema.items():
       attr_dict = dataclasses.asdict(attr)
       attr_dict['type'] = attr.__class__.__name__
       table_dict[col_name] = attr_dict
     tables_dict[table_name] = table_dict
 
   result: dict[str, Any] = {'tables': tables_dict}
-  if foreign_keys:
-    result['foreign_keys'] = [dataclasses.asdict(fk) for fk in foreign_keys]
+  if fks:
+    result['foreign_keys'] = [dataclasses.asdict(fk) for fk in fks]
   return result
 
 
 def to_yaml_file(
-    table_domains: Mapping[str, domain.Schema],
-    foreign_keys: Sequence[ForeignKeyRelation],
+    schema: RelationalSchema | Mapping[str, domain.Schema],
     filepath: str | PathType,
+    foreign_keys: Sequence[ForeignKeyRelation] = (),
 ) -> None:
   """Writes multi-table schema and foreign keys to a YAML file.
 
   Args:
-    table_domains: Mapping from table name to per-column AttributeType schemas.
-    foreign_keys: Sequence of ForeignKeyRelation objects.
+    schema: RelationalSchema or mapping from table name to table schemas.
     filepath: Destination path for the YAML schema file.
+    foreign_keys: Optional sequence of ForeignKeyRelation objects (if schema is
+      a mapping).
   """
   logging.info(
-      'Saving relational domain schema (%d tables, %d foreign keys) to: %s',
-      len(table_domains),
-      len(foreign_keys),
+      'Saving relational domain schema to: %s',
       filepath,
   )
-  data = to_dict(table_domains, foreign_keys)
+  data = to_dict(schema, foreign_keys=foreign_keys)
   path = epath.Path(filepath)
   with path.open('w') as f:
     yaml.dump(data, f, default_flow_style=False, sort_keys=False)

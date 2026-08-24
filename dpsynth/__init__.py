@@ -21,6 +21,9 @@ from dpsynth import constraints
 from dpsynth import discrete_mechanisms
 from dpsynth import domain
 from dpsynth import relational
+from dpsynth.api import CalibratedMechanism
+from dpsynth.api import MechanismConfig
+from dpsynth.constraints import Constraint
 from dpsynth.data_generation_v3 import TabularConfig
 from dpsynth.data_generation_v3 import TabularMechanism
 from dpsynth.data_generation_v3 import TabularSynthesizer
@@ -30,24 +33,35 @@ from dpsynth.domain import CategoricalAttribute
 from dpsynth.domain import FreeFormTextAttribute
 from dpsynth.domain import NumericalAttribute
 from dpsynth.domain import OpenSetCategoricalAttribute
+from dpsynth.domain import Schema
 
 ForeignKeyRelation = relational.ForeignKeyRelation
 MultiDataGenerationResult = relational.MultiDataGenerationResult
 MultiTableConfig = relational.MultiTableConfig
 MultiTableMechanism = relational.MultiTableMechanism
+RelationalSchema = relational.RelationalSchema
 
 __all__ = [
+    'CalibratedMechanism',
     'CategoricalAttribute',
+    'Constraint',
+    'DiscreteConfig',
+    'DiscreteMechanism',
     'ForeignKeyRelation',
+    'FreeFormTextAttribute',
+    'MechanismConfig',
     'MultiDataGenerationResult',
     'MultiTableConfig',
     'MultiTableMechanism',
     'NumericalAttribute',
     'OpenSetCategoricalAttribute',
+    'RelationalSchema',
+    'Schema',
     'TabularConfig',
     'TabularMechanism',
     'TabularSynthesizer',
     'api',
+    'constraints',
     'discrete_mechanisms',
     'domain',
     'relational',

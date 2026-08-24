@@ -160,14 +160,15 @@ def create_calibrated_mechanism(
       num_permutation_slots,
       exploration_strategy,
   )
+  schema = rel_domain.RelationalSchema(
+      tables=table_domains, foreign_keys=foreign_keys
+  )
   config = rel_synth.MultiTableConfig(
-      domains=table_domains,
-      foreign_keys=foreign_keys,
       discrete_mechanism=discrete_mechanisms.MSTConfig(pgm_iters=PGM_ITERS),
       num_permutation_slots=num_permutation_slots,
       exploration_strategy=exploration_strategy,
   )
-  mechanism = config.calibrate(epsilon=epsilon, delta=delta)
+  mechanism = config.calibrate(schema, epsilon=epsilon, delta=delta)
   assert isinstance(mechanism, rel_synth.MultiTableMechanism)
   logging.info('Mechanism calibrated successfully.')
   return mechanism

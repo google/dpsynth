@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 import dataclasses
+from typing import Any
 import warnings
 
 from absl import logging
@@ -55,18 +56,15 @@ def create_initializers(
   for col, attr in domains.items():
     if isinstance(attr, domain.NumericalAttribute):
       initializers[col] = initialization.NumericalInitializerConfig(
-          name=col,
           num_partitions=numerical_bins,
           attribute=attr,
       )
     elif isinstance(attr, domain.CategoricalAttribute):
       initializers[col] = initialization.CategoricalInitializerConfig(
-          name=col,
           attribute=attr,
       )
     elif isinstance(attr, domain.OpenSetCategoricalAttribute):
       initializers[col] = initialization.OpenSetInitializerConfig(
-          name=col,
           attribute=attr,
       )
     else:
@@ -130,7 +128,12 @@ class TabularCodec:
       domains: Mapping[str, domain.AttributeType],
   ) -> TabularCodec:
     """Builds a codec from initialization results and the original domains."""
-    columns = {col: ColumnCodec(m, domains[col]) for col, m in results.items()}
+    columns = {}
+    for col, m in results.items():
+      if m.measurement is not None and not m.measurement.clique:
+        measurement = dataclasses.replace(m.measurement, clique=(col,))
+        m = dataclasses.replace(m, measurement=measurement)
+      columns[col] = ColumnCodec(m, domains[col])
     return cls(columns=columns)
 
   @property
@@ -188,22 +191,41 @@ class TabularMechanism(api.CalibratedMechanism):
   """End-to-end DP synthetic tabular data generation, calibrated and runnable.
 
   Attributes:
-    domains: Mapping from column names to attribute domain specifications.
+    config: The preset configuration used to create this mechanism.
+    schema: The attribute domain schema or mapping.
     base_mechanism: The calibrated discrete mechanism.
     initializers: Per-column calibrated initializers.
     total_count_sigma: Sigma for the total-count mechanism.
-    cross_attribute_constraints: Constraints to enforce on generated data.
     max_records_per_user: Assumed upper bound on the number of records a single
       user contributes.
   """
 
   config: TabularConfig
-  domains: Mapping[str, domain.AttributeType]
+  schema: domain.Schema
   base_mechanism: discrete_mechanisms.CalibratedMechanism
   initializers: dict[str, api.CalibratedMechanism]
   total_count_sigma: float = dataclasses.field(repr=False)
-  cross_attribute_constraints: Sequence[constraints.Constraint] = ()
   max_records_per_user: int = 1
+
+  @property
+  def domains(self) -> Mapping[str, domain.AttributeType]:
+    return self.schema.attributes
+
+  @property
+  def cross_attribute_constraints(self) -> Sequence[Any]:
+    return self.schema.constraints
+
+  @property
+  def discrete_mechanism(self) -> api.MechanismConfig:
+    return self.config.discrete_mechanism
+
+  @property
+  def numerical_bins(self) -> int:
+    return self.config.numerical_bins
+
+  @property
+  def init_budget_fraction(self) -> float:
+    return self.config.init_budget_fraction
 
   @property
   def dp_event(self) -> dp_accounting.DpEvent:
@@ -248,7 +270,7 @@ class TabularMechanism(api.CalibratedMechanism):
             f'{col=} not found in dataset. Available: {list(data.columns)}'
         )
     if not cross_attribute_constraints:
-      cross_attribute_constraints = self.config.cross_attribute_constraints
+      cross_attribute_constraints = self.schema.constraints
 
     mbi_constraints = tuple(c.to_mbi() for c in cross_attribute_constraints)
 
@@ -307,44 +329,39 @@ class TabularMechanism(api.CalibratedMechanism):
 
 @dataclasses.dataclass(frozen=True, kw_only=True)
 class TabularConfig(api.MechanismConfig):
-  """Configures end-to-end DP synthetic data generation.
+  """Preset configuration for the tabular synthesizer.
 
-  This config encodes input categorical and numerical data into a discrete
-  domain using local mode primitives, runs a discrete mechanism on the
-  discretized data, and converts the synthetic output back to the original
-  domain.
-
-  Usage::
-
-      config = TabularConfig(domains=domains)
-      calibrated = config.configure(zcdp_rho=1.0)
-      result = calibrated(rng, df)
-      synthetic_df = result.synthetic_data
+  ``TabularConfig`` defines reusable hyperparameters (such as bin counts,
+  budget allocation fractions, and discrete mechanism choice) independent of
+  any specific dataset schema. It produces a calibrated ``TabularMechanism``
+  when ``configure(schema, ...)`` or ``calibrate(schema, ...)`` is called.
 
   Attributes:
-    domains: Mapping from column names to attribute domain specifications.
     discrete_mechanism: The mechanism to run on the discretized data.
     numerical_bins: Number of bins for numerical attribute discretization.
     init_budget_fraction: Fraction of total zCDP budget allocated to per-column
       initialization (the rest goes to the discrete mechanism).
+    domains: Optional mapping from column names to attribute domain
+      specifications (for backwards compatibility).
     cross_attribute_constraints: Constraints to enforce on generated data.
+    initializers: Optional pre-configured column initializers.
   """
 
-  domains: Mapping[str, domain.AttributeType]
-  discrete_mechanism: api.MechanismConfig = discrete_mechanisms.MSTConfig()
+  discrete_mechanism: api.MechanismConfig = dataclasses.field(
+      default_factory=discrete_mechanisms.MSTConfig
+  )
   numerical_bins: int = 32
   init_budget_fraction: float = 0.1
+  domains: domain.Schema | Mapping[str, domain.AttributeType] | None = None
+  cross_attribute_constraints: Sequence[Any] = ()
   initializers: dict[str, api.MechanismConfig] | None = None
-  cross_attribute_constraints: Sequence[constraints.Constraint] = ()
 
-  def _compute_per_col_deltas(self, delta):
-    # Split delta across open-set columns, analogous to splitting zcdp_rho.
-    # Under calibrate(), any delta not consumed here is automatically
-    # available for the zCDP-to-(epsilon, delta) conversion, so this
-    # simple additive split is tight.
+  def _compute_per_col_deltas(
+      self, schema: Mapping[str, domain.AttributeType], delta: float
+  ) -> dict[str, float]:
     num_open_set = sum(
         isinstance(attr, domain.OpenSetCategoricalAttribute)
-        for attr in self.domains.values()
+        for attr in schema.values()
     )
     if num_open_set > 0 and delta <= 0:
       raise ValueError(
@@ -355,8 +372,8 @@ class TabularConfig(api.MechanismConfig):
     thresholding_delta = self.init_budget_fraction * delta
 
     per_col_deltas = {}
-    for col in self.domains:
-      if isinstance(self.domains[col], domain.OpenSetCategoricalAttribute):
+    for col in schema:
+      if isinstance(schema[col], domain.OpenSetCategoricalAttribute):
         per_col_deltas[col] = thresholding_delta / num_open_set
       else:
         per_col_deltas[col] = 0.0
@@ -364,6 +381,7 @@ class TabularConfig(api.MechanismConfig):
 
   def configure(
       self,
+      schema: domain.Schema | Mapping[str, domain.AttributeType] | None = None,
       *,
       zcdp_rho: float,
       delta: float = 0.0,
@@ -386,6 +404,9 @@ class TabularConfig(api.MechanismConfig):
     ensures the overall (epsilon, delta) guarantee is tight.
 
     Args:
+      schema: The attribute domain schema or mapping of column names to
+        attribute domain specifications. If omitted, falls back to
+        ``self.domains``.
       zcdp_rho: The zCDP privacy budget.
       delta: Overall approximate DP delta for the mechanism. A fraction
         (``init_budget_fraction``) is allocated to partition selection for
@@ -402,15 +423,28 @@ class TabularConfig(api.MechanismConfig):
       A calibrated TabularMechanism ready to be run on tabular data.
 
     Raises:
-      ValueError: If open-set attributes exist but delta is 0.
+      ValueError: If open-set attributes exist but delta is 0, or if schema is
+        not provided and self.domains is None.
     """
     api.validate_max_records_per_user(max_records_per_user)
-    per_col_deltas = self._compute_per_col_deltas(delta)
+    if schema is None:
+      schema = self.domains
+    if schema is None:
+      raise ValueError('TabularConfig requires schema.')
+    if not isinstance(schema, domain.Schema):
+      constraints_to_use = (
+          schema.constraints
+          if hasattr(schema, 'constraints')
+          else self.cross_attribute_constraints
+      )
+      schema = domain.Schema(schema, constraints=constraints_to_use)
 
+    attr_schema = schema.attributes
+    per_col_deltas = self._compute_per_col_deltas(attr_schema, delta)
     inits = (
         self.initializers
         if self.initializers is not None
-        else create_initializers(self.domains, self.numerical_bins)
+        else create_initializers(attr_schema, self.numerical_bins)
     )
     init_rho = self.init_budget_fraction * zcdp_rho
     # +1 for the DPGaussianCount that always measures the total.
@@ -418,10 +452,9 @@ class TabularConfig(api.MechanismConfig):
     discrete_rho = (1 - self.init_budget_fraction) * zcdp_rho
     total_count_sigma = (0.5 / per_col_rho) ** 0.5
 
-    calibrated_inits: dict[str, api.CalibratedMechanism]
-
     calibrated_inits = {
         col: init.configure(
+            attr_schema[col],
             zcdp_rho=per_col_rho,
             delta=per_col_deltas[col],
             max_records_per_user=max_records_per_user,
@@ -430,13 +463,13 @@ class TabularConfig(api.MechanismConfig):
     }
 
     calibrated_discrete = self.discrete_mechanism.configure(
-        max_records_per_user=max_records_per_user,
         zcdp_rho=discrete_rho,
+        max_records_per_user=max_records_per_user,
     )
 
     return TabularMechanism(
         config=self,
-        domains=self.domains,
+        schema=schema,
         base_mechanism=calibrated_discrete,
         initializers=calibrated_inits,
         total_count_sigma=total_count_sigma,
@@ -447,6 +480,9 @@ class TabularConfig(api.MechanismConfig):
 @dataclasses.dataclass(frozen=True, kw_only=True)
 class TabularSynthesizer(TabularConfig):
   """Deprecated. Use TabularConfig and TabularMechanism instead."""
+
+  domains: Mapping[str, domain.AttributeType] | None = None
+  cross_attribute_constraints: Sequence[Any] = ()
 
   def __post_init__(self):
     warnings.warn(

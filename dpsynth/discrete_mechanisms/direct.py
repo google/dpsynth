@@ -29,7 +29,7 @@ import numpy as np
 class DirectConfig(api.MechanismConfig):
   """Config for the direct mechanism that measures prespecified marginals."""
 
-  def configure(self, *, zcdp_rho, delta=0, max_records_per_user=1):
+  def configure(self, _=None, *, zcdp_rho, delta=0, max_records_per_user=1):
     api.validate_max_records_per_user(max_records_per_user)
     return Direct(
         config=self,

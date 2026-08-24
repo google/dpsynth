@@ -43,6 +43,8 @@ ignore this advice, so that downstream mechanisms don't generate out-of-domain
 values when none should exist.
 """
 
+from __future__ import annotations
+
 from collections.abc import Mapping, Sequence
 import dataclasses
 import functools
@@ -51,7 +53,6 @@ import pathlib
 
 from typing import Any, Literal, TypeAlias
 
-from absl import logging
 import numpy as np
 import yaml
 
@@ -304,11 +305,54 @@ AttributeType = (
     | FreeFormTextAttribute
 )
 
-Schema: TypeAlias = Mapping[str, AttributeType]
+
+@dataclasses.dataclass(frozen=True, eq=False)
+class Schema(Mapping[str, AttributeType]):
+  """Schema defining attribute domains and optional cross-attribute constraints.
+
+  Implements ``collections.abc.Mapping[str, AttributeType]`` so it can be
+  indexed like a dictionary (e.g. ``schema['col']``, ``'col' in schema``,
+  ``len(schema)``, ``for col in schema``).
+
+  Attributes:
+    attributes: Mapping from column names to attribute domain specifications.
+    constraints: Cross-attribute constraints associated with this schema.
+  """
+
+  attributes: Mapping[str, AttributeType]
+  constraints: Sequence[Any] = ()
+
+  def __post_init__(self):
+    if isinstance(self.constraints, list):
+      object.__setattr__(self, 'constraints', tuple(self.constraints))
+
+  def __getitem__(self, key: str) -> AttributeType:
+    return self.attributes[key]
+
+  def __contains__(self, key: object) -> bool:
+    return key in self.attributes
+
+  def __iter__(self) -> Any:
+    return iter(self.attributes)
+
+  def __len__(self) -> int:
+    return len(self.attributes)
+
+  def __eq__(self, other: object) -> bool:
+    if isinstance(other, Schema):
+      return (
+          self.attributes == other.attributes
+          and self.constraints == other.constraints
+      )
+    if isinstance(other, Mapping):
+      return not self.constraints and self.attributes == other
+    return False
 
 
-def to_yaml_file(domain: Mapping[str, AttributeType], filepath: str | PathType):
-  """Writes a dictionary of Attribute objects to a YAML file."""
+def to_yaml_file(
+    domain: Schema | Mapping[str, AttributeType], filepath: str | PathType
+) -> None:
+  """Writes a Schema or dictionary of Attribute objects to a YAML file."""
   yaml_data = {}
   for name, attr_obj in domain.items():
     attr_data = dataclasses.asdict(attr_obj)
@@ -318,28 +362,25 @@ def to_yaml_file(domain: Mapping[str, AttributeType], filepath: str | PathType):
     yaml.dump(yaml_data, f, default_flow_style=False)
 
 
-def from_yaml_file(filepath: str | PathType) -> Mapping[str, AttributeType]:
-  """Reads a dictionary of Attribute objects from a YAML file."""
+def from_yaml_file(filepath: str | PathType) -> Schema:
+  """Reads a Schema from a YAML file."""
   with open(filepath, 'r') as f:
     yaml_data = yaml.safe_load(f)
-  domain = {}
-
+  attrs = {}
   for name, attr_data in yaml_data.items():
     attr_type = attr_data.pop('type', None)
-    if attr_type is None:
-      logging.warning(
-          'Field "type" missing in domain YAML; re-save using `to_yaml_file`.'
-          'In the future, missing this field will raise an error.'
-      )
-    if 'possible_values' in attr_data:
-      domain[name] = CategoricalAttribute(**attr_data)
-    elif 'min_value' in attr_data:
-      domain[name] = NumericalAttribute(**attr_data)
-    elif 'max_tokens' in attr_data:
-      domain[name] = FreeFormTextAttribute(**attr_data)
-    elif 'default_value' in attr_data or not attr_data:
-      domain[name] = OpenSetCategoricalAttribute(**attr_data)
+    if attr_type == 'CategoricalAttribute' or 'possible_values' in attr_data:
+      attrs[name] = CategoricalAttribute(**attr_data)
+    elif attr_type == 'NumericalAttribute' or 'min_value' in attr_data:
+      attrs[name] = NumericalAttribute(**attr_data)
+    elif attr_type == 'FreeFormTextAttribute' or 'max_tokens' in attr_data:
+      attrs[name] = FreeFormTextAttribute(**attr_data)
+    elif (
+        attr_type == 'OpenSetCategoricalAttribute'
+        or 'default_value' in attr_data
+        or not attr_data
+    ):
+      attrs[name] = OpenSetCategoricalAttribute(**attr_data)
     else:
       raise ValueError(f'Invalid YAML data for attribute: {name}')
-
-  return domain
+  return Schema(attrs)

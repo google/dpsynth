@@ -24,7 +24,7 @@ for more information.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 import dataclasses
 import io
 import math
@@ -74,12 +74,14 @@ class _EncodeColumns(beam.DoFn):
     for column, init in initializers.items():
       if isinstance(init, initialization.NumericalInitializerConfig):
         attr = init.attribute
-        lower, upper, gs = init.grid_spec
+        assert attr is not None
+        lower, upper, gs = init.grid_spec(attr)
         delta = (upper - lower) / (gs - 1)
         meta = dict(attribute=attr, lower=lower, upper=upper, delta=delta)
         self._specs.append((column, 'numerical', meta))
 
       elif isinstance(init, initialization.CategoricalInitializerConfig):
+        assert init.attribute is not None
         meta = {
             'lookup': init.attribute.lookup,
             'default': init.attribute.out_of_domain_index,
@@ -211,10 +213,10 @@ def run_from_summary(
   for column, init in initializers.items():
     sparse = sparse_stats[column]
     if isinstance(init, initialization.NumericalInitializer):
-      counts = _sparse_to_dense_numerical(sparse, init.config.grid_spec[2])
+      counts = _sparse_to_dense_numerical(sparse, init.grid_size)
       results[column] = init.from_summary(rng, counts)
     elif isinstance(init, initialization.CategoricalInitializer):
-      counts = _sparse_to_dense_categorical(sparse, init.config.attribute.size)
+      counts = _sparse_to_dense_categorical(sparse, init.attribute.size)
       results[column] = init.from_summary(rng, counts)
     elif isinstance(init, initialization.OpenSetInitializer):
       unique_values, value_counts = _sparse_to_openset(sparse)
@@ -530,13 +532,13 @@ class BeamTabularConfig(api.MechanismConfig):
 
   Usage::
 
-      config = data_generation_v3.TabularConfig(domains=domains)
-      beam_synth = BeamTabularConfig(config).configure(zcdp_rho=1.0)
+      config = data_generation_v3.TabularConfig()
+      beam_synth = BeamTabularConfig(config).configure(schema, zcdp_rho=1.0)
       result = beam_synth(rng, create_rows_fn)
 
   Attributes:
-    synthesizer: The wrapped local-mode TabularConfig. Supplies the domain,
-      sub-mechanisms, constraints, and privacy calibration.
+    synthesizer: The wrapped local-mode TabularConfig. Supplies the
+      sub-mechanisms and initialization parameters.
     temp_location: Directory used to shuttle small singleton results between the
       pipeline and the driver. Must be readable and writable by all workers --
       i.e. a shared distributed filesystem for distributed runners. Defaults to
@@ -544,7 +546,9 @@ class BeamTabularConfig(api.MechanismConfig):
     pipeline_options: Optional Beam pipeline options applied to both passes.
   """
 
-  synthesizer: data_generation_v3.TabularConfig
+  synthesizer: data_generation_v3.TabularConfig = dataclasses.field(
+      default_factory=data_generation_v3.TabularConfig
+  )
   temp_location: str | None = None
   pipeline_options: beam.options.pipeline_options.PipelineOptions | None = None
 
@@ -555,11 +559,25 @@ class BeamTabularConfig(api.MechanismConfig):
           ' method.'
       )
 
+  @property
+  def domains(
+      self,
+  ) -> domain.Schema | Mapping[str, domain.AttributeType] | None:
+    return self.synthesizer.domains
+
   def configure(
-      self, *, zcdp_rho, delta=0, max_records_per_user=1
+      self,
+      schema: domain.Schema | Mapping[str, domain.AttributeType] | None = None,
+      *,
+      zcdp_rho: float,
+      delta: float = 0.0,
+      max_records_per_user: int = 1,
   ) -> BeamTabularMechanism:
     """Returns a copy whose synthesizer is configured with the given budget."""
+    if schema is None:
+      schema = self.domains
     synthesizer = self.synthesizer.configure(
+        schema,
         zcdp_rho=zcdp_rho,
         delta=delta,
         max_records_per_user=max_records_per_user,
