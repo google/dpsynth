@@ -374,30 +374,39 @@ class MaxRecordsPerUserTest(parameterized.TestCase):
 
   def test_configure_propagates_k_to_submechanisms(self):
     k = 5
-    config = TabularConfig(domains=self._categorical_domains())
-    calibrated = config.configure(zcdp_rho=100.0, max_records_per_user=k)
+    config = TabularConfig()
+    calibrated = config.configure(
+        self._categorical_domains(), zcdp_rho=100.0, max_records_per_user=k
+    )
     self.assertEqual(calibrated.max_records_per_user, k)
     self.assertEqual(calibrated.base_mechanism.max_records_per_user, k)
 
   def test_dp_event_invariant_to_k(self):
-    config = TabularConfig(domains=self._categorical_domains())
-    calibrated1 = config.configure(zcdp_rho=100.0)
-    calibrated2 = config.configure(zcdp_rho=100.0, max_records_per_user=5)
+    config = TabularConfig()
+    domains = self._categorical_domains()
+    calibrated1 = config.configure(domains, zcdp_rho=100.0)
+    calibrated2 = config.configure(
+        domains, zcdp_rho=100.0, max_records_per_user=5
+    )
     self.assertEqual(repr(calibrated1.dp_event), repr(calibrated2.dp_event))
 
   def test_end_to_end_with_k(self):
     df = pd.DataFrame({'A': ['a', 'b', 'c'], 'B': [1.0, 5.0, 10.0]})
-    config = TabularConfig(domains=self._categorical_domains())
-    calibrated = config.configure(zcdp_rho=100.0, max_records_per_user=3)
+    config = TabularConfig()
+    calibrated = config.configure(
+        self._categorical_domains(), zcdp_rho=100.0, max_records_per_user=3
+    )
     synthetic_df = calibrated(np.random.default_rng(0), df).synthetic_data
     self.assertListEqual(synthetic_df.columns.tolist(), ['A', 'B'])
 
   def test_open_set_with_k_supported(self):
     df = pd.DataFrame({'A': ['a', 'b', 'c', 'a', 'b', 'a'] * 5})
     domains = {'A': domain.OpenSetCategoricalAttribute()}
-    base = TabularConfig(domains=domains).configure(zcdp_rho=100.0, delta=1e-5)
-    config = TabularConfig(domains=domains)
-    mech = config.configure(zcdp_rho=100.0, delta=1e-5, max_records_per_user=3)
+    base = TabularConfig().configure(domains, zcdp_rho=100.0, delta=1e-5)
+    config = TabularConfig()
+    mech = config.configure(
+        domains, zcdp_rho=100.0, delta=1e-5, max_records_per_user=3
+    )
     # Accounting is byte-identical across k; only the injected noise scales.
     self.assertEqual(repr(mech.dp_event), repr(base.dp_event))
     synthetic_df = mech(np.random.default_rng(0), df).synthetic_data
@@ -406,16 +415,20 @@ class MaxRecordsPerUserTest(parameterized.TestCase):
   def test_custom_initializers_inherit_k(self):
     domains = self._categorical_domains()
     inits = data_generation_v3.create_initializers(domains, 32)
-    config = TabularConfig(domains=domains, initializers=inits)
-    calibrated = config.configure(zcdp_rho=100.0, max_records_per_user=2)
-    for init in calibrated.initializers.values():
+    calibrated = {
+        col: init.configure(domains[col], zcdp_rho=50.0, max_records_per_user=2)
+        for col, init in inits.items()
+    }
+    for init in calibrated.values():
       self.assertEqual(init.max_records_per_user, 2)
 
   @parameterized.named_parameters(('zero', 0), ('negative', -3))
   def test_invalid_k_raises(self, k):
-    config = TabularConfig(domains=self._categorical_domains())
+    config = TabularConfig()
     with self.assertRaises(Exception):
-      _ = config.configure(zcdp_rho=100.0, max_records_per_user=k)
+      _ = config.configure(
+          self._categorical_domains(), zcdp_rho=100.0, max_records_per_user=k
+      )
 
   def test_poisson_calibrate_with_categorical_domains_and_gdp_mech(self):
     domains = {
@@ -423,10 +436,10 @@ class MaxRecordsPerUserTest(parameterized.TestCase):
         'B': domain.CategoricalAttribute(possible_values=['x', 'y', 'z']),
     }
     config = TabularConfig(
-        domains=domains,
         discrete_mechanism=discrete_mechanisms.IndependentConfig(),
     )
     mechanism = config.calibrate(
+        domains,
         epsilon=1.0,
         delta=1e-6,
         poisson_sampling_prob=0.1,
@@ -439,9 +452,10 @@ class MaxRecordsPerUserTest(parameterized.TestCase):
         'B': domain.NumericalAttribute(min_value=0, max_value=10),
         'C': domain.OpenSetCategoricalAttribute(),
     }
-    config = TabularConfig(domains=domains)
+    config = TabularConfig()
     with self.assertRaises(dp_accounting.UnsupportedEventError):
       _ = config.calibrate(
+          domains,
           epsilon=1.0,
           delta=1e-6,
           poisson_sampling_prob=0.1,
@@ -457,10 +471,6 @@ class MaxRecordsPerUserTest(parameterized.TestCase):
     self.assertIsNotNone(mechanism)
     self.assertEqual(mechanism.total_count_sigma, 0.0)
 
-
-if __name__ == '__main__':
-  absltest.main()
-
   def test_tabular_synthesizer_deprecated(self):
     with self.assertWarnsRegex(
         DeprecationWarning,
@@ -468,3 +478,7 @@ if __name__ == '__main__':
         'and TabularMechanism for the calibrated runnable mechanism.',
     ):
       data_generation_v3.TabularSynthesizer(domains={})
+
+
+if __name__ == '__main__':
+  absltest.main()

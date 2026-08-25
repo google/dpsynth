@@ -185,7 +185,7 @@ class MSTConfig(api.MechanismConfig):
         self.maximum_marginal_size,
     )
 
-  def configure(self, *, zcdp_rho, delta=0, max_records_per_user=1):
+  def configure(self, _=None, *, zcdp_rho, delta=0, max_records_per_user=1):
     api.validate_max_records_per_user(max_records_per_user)
     return MST(
         config=self,

@@ -136,14 +136,12 @@ class SynthesizerTest(absltest.TestCase):
     household_inits = {
         'income': (
             initialization.NumericalInitializerConfig(
-                name='income',
                 num_partitions=16,
                 attribute=domain.NumericalAttribute(min_value=0, max_value=100),
             ).configure(zcdp_rho=0.01)
         ),
         'region': (
             initialization.CategoricalInitializerConfig(
-                name='region',
                 attribute=domain.CategoricalAttribute(
                     possible_values=['U', 'R']
                 ),
@@ -153,7 +151,6 @@ class SynthesizerTest(absltest.TestCase):
     person_inits = {
         'age': (
             initialization.NumericalInitializerConfig(
-                name='age',
                 num_partitions=16,
                 attribute=domain.NumericalAttribute(min_value=0, max_value=100),
             ).configure(zcdp_rho=0.01)
@@ -173,8 +170,8 @@ class SynthesizerTest(absltest.TestCase):
     }
 
     mech = synthesizer.MultiTableMechanism(
-        domains={},
-        foreign_keys=(),
+        config=synthesizer.MultiTableConfig(),
+        schema=rel_domain.RelationalSchema(tables={}, foreign_keys=()),
         calibrated_discrete_mechanisms=calibrated_discrete_mechanisms,
         calibrated_initializers=calibrated_initializers,
         total_count_sigma=5.0,
@@ -259,25 +256,27 @@ class SynthesizerTest(absltest.TestCase):
     self.assertEmpty(sensitivities)
 
   def test_configure_single_table_raises(self):
+    schema = rel_domain.RelationalSchema(
+        tables={'Household': {'income': domain.NumericalAttribute(0, 100)}},
+        foreign_keys=(),
+    )
     with self.assertRaisesRegex(
-        ValueError, 'requires at least two tables in domains'
+        ValueError, 'requires at least two tables in schema'
     ):
-      synthesizer.MultiTableConfig(
-          domains={'Household': {'income': domain.NumericalAttribute(0, 100)}},
-          foreign_keys=(),
-      )
+      synthesizer.MultiTableConfig().configure(schema, zcdp_rho=0.5)
 
   def test_configure_empty_foreign_keys_raises(self):
+    schema = rel_domain.RelationalSchema(
+        tables={
+            'Household': {'income': domain.NumericalAttribute(0, 100)},
+            'Person': {'age': domain.NumericalAttribute(0, 100)},
+        },
+        foreign_keys=(),
+    )
     with self.assertRaisesRegex(
         ValueError, 'requires at least one foreign key relationship'
     ):
-      synthesizer.MultiTableConfig(
-          domains={
-              'Household': {'income': domain.NumericalAttribute(0, 100)},
-              'Person': {'age': domain.NumericalAttribute(0, 100)},
-          },
-          foreign_keys=(),
-      )
+      synthesizer.MultiTableConfig().configure(schema, zcdp_rho=0.5)
 
   def test_configure_end_to_end_3_tier(self):
     domains = {
@@ -309,9 +308,10 @@ class SynthesizerTest(absltest.TestCase):
             max_children_per_parent=2,
         ),
     ]
+    schema = rel_domain.RelationalSchema(
+        tables=domains, foreign_keys=foreign_keys
+    )
     config = synthesizer.MultiTableConfig(
-        domains=domains,
-        foreign_keys=foreign_keys,
         init_budget_fraction=0.1,
     )
 
@@ -319,7 +319,7 @@ class SynthesizerTest(absltest.TestCase):
     # init_rho = 0.1 * 0.6 = 0.06 => per_col_rho = 0.01.
     # total_count_sigma = sqrt(0.5 / 0.01) = sqrt(50).
     # discrete_rho = 0.6 - 0.06 = 0.54 => per_link_rho = 0.27 across 2 links.
-    mech = config.configure(zcdp_rho=0.6, max_records_per_user=1)
+    mech = config.configure(schema, zcdp_rho=0.6, max_records_per_user=1)
 
     self.assertIsInstance(mech, synthesizer.MultiTableMechanism)
     self.assertAlmostEqual(mech.total_count_sigma, math.sqrt(50.0))
@@ -353,12 +353,12 @@ class SynthesizerTest(absltest.TestCase):
             max_children_per_parent=3,
         ),
     ]
-    config = synthesizer.MultiTableConfig(
-        domains=domains,
-        foreign_keys=foreign_keys,
+    schema = rel_domain.RelationalSchema(
+        tables=domains, foreign_keys=foreign_keys
     )
+    config = synthesizer.MultiTableConfig()
     # Calibrate solves for optimal zcdp_rho using PLD / RDP accountant.
-    mech = config.calibrate(epsilon=1.0, delta=1e-5)
+    mech = config.calibrate(schema, epsilon=1.0, delta=1e-5)
     self.assertIsInstance(mech, synthesizer.MultiTableMechanism)
     self.assertGreater(mech.total_count_sigma, 0.0)
     self.assertLen(mech.calibrated_discrete_mechanisms, 1)
@@ -377,21 +377,20 @@ class SynthesizerTest(absltest.TestCase):
             max_children_per_parent=3,
         ),
     ]
+    schema = rel_domain.RelationalSchema(
+        tables=domains, foreign_keys=foreign_keys
+    )
 
     with self.subTest('negative_zcdp_rho'):
-      config = synthesizer.MultiTableConfig(
-          domains=domains, foreign_keys=foreign_keys
-      )
+      config = synthesizer.MultiTableConfig()
       with self.assertRaisesRegex(ValueError, 'zcdp_rho must be positive'):
-        config.configure(zcdp_rho=-0.1)
+        config.configure(schema, zcdp_rho=-0.1)
 
     with self.subTest('invalid_init_budget_fraction_above_one'):
       with self.assertRaisesRegex(
           ValueError, 'init_budget_fraction must be strictly in'
       ):
         synthesizer.MultiTableConfig(
-            domains=domains,
-            foreign_keys=foreign_keys,
             init_budget_fraction=1.5,
         )
 
@@ -400,16 +399,12 @@ class SynthesizerTest(absltest.TestCase):
           ValueError, 'init_budget_fraction must be strictly in'
       ):
         synthesizer.MultiTableConfig(
-            domains=domains,
-            foreign_keys=foreign_keys,
             init_budget_fraction=0.0,
         )
 
     with self.subTest('invalid_numerical_bins'):
       with self.assertRaisesRegex(ValueError, 'numerical_bins must be >= 1'):
         synthesizer.MultiTableConfig(
-            domains=domains,
-            foreign_keys=foreign_keys,
             numerical_bins=0,
         )
 
@@ -418,8 +413,6 @@ class SynthesizerTest(absltest.TestCase):
           ValueError, 'num_permutation_slots must be >= 1'
       ):
         synthesizer.MultiTableConfig(
-            domains=domains,
-            foreign_keys=foreign_keys,
             num_permutation_slots=0,
         )
 
@@ -428,8 +421,6 @@ class SynthesizerTest(absltest.TestCase):
           ValueError, 'Unsupported exploration_strategy'
       ):
         synthesizer.MultiTableConfig(
-            domains=domains,
-            foreign_keys=foreign_keys,
             exploration_strategy='unsupported_strategy',
         )
 
@@ -439,139 +430,126 @@ class SynthesizerTest(absltest.TestCase):
           'discrete_mechanism must be an instance of MechanismConfig',
       ):
         synthesizer.MultiTableConfig(
-            domains=domains,
-            foreign_keys=foreign_keys,
             discrete_mechanism='not_a_config',  # pyrefly: ignore[bad-argument-type]
         )
 
     with self.subTest('dot_in_table_name'):
+      invalid_schema = rel_domain.RelationalSchema(
+          tables={
+              'House.hold': {'income': domain.NumericalAttribute(0, 100)},
+              'Person': {'age': domain.NumericalAttribute(0, 100)},
+          },
+          foreign_keys=[
+              rel_domain.ForeignKeyRelation(
+                  parent_table='House.hold',
+                  parent_primary_key='hid',
+                  child_table='Person',
+                  child_foreign_key='hid',
+                  max_children_per_parent=2,
+              )
+          ],
+      )
       with self.assertRaisesRegex(ValueError, "must not contain '.'"):
-        synthesizer.MultiTableConfig(
-            domains={
-                'House.hold': {'income': domain.NumericalAttribute(0, 100)},
-                'Person': {'age': domain.NumericalAttribute(0, 100)},
-            },
-            foreign_keys=[
-                rel_domain.ForeignKeyRelation(
-                    parent_table='House.hold',
-                    parent_primary_key='hid',
-                    child_table='Person',
-                    child_foreign_key='hid',
-                    max_children_per_parent=2,
-                )
-            ],
-        )
+        synthesizer.MultiTableConfig().configure(invalid_schema, zcdp_rho=0.5)
 
     with self.subTest('dot_in_column_name'):
+      invalid_schema = rel_domain.RelationalSchema(
+          tables={
+              'Household': {'inc.ome': domain.NumericalAttribute(0, 100)},
+              'Person': {'age': domain.NumericalAttribute(0, 100)},
+          },
+          foreign_keys=foreign_keys,
+      )
       with self.assertRaisesRegex(ValueError, "must not contain '.'"):
-        synthesizer.MultiTableConfig(
-            domains={
-                'Household': {'inc.ome': domain.NumericalAttribute(0, 100)},
-                'Person': {'age': domain.NumericalAttribute(0, 100)},
-            },
-            foreign_keys=foreign_keys,
-        )
+        synthesizer.MultiTableConfig().configure(invalid_schema, zcdp_rho=0.5)
 
     with self.subTest('reserved_column_name_group_size'):
+      invalid_schema = rel_domain.RelationalSchema(
+          tables={
+              'Household': {'group_size': domain.NumericalAttribute(0, 100)},
+              'Person': {'age': domain.NumericalAttribute(0, 100)},
+          },
+          foreign_keys=foreign_keys,
+      )
       with self.assertRaisesRegex(
           ValueError, 'reserved for relational exploration'
       ):
-        synthesizer.MultiTableConfig(
-            domains={
-                'Household': {'group_size': domain.NumericalAttribute(0, 100)},
-                'Person': {'age': domain.NumericalAttribute(0, 100)},
-            },
-            foreign_keys=foreign_keys,
-        )
+        synthesizer.MultiTableConfig().configure(invalid_schema, zcdp_rho=0.5)
 
     with self.subTest('reserved_column_name_slot_prefix'):
+      invalid_schema = rel_domain.RelationalSchema(
+          tables={
+              'Household': {'slot_1': domain.NumericalAttribute(0, 100)},
+              'Person': {'age': domain.NumericalAttribute(0, 100)},
+          },
+          foreign_keys=foreign_keys,
+      )
       with self.assertRaisesRegex(ValueError, 'reserved for permutation slots'):
-        synthesizer.MultiTableConfig(
-            domains={
-                'Household': {'slot_1': domain.NumericalAttribute(0, 100)},
-                'Person': {'age': domain.NumericalAttribute(0, 100)},
-            },
-            foreign_keys=foreign_keys,
-        )
+        synthesizer.MultiTableConfig().configure(invalid_schema, zcdp_rho=0.5)
 
     with self.subTest('empty_table_schema'):
+      invalid_schema = rel_domain.RelationalSchema(
+          tables={
+              'Household': {},
+              'Person': {'age': domain.NumericalAttribute(0, 100)},
+          },
+          foreign_keys=foreign_keys,
+      )
       with self.assertRaisesRegex(
           ValueError, 'schema in domains cannot be empty'
       ):
-        synthesizer.MultiTableConfig(
-            domains={
-                'Household': {},
-                'Person': {'age': domain.NumericalAttribute(0, 100)},
-            },
-            foreign_keys=foreign_keys,
-        )
+        synthesizer.MultiTableConfig().configure(invalid_schema, zcdp_rho=0.5)
 
     with self.subTest('unsupported_attribute_type'):
+      invalid_schema = rel_domain.RelationalSchema(
+          tables={
+              'Household': {'text': domain.FreeFormTextAttribute()},
+              'Person': {'age': domain.NumericalAttribute(0, 100)},
+          },
+          foreign_keys=foreign_keys,
+      )
       with self.assertRaisesRegex(ValueError, 'unsupported attribute type'):
-        synthesizer.MultiTableConfig(
-            domains={
-                'Household': {'text': domain.FreeFormTextAttribute()},
-                'Person': {'age': domain.NumericalAttribute(0, 100)},
-            },
-            foreign_keys=foreign_keys,
-        )
+        synthesizer.MultiTableConfig().configure(invalid_schema, zcdp_rho=0.5)
 
     with self.subTest('multi_root_forest_raises'):
+      invalid_schema = rel_domain.RelationalSchema(
+          tables={
+              'Household': {'income': domain.NumericalAttribute(0, 100)},
+              'Person': {'age': domain.NumericalAttribute(0, 100)},
+              'Unlinked': {'type': domain.CategoricalAttribute(['A', 'B'])},
+          },
+          foreign_keys=foreign_keys,
+      )
       with self.assertRaisesRegex(ValueError, 'expects a single root table'):
-        synthesizer.MultiTableConfig(
-            domains={
-                'Household': {'income': domain.NumericalAttribute(0, 100)},
-                'Person': {'age': domain.NumericalAttribute(0, 100)},
-                'Unlinked': {'type': domain.CategoricalAttribute(['A', 'B'])},
-            },
-            foreign_keys=foreign_keys,
-        )
+        synthesizer.MultiTableConfig().configure(invalid_schema, zcdp_rho=0.5)
 
     with self.subTest('pk_in_domain_schema_raises'):
-      with self.assertRaisesRegex(ValueError, 'must not be in domains'):
-        synthesizer.MultiTableConfig(
-            domains={
-                'Household': {
-                    'income': domain.NumericalAttribute(0, 100),
-                    'hid': domain.CategoricalAttribute(['H1', 'H2']),
-                },
-                'Person': {'age': domain.NumericalAttribute(0, 100)},
-            },
-            foreign_keys=foreign_keys,
-        )
+      invalid_schema = rel_domain.RelationalSchema(
+          tables={
+              'Household': {
+                  'income': domain.NumericalAttribute(0, 100),
+                  'hid': domain.CategoricalAttribute(['H1', 'H2']),
+              },
+              'Person': {'age': domain.NumericalAttribute(0, 100)},
+          },
+          foreign_keys=foreign_keys,
+      )
+      with self.assertRaisesRegex(ValueError, 'must not be in'):
+        synthesizer.MultiTableConfig().configure(invalid_schema, zcdp_rho=0.5)
 
     with self.subTest('fk_in_domain_schema_raises'):
-      with self.assertRaisesRegex(ValueError, 'must not be in domains'):
-        synthesizer.MultiTableConfig(
-            domains={
-                'Household': {'income': domain.NumericalAttribute(0, 100)},
-                'Person': {
-                    'age': domain.NumericalAttribute(0, 100),
-                    'hid': domain.CategoricalAttribute(['H1', 'H2']),
-                },
-            },
-            foreign_keys=foreign_keys,
-        )
-
-    with self.subTest('custom_initializers_mismatched_tables'):
-      with self.assertRaisesRegex(ValueError, 'do not match domains tables'):
-        synthesizer.MultiTableConfig(
-            domains=domains,
-            foreign_keys=foreign_keys,
-            initializers={'Household': {}},
-        )
-
-    with self.subTest('custom_initializers_mismatched_columns'):
-      mock_cfg = unittest.mock.MagicMock(spec=api.MechanismConfig)
-      with self.assertRaisesRegex(ValueError, 'do not match domains columns'):
-        synthesizer.MultiTableConfig(
-            domains=domains,
-            foreign_keys=foreign_keys,
-            initializers={
-                'Household': {'wrong_col': mock_cfg},
-                'Person': {'age': mock_cfg},
-            },
-        )
+      invalid_schema = rel_domain.RelationalSchema(
+          tables={
+              'Household': {'income': domain.NumericalAttribute(0, 100)},
+              'Person': {
+                  'age': domain.NumericalAttribute(0, 100),
+                  'hid': domain.CategoricalAttribute(['H1', 'H2']),
+              },
+          },
+          foreign_keys=foreign_keys,
+      )
+      with self.assertRaisesRegex(ValueError, 'must not be in'):
+        synthesizer.MultiTableConfig().configure(invalid_schema, zcdp_rho=0.5)
 
   def test_validate_input_table_columns_success(self):
     domains = {
@@ -738,7 +716,6 @@ class SynthesizerTest(absltest.TestCase):
 
     # 1. Numerical initializer on weighted data
     num_init = initialization.NumericalInitializerConfig(
-        name='income',
         num_partitions=8,
         attribute=domain.NumericalAttribute(min_value=0.0, max_value=100.0),
     ).configure(zcdp_rho=0.5)
@@ -750,11 +727,10 @@ class SynthesizerTest(absltest.TestCase):
     self.assertIsNotNone(res_num.bin_edges)
     self.assertIsNotNone(res_num.categorical_attribute)
     self.assertIsNotNone(res_num.measurement)
-    self.assertEqual(res_num.measurement.clique, ('income',))
+    self.assertEqual(res_num.measurement.clique, ())
 
     # 2. Categorical initializer on weighted data
     cat_init = initialization.CategoricalInitializerConfig(
-        name='gender',
         attribute=domain.CategoricalAttribute(possible_values=['M', 'F']),
     ).configure(zcdp_rho=0.5)
     data_cat = np.array(['M', 'M', 'F', 'F'])
@@ -764,11 +740,10 @@ class SynthesizerTest(absltest.TestCase):
     )
     self.assertIsNone(res_cat.bin_edges)
     self.assertEqual(res_cat.categorical_attribute.size, 2)
-    self.assertEqual(res_cat.measurement.clique, ('gender',))
+    self.assertEqual(res_cat.measurement.clique, ())
 
     # 3. Open-set initializer on weighted strings (including mixed-type data)
     open_init = initialization.OpenSetInitializerConfig(
-        name='tags',
         attribute=domain.OpenSetCategoricalAttribute(),
         min_count=1,
     ).configure(zcdp_rho=0.5, delta=1e-3)
@@ -792,7 +767,6 @@ class SynthesizerTest(absltest.TestCase):
         'Household': {
             'income': (
                 initialization.NumericalInitializerConfig(
-                    name='income',
                     num_partitions=8,
                     attribute=domain.NumericalAttribute(
                         min_value=0.0, max_value=100.0
@@ -801,7 +775,6 @@ class SynthesizerTest(absltest.TestCase):
             ),
             'region': (
                 initialization.CategoricalInitializerConfig(
-                    name='region',
                     attribute=domain.CategoricalAttribute(
                         possible_values=['U', 'R']
                     ),
@@ -811,7 +784,6 @@ class SynthesizerTest(absltest.TestCase):
         'Person': {
             'age': (
                 initialization.NumericalInitializerConfig(
-                    name='age',
                     num_partitions=8,
                     attribute=domain.NumericalAttribute(
                         min_value=0, max_value=100
@@ -960,12 +932,13 @@ class SynthesizerTest(absltest.TestCase):
             max_children_per_parent=3,
         ),
     ]
+    schema = rel_domain.RelationalSchema(
+        tables=domains, foreign_keys=foreign_keys
+    )
     config = synthesizer.MultiTableConfig(
-        domains=domains,
-        foreign_keys=foreign_keys,
         init_budget_fraction=0.2,
     )
-    mech = config.configure(zcdp_rho=0.5, max_records_per_user=1)
+    mech = config.configure(schema, zcdp_rho=0.5, max_records_per_user=1)
     rng = np.random.default_rng(42)
 
     data = {
@@ -1216,18 +1189,17 @@ class SynthesizerTest(absltest.TestCase):
             max_children_per_parent=2,
         ),
     ]
+    schema = rel_domain.RelationalSchema(tables=domains, foreign_keys=fks)
     hierarchy = rel_domain.topological_sort_hierarchy(
         tables=list(domains.keys()), foreign_keys=fks
     )
     cfg = synthesizer.MultiTableConfig(
-        domains=domains,
-        foreign_keys=fks,
         discrete_mechanism=discrete_mechanisms.AIMConfig(
             pgm_iters=10, max_rounds=2
         ),
         num_permutation_slots=2,
     )
-    mech = cfg.configure(zcdp_rho=0.5, max_records_per_user=1)
+    mech = cfg.configure(schema, zcdp_rho=0.5, max_records_per_user=1)
 
     preprocessed = synthesizer._run_table_preprocessing(
         mechanism=mech,
@@ -1307,18 +1279,17 @@ class SynthesizerTest(absltest.TestCase):
             max_children_per_parent=2,
         ),
     ]
+    schema = rel_domain.RelationalSchema(tables=domains, foreign_keys=fks)
     hierarchy = rel_domain.topological_sort_hierarchy(
         tables=list(domains.keys()), foreign_keys=fks
     )
     cfg = synthesizer.MultiTableConfig(
-        domains=domains,
-        foreign_keys=fks,
         discrete_mechanism=discrete_mechanisms.AIMConfig(
             pgm_iters=10, max_rounds=2
         ),
         num_permutation_slots=2,
     )
-    mech = cfg.configure(zcdp_rho=0.5, max_records_per_user=1)
+    mech = cfg.configure(schema, zcdp_rho=0.5, max_records_per_user=1)
 
     preprocessed = synthesizer._run_table_preprocessing(
         mechanism=mech,
@@ -1612,9 +1583,8 @@ class SynthesizerTest(absltest.TestCase):
         )
     ]
 
+    schema = rel_domain.RelationalSchema(tables=domains, foreign_keys=fks)
     cfg = synthesizer.MultiTableConfig(
-        domains=domains,
-        foreign_keys=fks,
         discrete_mechanism=discrete_mechanisms.AIMConfig(
             max_rounds=2,
             pgm_iters=50,
@@ -1623,6 +1593,7 @@ class SynthesizerTest(absltest.TestCase):
         init_budget_fraction=0.2,
     )
     mechanism = cfg.configure(
+        schema,
         zcdp_rho=1.0,
     )
 
@@ -1691,9 +1662,8 @@ class SynthesizerTest(absltest.TestCase):
         )
     ]
 
+    schema = rel_domain.RelationalSchema(tables=domains, foreign_keys=fks)
     cfg = synthesizer.MultiTableConfig(
-        domains=domains,
-        foreign_keys=fks,
         discrete_mechanism=discrete_mechanisms.AIMConfig(
             max_rounds=2,
             pgm_iters=50,
@@ -1703,6 +1673,7 @@ class SynthesizerTest(absltest.TestCase):
         exploration_strategy='size_sliced',
     )
     mechanism = cfg.configure(
+        schema,
         zcdp_rho=1.0,
     )
 

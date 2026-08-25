@@ -64,13 +64,14 @@ class DiscreteConfig(api.MechanismConfig):
       raise ValueError('Inner mechanism does not support supporting_cliques.')
     return self.mechanism.supporting_cliques(domain)
 
-  def configure(self, *, zcdp_rho, delta=0, max_records_per_user=1):
+  def configure(self, _=None, *, zcdp_rho, delta=0, max_records_per_user=1):
     """Configures the synthesizer with a zCDP budget."""
     api.validate_max_records_per_user(max_records_per_user)
 
     one_way_rho = zcdp_rho * self.one_way_budget_fraction
     remaining_rho = zcdp_rho - one_way_rho
     inner = self.mechanism.configure(
+        _,
         zcdp_rho=remaining_rho,
         delta=delta,
         max_records_per_user=max_records_per_user,

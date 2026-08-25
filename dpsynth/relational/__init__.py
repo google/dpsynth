@@ -17,6 +17,7 @@
 # pylint: disable=g-importing-member
 
 from dpsynth.relational.domain import ForeignKeyRelation
+from dpsynth.relational.domain import RelationalSchema
 from dpsynth.relational.synthesizer import MultiDataGenerationResult
 from dpsynth.relational.synthesizer import MultiTableConfig
 from dpsynth.relational.synthesizer import MultiTableMechanism
@@ -26,4 +27,5 @@ __all__ = [
     'MultiDataGenerationResult',
     'MultiTableConfig',
     'MultiTableMechanism',
+    'RelationalSchema',
 ]

@@ -105,10 +105,9 @@ def main(_):
     case _:
       raise ValueError(f'Unknown mechanism: {_MECHANISM.value}')
 
-  mechanism = dpsynth.TabularSynthesizer(
-      domains=attribute_domains,
+  mechanism = dpsynth.TabularConfig(
       discrete_mechanism=mechanism_config,
-  ).calibrate(epsilon=_EPSILON.value, delta=_DELTA.value)
+  ).calibrate(attribute_domains, epsilon=_EPSILON.value, delta=_DELTA.value)
   result = mechanism(np.random.default_rng(_SEED.value), df)  # pyrefly: ignore[bad-argument-type]
   result.synthetic_data.to_csv(_OUTPUT_PATH.value, index=False)
 

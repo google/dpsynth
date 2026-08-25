@@ -74,7 +74,7 @@ class SWIFTConfig(api.MechanismConfig):
         domain, self.workload, self.max_marginal_size
     )
 
-  def configure(self, *, zcdp_rho, delta=0, max_records_per_user=1):
+  def configure(self, _=None, *, zcdp_rho, delta=0, max_records_per_user=1):
     api.validate_max_records_per_user(max_records_per_user)
     return SWIFT(
         config=self,

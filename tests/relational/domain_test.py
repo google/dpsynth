@@ -154,22 +154,23 @@ class DomainTest(absltest.TestCase):
             'max_children_per_parent': 3,
         }],
     }
-    table_domains, fks = domain.from_dict(config)
-    self.assertIn('households', table_domains)
-    self.assertIn('persons', table_domains)
+    schema = domain.from_dict(config)
+    self.assertIsInstance(schema, domain.RelationalSchema)
+    self.assertIn('households', schema.tables)
+    self.assertIn('persons', schema.tables)
     self.assertIsInstance(
-        table_domains['households']['income'], base_domain.NumericalAttribute
+        schema.tables['households']['income'], base_domain.NumericalAttribute
     )
     self.assertIsInstance(
-        table_domains['households']['region'],
+        schema.tables['households']['region'],
         base_domain.CategoricalAttribute,
     )
-    self.assertLen(fks, 1)
-    self.assertEqual(fks[0].parent_table, 'households')
-    self.assertEqual(fks[0].parent_primary_key, 'household_id')
-    self.assertEqual(fks[0].child_table, 'persons')
-    self.assertEqual(fks[0].child_foreign_key, 'household_id')
-    self.assertEqual(fks[0].max_children_per_parent, 3)
+    self.assertLen(schema.foreign_keys, 1)
+    self.assertEqual(schema.foreign_keys[0].parent_table, 'households')
+    self.assertEqual(schema.foreign_keys[0].parent_primary_key, 'household_id')
+    self.assertEqual(schema.foreign_keys[0].child_table, 'persons')
+    self.assertEqual(schema.foreign_keys[0].child_foreign_key, 'household_id')
+    self.assertEqual(schema.foreign_keys[0].max_children_per_parent, 3)
 
   def test_from_dict_missing_tables_block_raises_error(self):
     with self.assertRaisesRegex(ValueError, "'tables' block missing"):
@@ -241,21 +242,22 @@ class DomainTest(absltest.TestCase):
             max_children_per_parent: 4
         """)
     tmp_path = self.create_tempfile(content=yaml_content).full_path
-    table_domains, fks = domain.from_yaml_file(tmp_path)
-    self.assertIn('households', table_domains)
-    self.assertIn('persons', table_domains)
+    schema = domain.from_yaml_file(tmp_path)
+    self.assertIsInstance(schema, domain.RelationalSchema)
+    self.assertIn('households', schema.tables)
+    self.assertIn('persons', schema.tables)
     self.assertIsInstance(
-        table_domains['persons']['age'], base_domain.NumericalAttribute
+        schema.tables['persons']['age'], base_domain.NumericalAttribute
     )
     self.assertIsInstance(
-        table_domains['persons']['gender'], base_domain.CategoricalAttribute
+        schema.tables['persons']['gender'], base_domain.CategoricalAttribute
     )
-    self.assertLen(fks, 1)
-    self.assertEqual(fks[0].parent_table, 'households')
-    self.assertEqual(fks[0].parent_primary_key, 'hid')
-    self.assertEqual(fks[0].child_table, 'persons')
-    self.assertEqual(fks[0].child_foreign_key, 'hid')
-    self.assertEqual(fks[0].max_children_per_parent, 4)
+    self.assertLen(schema.foreign_keys, 1)
+    self.assertEqual(schema.foreign_keys[0].parent_table, 'households')
+    self.assertEqual(schema.foreign_keys[0].parent_primary_key, 'hid')
+    self.assertEqual(schema.foreign_keys[0].child_table, 'persons')
+    self.assertEqual(schema.foreign_keys[0].child_foreign_key, 'hid')
+    self.assertEqual(schema.foreign_keys[0].max_children_per_parent, 4)
 
   def test_to_dict_and_roundtrip(self):
     table_domains = {
@@ -295,16 +297,16 @@ class DomainTest(absltest.TestCase):
     )
 
     # Roundtrip verification
-    rt_domains, rt_fks = domain.from_dict(serialized)
+    rt_schema = domain.from_dict(serialized)
     self.assertEqual(
-        rt_domains['households']['income'].min_value,
+        rt_schema.tables['households']['income'].min_value,
         table_domains['households']['income'].min_value,
     )
     self.assertEqual(
-        rt_domains['persons']['gender'].possible_values,
+        rt_schema.tables['persons']['gender'].possible_values,
         table_domains['persons']['gender'].possible_values,
     )
-    self.assertEqual(rt_fks, fks)
+    self.assertEqual(list(rt_schema.foreign_keys), fks)
 
   def test_to_yaml_file_and_roundtrip(self):
     table_domains = {
@@ -332,13 +334,16 @@ class DomainTest(absltest.TestCase):
         )
     ]
     tmp_path = self.create_tempfile().full_path
-    domain.to_yaml_file(table_domains, fks, tmp_path)
+    schema = domain.RelationalSchema(tables=table_domains, foreign_keys=fks)
+    domain.to_yaml_file(schema, tmp_path)
 
-    rt_domains, rt_fks = domain.from_yaml_file(tmp_path)
-    self.assertIn('households', rt_domains)
-    self.assertIn('persons', rt_domains)
-    self.assertEqual(rt_domains['households']['income'].max_value, 150000.0)
-    self.assertEqual(rt_fks, fks)
+    rt_schema = domain.from_yaml_file(tmp_path)
+    self.assertIn('households', rt_schema.tables)
+    self.assertIn('persons', rt_schema.tables)
+    self.assertEqual(
+        rt_schema.tables['households']['income'].max_value, 150000.0
+    )
+    self.assertEqual(list(rt_schema.foreign_keys), fks)
 
   def test_to_dict_without_foreign_keys(self):
     table_domains = {
@@ -351,9 +356,9 @@ class DomainTest(absltest.TestCase):
     serialized = domain.to_dict(table_domains)
     self.assertIn('tables', serialized)
     self.assertNotIn('foreign_keys', serialized)
-    rt_domains, rt_fks = domain.from_dict(serialized)
-    self.assertIn('single_table', rt_domains)
-    self.assertEmpty(rt_fks)
+    rt_schema = domain.from_dict(serialized)
+    self.assertIn('single_table', rt_schema.tables)
+    self.assertEmpty(rt_schema.foreign_keys)
 
 
 if __name__ == '__main__':

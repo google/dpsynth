@@ -109,23 +109,21 @@ class CaliforniaCensusSynthesisIntegrationTest(parameterized.TestCase):
   def setUp(self):
     super().setUp()
     domain_path = _find_domain_path()
-    self.table_domains, self.foreign_keys = rel_domain.from_yaml_file(
-        str(domain_path)
-    )
+    self.schema = rel_domain.from_yaml_file(str(domain_path))
 
   def test_california_census_pipeline_e2e_mst(self):
     rng = np.random.default_rng(12345)
     data = _generate_mock_california_data(num_households=50, rng=rng)
 
     config = rel_synth.MultiTableConfig(
-        domains=self.table_domains,
-        foreign_keys=self.foreign_keys,
         discrete_mechanism=discrete_mechanisms.MSTConfig(pgm_iters=10),
         num_permutation_slots=1,
         exploration_strategy='empty_token',
         numerical_bins=2,
     )
-    calibrated_mechanism = config.calibrate(epsilon=3.2, delta=1e-6)
+    calibrated_mechanism = config.calibrate(
+        self.schema, epsilon=3.2, delta=1e-6
+    )
 
     # Synthesize
     result = calibrated_mechanism(rng=rng, data=data)
