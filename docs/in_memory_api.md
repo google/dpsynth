@@ -14,8 +14,9 @@ within a single machine's RAM.
 ## Python API: `dpsynth.TabularConfig`
 
 The primary entry point for in-memory synthesis is
-`dpsynth.TabularConfig`. It accepts a dictionary of attribute domains and
-mechanism options, is calibrated with a privacy budget to produce a
+`dpsynth.TabularConfig`. It configures the algorithm hyperparameters (e.g.
+discrete mechanism, numerical bin count, budget allocation), is calibrated
+with a dataset `dpsynth.Schema` and privacy budget to produce a
 `dpsynth.TabularMechanism`, and generates a fully synthetic, differentially
 private DataFrame matching the exact schema and data types of your input.
 
@@ -24,14 +25,24 @@ private DataFrame matching the exact schema and data types of your input.
 ```python
 import dpsynth
 from dpsynth import discrete_mechanisms
+from dpsynth import domain
 import numpy as np
 import pandas as pd
 
+# Define schema (or load from schema.to_yaml_file / domain.from_yaml_file)
+schema = dpsynth.Schema({
+    "age": domain.NumericalAttribute(min_value=18, max_value=90),
+    "workclass": domain.CategoricalAttribute(possible_values=["Private", "Gov", "Other"]),
+})
+
+# Reusable algorithm preset
 config = dpsynth.TabularConfig(
-    domains=domains,
     discrete_mechanism=discrete_mechanisms.MSTConfig(),
+    numerical_bins=32,
 )
-mechanism = config.calibrate(epsilon=1.0, delta=1e-6)
+
+# Calibrate with schema and privacy budget
+mechanism = config.calibrate(schema=schema, epsilon=1.0, delta=1e-6)
 result = mechanism(np.random.default_rng(), sensitive_df)
 synthetic_df = result.synthetic_data
 ```
@@ -40,22 +51,23 @@ synthetic_df = result.synthetic_data
 
 When initializing `dpsynth.TabularConfig`:
 
-*   `domains`: Mapping of column names to domain specifications
-    ([`CategoricalAttribute`, `NumericalAttribute`, or `OpenSetCategoricalAttribute`](data_and_terminology.md)).
-    Every key must exist in `data.columns`.
 *   `discrete_mechanism`: Configuration object specifying which DP synthesis
-    mechanism to run (e.g., `MSTConfig()`, `AIMConfig()`,
+    mechanism to run (e.g., `MSTConfig()`, `AIMConfig()`, `SWIFTConfig()`,
     `IndependentConfig()`).
 *   `numerical_bins`: Number of equal-frequency quantile buckets used to
     discretize continuous numerical columns (default: `32`).
 *   `init_budget_fraction`: Fraction of total `(epsilon, delta)` budget
     allocated for per-column initialization such as bounds computation and
     partition selection (default: `0.1`).
-*   `cross_attribute_constraints`: Optional sequence of constraints to enforce
-    on generated data.
+*   `cross_attribute_constraints`: Optional sequence of `Constraint` objects to
+    enforce on generated data.
+*   `schema`: Optional schema specification if binding the config to a specific
+    dataset at construction time rather than calibration time.
 
 When calling `config.calibrate(...)`:
 
+*   `schema`: The `dpsynth.Schema` (or mapping of column names to attribute
+    domains) defining the dataset columns and optional constraints.
 *   `epsilon`, `delta`: Total differential privacy budget parameters. Returns a
     runnable `TabularMechanism`.
 
@@ -64,7 +76,7 @@ When calling `config.calibrate(...)`:
 ## Standalone End-to-End Python Example
 
 Here is a complete, self-contained Python script demonstrating how to specify a
-domain, set up a `TabularConfig`, calibrate the mechanism with a privacy budget,
+schema, set up a `TabularConfig`, calibrate the mechanism with a privacy budget,
 load sensitive data, synthesize records, and print the first few rows.
 
 ```python
@@ -74,26 +86,25 @@ from dpsynth import domain
 import numpy as np
 import pandas as pd
 
-# 1. Domain Specification: Define the schema of the tabular dataset
-attribute_domains = {
-    "age": domain.NumericalAttribute(lower_bound=18, upper_bound=90),
+# 1. Schema Specification: Define the schema of the tabular dataset
+schema = dpsynth.Schema({
+    "age": domain.NumericalAttribute(min_value=18, max_value=90),
     "workclass": domain.CategoricalAttribute(
-        allowed_values=["Private", "Self-emp", "Gov", "Other"]
+        possible_values=["Private", "Self-emp", "Gov", "Other"]
     ),
     "education": domain.CategoricalAttribute(
-        allowed_values=["HS-grad", "Bachelors", "Masters", "PhD"]
+        possible_values=["HS-grad", "Bachelors", "Masters", "PhD"]
     ),
-}
+})
 
-# 2. Setup Config: Configure synthesizer with domain and mechanism choices
+# 2. Setup Config: Configure synthesizer hyperparameter preset
 config = dpsynth.TabularConfig(
-    domains=attribute_domains,
     discrete_mechanism=discrete_mechanisms.MSTConfig(),
     numerical_bins=16,
 )
 
-# 3. Calibrate Mechanism: Allocate privacy budget to get runnable mechanism
-mechanism = config.calibrate(epsilon=1.0, delta=1e-5)
+# 3. Calibrate Mechanism: Allocate privacy budget with schema to get runnable mechanism
+mechanism = config.calibrate(schema=schema, epsilon=1.0, delta=1e-5)
 
 # 4. Load Data: Create sensitive input DataFrame matching the domain schema
 sensitive_df = pd.DataFrame({

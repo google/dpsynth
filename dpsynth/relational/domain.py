@@ -189,10 +189,10 @@ def from_dict(
   for table_name, table_schema in config['tables'].items():
     if not isinstance(table_schema, Mapping):
       raise ValueError(f'Table schema for {table_name!r} must be a mapping.')
-    table_domains[table_name] = {
+    table_domains[table_name] = domain.Schema({
         col_name: _parse_attribute(table_name, col_name, spec)
         for col_name, spec in table_schema.items()
-    }
+    })
 
   foreign_keys: list[ForeignKeyRelation] = []
   for fk in config.get('foreign_keys', []):

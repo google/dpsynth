@@ -15,6 +15,7 @@
 import math
 
 from absl.testing import absltest
+from dpsynth import constraints
 from dpsynth import domain
 import numpy as np
 
@@ -210,6 +211,60 @@ class TestDomain(absltest.TestCase):
     domain.to_yaml_file(original_domain, temp_file.full_path)
     loaded_domain = domain.from_yaml_file(temp_file.full_path)
     self.assertEqual(loaded_domain, original_domain)
+
+  def test_to_from_yaml_string_roundtrip(self):
+    original_domain = {
+        'cat': domain.CategoricalAttribute(possible_values=['A', 'B']),
+        'num': domain.NumericalAttribute(min_value=0, max_value=10),
+    }
+    yaml_str = domain.to_yaml(original_domain)
+    loaded = domain.from_yaml(yaml_str)
+    self.assertEqual(loaded, original_domain)
+
+  def test_schema_mapping_interface(self):
+    attrs = {
+        'age': domain.NumericalAttribute(min_value=0, max_value=100),
+        'gender': domain.CategoricalAttribute(possible_values=['M', 'F']),
+    }
+    schema = domain.Schema(attributes=attrs)
+    self.assertEqual(schema['age'], attrs['age'])
+    self.assertIn('gender', schema)
+    self.assertNotIn('unknown', schema)
+    self.assertLen(schema, 2)
+    self.assertEqual(list(schema), ['age', 'gender'])
+    self.assertEqual(schema.get('age'), attrs['age'])
+    self.assertIsNone(schema.get('unknown'))
+
+  def test_schema_with_constraints_yaml_roundtrip(self):
+    attrs = {
+        'age': domain.NumericalAttribute(min_value=0, max_value=100),
+        'gender': domain.CategoricalAttribute(possible_values=['M', 'F']),
+    }
+    c = constraints.Constraint(
+        attribute_names=('gender',),
+        impossible_combinations=[('X',)],
+    )
+    schema = domain.Schema(attributes=attrs, constraints=(c,))
+    yaml_str = schema.to_yaml()
+    loaded = domain.Schema.from_yaml(yaml_str)
+    self.assertEqual(loaded.attributes, schema.attributes)
+    self.assertLen(loaded.constraints, 1)
+    self.assertEqual(loaded.constraints[0].attribute_names, c.attribute_names)
+    self.assertEqual(
+        loaded.constraints[0].impossible_combinations, c.impossible_combinations
+    )
+
+  def test_schema_from_legacy_yaml(self):
+    yaml_str = (
+        'age:\n  type: NumericalAttribute\n  min_value: 0\n  max_value: 100\n'
+    )
+    schema = domain.Schema.from_yaml(yaml_str)
+    self.assertIsInstance(schema, domain.Schema)
+    self.assertIn('age', schema)
+    self.assertEqual(
+        schema['age'], domain.NumericalAttribute(min_value=0, max_value=100)
+    )
+    self.assertEqual(schema.constraints, ())
 
 
 if __name__ == '__main__':
