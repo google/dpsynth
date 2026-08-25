@@ -17,6 +17,7 @@ from __future__ import annotations
 from absl.testing import absltest
 from absl.testing import parameterized
 import dp_accounting
+from dpsynth import constraints
 from dpsynth import data_generation_v3
 from dpsynth import discrete_mechanisms
 from dpsynth import domain
@@ -403,13 +404,54 @@ class MaxRecordsPerUserTest(parameterized.TestCase):
     synthetic_df = mech(np.random.default_rng(0), df).synthetic_data
     self.assertListEqual(synthetic_df.columns.tolist(), ['A'])
 
-  def test_custom_initializers_inherit_k(self):
+  def test_initializers_inherit_k(self):
     domains = self._categorical_domains()
-    inits = data_generation_v3.create_initializers(domains, 32)
-    config = TabularConfig(domains=domains, initializers=inits)
+    config = TabularConfig(domains=domains)
     calibrated = config.configure(zcdp_rho=100.0, max_records_per_user=2)
     for init in calibrated.initializers.values():
       self.assertEqual(init.max_records_per_user, 2)
+
+  def test_pure_preset_configure_and_calibrate_with_schema(self):
+    schema = domain.Schema({
+        'A': domain.CategoricalAttribute(possible_values=['a', 'b', 'c']),
+        'B': domain.NumericalAttribute(min_value=0, max_value=10),
+    })
+    df = pd.DataFrame({'A': ['a', 'b', 'c'], 'B': [1.0, 5.0, 10.0]})
+    rng = np.random.default_rng(0)
+
+    # Pure preset with no schema in constructor
+    preset = TabularConfig(numerical_bins=16)
+
+    # 1. configure(schema=...)
+    calibrated = preset.configure(schema=schema, zcdp_rho=100.0)
+    result = calibrated(rng, df).synthetic_data
+    self.assertListEqual(result.columns.tolist(), ['A', 'B'])
+
+    # 2. calibrate(schema=...)
+    calibrated2 = preset.calibrate(schema=schema, epsilon=1.0, delta=1e-5)
+    result2 = calibrated2(rng, df).synthetic_data
+    self.assertListEqual(result2.columns.tolist(), ['A', 'B'])
+
+  def test_configure_with_schema_constraints(self):
+    c = constraints.Constraint(
+        attribute_names=('A', 'B'),
+        possible_combinations=[('a', 'x'), ('b', 'y')],
+    )
+    schema = domain.Schema(
+        attributes={
+            'A': domain.CategoricalAttribute(possible_values=['a', 'b']),
+            'B': domain.CategoricalAttribute(possible_values=['x', 'y']),
+        },
+        constraints=(c,),
+    )
+    df = pd.DataFrame({'A': ['a', 'b'], 'B': ['x', 'y']})
+    rng = np.random.default_rng(0)
+
+    preset = TabularConfig()
+    calibrated = preset.configure(schema=schema, zcdp_rho=100.0)
+    synthetic_df = calibrated(rng, df).synthetic_data
+    for _, row in synthetic_df.iterrows():
+      self.assertIn((row['A'], row['B']), [('a', 'x'), ('b', 'y')])
 
   @parameterized.named_parameters(('zero', 0), ('negative', -3))
   def test_invalid_k_raises(self, k):

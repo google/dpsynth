@@ -138,6 +138,34 @@ class ConstraintToMbiTest(parameterized.TestCase):
     self.assertEqual(vals[0, 1], -np.inf)
     self.assertEqual(vals[2, 0], -np.inf)
 
+  def test_bind_schema_and_to_mbi_with_schema(self):
+    schema = domain.Schema({
+        'Software': self.software,
+        'OS': self.os,
+    })
+    c = constraints.Constraint(
+        attribute_names=('Software', 'OS'),
+        possible_combinations=[
+            ('GameSuite', 'Windows'),
+            ('DevTool', 'Linux'),
+        ],
+    )
+    bound_c = c.bind_schema(schema)
+    self.assertEqual(bound_c.attribute_domains, (self.software, self.os))
+
+    mbi_c = c.to_mbi(schema)
+    self.assertIsInstance(mbi_c, mbi.Constraint)
+
+  def test_dict_roundtrip(self):
+    c = constraints.Constraint(
+        attribute_names=('Software', 'OS'),
+        attribute_domains=(self.software, self.os),
+        impossible_combinations=[('GameSuite', 'Linux')],
+    )
+    d = c.to_dict()
+    loaded = constraints.Constraint.from_dict(d)
+    self.assertEqual(loaded, c)
+
 
 if __name__ == '__main__':
   absltest.main()

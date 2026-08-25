@@ -51,7 +51,6 @@ import pathlib
 
 from typing import Any, Literal, TypeAlias
 
-from absl import logging
 import numpy as np
 import yaml
 
@@ -304,42 +303,167 @@ AttributeType = (
     | FreeFormTextAttribute
 )
 
-Schema: TypeAlias = Mapping[str, AttributeType]
 
+@dataclasses.dataclass(frozen=True, eq=False)
+class Schema(Mapping[str, AttributeType]):
+  """Schema defining attribute domains and optional cross-attribute constraints.
 
-def to_yaml_file(domain: Mapping[str, AttributeType], filepath: str | PathType):
-  """Writes a dictionary of Attribute objects to a YAML file."""
-  yaml_data = {}
-  for name, attr_obj in domain.items():
-    attr_data = dataclasses.asdict(attr_obj)
-    attr_data['type'] = attr_obj.__class__.__name__
-    yaml_data[name] = attr_data
-  with open(filepath, 'w') as f:
-    yaml.dump(yaml_data, f, default_flow_style=False)
+  Implements ``collections.abc.Mapping[str, AttributeType]`` so it can be
+  indexed like a dictionary (e.g. ``schema['col']``, ``'col' in schema``,
+  ``len(schema)``, ``for col in schema``).
 
+  Attributes:
+    attributes: Mapping from column names to attribute domain specifications.
+    constraints: Cross-attribute constraints associated with this schema.
+  """
 
-def from_yaml_file(filepath: str | PathType) -> Mapping[str, AttributeType]:
-  """Reads a dictionary of Attribute objects from a YAML file."""
-  with open(filepath, 'r') as f:
-    yaml_data = yaml.safe_load(f)
-  domain = {}
+  attributes: Mapping[str, AttributeType]
+  constraints: Sequence[Any] = ()
 
-  for name, attr_data in yaml_data.items():
-    attr_type = attr_data.pop('type', None)
-    if attr_type is None:
-      logging.warning(
-          'Field "type" missing in domain YAML; re-save using `to_yaml_file`.'
-          'In the future, missing this field will raise an error.'
+  def __getitem__(self, key: str) -> AttributeType:
+    return self.attributes[key]
+
+  def __contains__(self, key: object) -> bool:
+    return key in self.attributes
+
+  def __iter__(self) -> Any:
+    return iter(self.attributes)
+
+  def __len__(self) -> int:
+    return len(self.attributes)
+
+  def __eq__(self, other: object) -> bool:
+    if isinstance(other, Schema):
+      return (
+          self.attributes == other.attributes
+          and self.constraints == other.constraints
       )
-    if 'possible_values' in attr_data:
-      domain[name] = CategoricalAttribute(**attr_data)
-    elif 'min_value' in attr_data:
-      domain[name] = NumericalAttribute(**attr_data)
-    elif 'max_tokens' in attr_data:
-      domain[name] = FreeFormTextAttribute(**attr_data)
-    elif 'default_value' in attr_data or not attr_data:
-      domain[name] = OpenSetCategoricalAttribute(**attr_data)
-    else:
-      raise ValueError(f'Invalid YAML data for attribute: {name}')
+    if isinstance(other, Mapping):
+      return not self.constraints and self.attributes == other
+    return False
 
-  return domain
+  def to_dict(self) -> dict[str, Any]:
+    """Converts the Schema into a serializable dictionary."""
+    attrs_dict = schema_to_dict(self.attributes)
+    if not self.constraints:
+      return attrs_dict
+    return {
+        'attributes': attrs_dict,
+        'constraints': [
+            c.to_dict() if hasattr(c, 'to_dict') else c
+            for c in self.constraints
+        ],
+    }
+
+  def to_yaml(self) -> str:
+    """Serializes the Schema to a YAML string."""
+    return yaml.dump(self.to_dict(), default_flow_style=False, sort_keys=False)
+
+  def to_yaml_file(self, filepath: str | PathType) -> None:
+    """Writes the Schema to a YAML file."""
+    with open(filepath, 'w') as f:
+      f.write(self.to_yaml())
+
+  @classmethod
+  def from_dict(cls, data: Mapping[str, Any]) -> Schema:
+    """Constructs a Schema from a dictionary."""
+    if isinstance(data, Schema):
+      return data
+    if 'attributes' in data and isinstance(data['attributes'], dict):
+      attrs = schema_from_dict(data['attributes'])
+      constraints_list = []
+      if 'constraints' in data and data['constraints']:
+        import importlib  # pylint: disable=g-import-not-at-top
+
+        constraints_mod = importlib.import_module('dpsynth.constraints')
+        for c in data['constraints']:
+          if isinstance(c, dict):
+            constraints_list.append(constraints_mod.Constraint.from_dict(c))
+          else:
+            constraints_list.append(c)
+      return cls(attributes=attrs, constraints=tuple(constraints_list))
+    attrs = schema_from_dict(data)
+    return cls(attributes=attrs)
+
+  @classmethod
+  def from_yaml(cls, yaml_str: str) -> Schema:
+    """Deserializes a Schema from a YAML string."""
+    yaml_data = yaml.safe_load(yaml_str)
+    return cls.from_dict(yaml_data)
+
+  @classmethod
+  def from_yaml_file(cls, filepath: str | PathType) -> Schema:
+    """Reads a Schema from a YAML file."""
+    with open(filepath, 'r') as f:
+      return cls.from_yaml(f.read())
+
+
+def attribute_to_dict(attr: AttributeType) -> dict[str, Any]:
+  """Converts an AttributeType object to a dictionary."""
+  attr_data = dataclasses.asdict(attr)
+  attr_data['type'] = attr.__class__.__name__
+  return attr_data
+
+
+def attribute_from_dict(attr_data: Mapping[str, Any]) -> AttributeType:
+  """Instantiates an AttributeType from a dictionary."""
+  data = dict(attr_data)
+  attr_type = data.pop('type', None)
+  if attr_type == 'CategoricalAttribute' or (
+      attr_type is None and 'possible_values' in data
+  ):
+    return CategoricalAttribute(**data)
+  elif attr_type == 'NumericalAttribute' or (
+      attr_type is None and 'min_value' in data
+  ):
+    return NumericalAttribute(**data)
+  elif attr_type == 'FreeFormTextAttribute' or (
+      attr_type is None and 'max_tokens' in data
+  ):
+    return FreeFormTextAttribute(**data)
+  elif attr_type == 'OpenSetCategoricalAttribute' or (
+      attr_type is None and ('default_value' in data or not data)
+  ):
+    return OpenSetCategoricalAttribute(**data)
+  else:
+    raise ValueError(f'Invalid data for attribute: {attr_data}')
+
+
+def schema_to_dict(
+    domain: Mapping[str, AttributeType],
+) -> dict[str, dict[str, Any]]:
+  """Converts a mapping of column names to AttributeType to a dictionary."""
+  return {name: attribute_to_dict(attr) for name, attr in domain.items()}
+
+
+def schema_from_dict(data: Mapping[str, Any]) -> dict[str, AttributeType]:
+  """Constructs a mapping of column names to AttributeType from a dictionary."""
+  return {
+      name: attribute_from_dict(attr_data) for name, attr_data in data.items()
+  }
+
+
+def to_yaml(domain: Schema | Mapping[str, AttributeType]) -> str:
+  """Serializes a domain dictionary or Schema to a YAML string."""
+  if isinstance(domain, Schema):
+    return domain.to_yaml()
+  return yaml.dump(schema_to_dict(domain), default_flow_style=False)
+
+
+def from_yaml(yaml_str: str) -> Schema:
+  """Deserializes a domain dictionary or Schema from a YAML string."""
+  return Schema.from_yaml(yaml_str)
+
+
+def to_yaml_file(
+    domain: Schema | Mapping[str, AttributeType], filepath: str | PathType
+):
+  """Writes a dictionary of Attribute objects or Schema to a YAML file."""
+  with open(filepath, 'w') as f:
+    f.write(to_yaml(domain))
+
+
+def from_yaml_file(filepath: str | PathType) -> Schema:
+  """Reads a dictionary of Attribute objects or Schema from a YAML file."""
+  with open(filepath, 'r') as f:
+    return from_yaml(f.read())

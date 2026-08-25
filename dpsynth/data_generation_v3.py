@@ -18,15 +18,17 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 import dataclasses
+import typing
 import warnings
 
 from absl import logging
 import dp_accounting
 from dpsynth import api
-from dpsynth import constraints
+from dpsynth import constraints as constraints_mod
 from dpsynth import discrete_mechanisms
-from dpsynth import domain
+from dpsynth import domain as domain_mod
 from dpsynth.discrete_mechanisms import common as dm_common
+from dpsynth.domain import Schema
 from dpsynth.local_mode import initialization
 from dpsynth.local_mode import primitives
 from dpsynth.local_mode import vectorized_transformations as vtx
@@ -36,7 +38,7 @@ import pandas as pd
 
 
 def create_initializers(
-    domains: Mapping[str, domain.AttributeType],
+    domains: Mapping[str, domain_mod.AttributeType],
     numerical_bins: int,
 ) -> dict[str, api.MechanismConfig]:
   """Creates per-column initializers from the domain specification.
@@ -53,18 +55,18 @@ def create_initializers(
   """
   initializers = {}
   for col, attr in domains.items():
-    if isinstance(attr, domain.NumericalAttribute):
+    if isinstance(attr, domain_mod.NumericalAttribute):
       initializers[col] = initialization.NumericalInitializerConfig(
           name=col,
           num_partitions=numerical_bins,
           attribute=attr,
       )
-    elif isinstance(attr, domain.CategoricalAttribute):
+    elif isinstance(attr, domain_mod.CategoricalAttribute):
       initializers[col] = initialization.CategoricalInitializerConfig(
           name=col,
           attribute=attr,
       )
-    elif isinstance(attr, domain.OpenSetCategoricalAttribute):
+    elif isinstance(attr, domain_mod.OpenSetCategoricalAttribute):
       initializers[col] = initialization.OpenSetInitializerConfig(
           name=col,
           attribute=attr,
@@ -88,14 +90,15 @@ class ColumnCodec:
   """
 
   column_measurement: initialization.ColumnMeasurement
-  attribute: domain.AttributeType
+  attribute: domain_mod.AttributeType
 
   def encode(self, values: np.ndarray) -> np.ndarray:
     """Encodes raw column values to discrete integer ids."""
     if self.column_measurement.bin_edges is not None:
       return vtx.discretize(
-          # pyrefly: ignore[bad-argument-type]
-          values, self.column_measurement.bin_edges, self.attribute
+          values,
+          self.column_measurement.bin_edges,
+          typing.cast(domain_mod.NumericalAttribute, self.attribute),
       )
     return vtx.discrete_encode(
         values, self.column_measurement.categorical_attribute
@@ -105,8 +108,10 @@ class ColumnCodec:
     """Decodes synthetic discrete ids back to the original domain."""
     if self.column_measurement.bin_edges is not None:
       return vtx.undiscretize(
-          # pyrefly: ignore[bad-argument-type]
-          ids, self.column_measurement.bin_edges, self.attribute, rng=rng
+          ids,
+          self.column_measurement.bin_edges,
+          typing.cast(domain_mod.NumericalAttribute, self.attribute),
+          rng=rng,
       )
     return vtx.discrete_decode(
         ids, self.column_measurement.categorical_attribute
@@ -127,7 +132,7 @@ class TabularCodec:
   def from_measurements(
       cls,
       results: Mapping[str, initialization.ColumnMeasurement],
-      domains: Mapping[str, domain.AttributeType],
+      domains: Mapping[str, domain_mod.AttributeType],
   ) -> TabularCodec:
     """Builds a codec from initialization results and the original domains."""
     columns = {col: ColumnCodec(m, domains[col]) for col, m in results.items()}
@@ -198,11 +203,11 @@ class TabularMechanism(api.CalibratedMechanism):
   """
 
   config: TabularConfig
-  domains: Mapping[str, domain.AttributeType]
+  domains: Mapping[str, domain_mod.AttributeType]
   base_mechanism: discrete_mechanisms.CalibratedMechanism
   initializers: dict[str, api.CalibratedMechanism]
   total_count_sigma: float = dataclasses.field(repr=False)
-  cross_attribute_constraints: Sequence[constraints.Constraint] = ()
+  cross_attribute_constraints: Sequence[constraints_mod.Constraint] = ()
   max_records_per_user: int = 1
 
   @property
@@ -226,7 +231,7 @@ class TabularMechanism(api.CalibratedMechanism):
       rng: np.random.Generator,
       data: pd.DataFrame,
       *,
-      cross_attribute_constraints: Sequence[constraints.Constraint] = (),
+      cross_attribute_constraints: Sequence[constraints_mod.Constraint] = (),
   ) -> DataGenerationResult:
     """Generates differentially private synthetic data.
 
@@ -248,9 +253,11 @@ class TabularMechanism(api.CalibratedMechanism):
             f'{col=} not found in dataset. Available: {list(data.columns)}'
         )
     if not cross_attribute_constraints:
-      cross_attribute_constraints = self.config.cross_attribute_constraints
+      cross_attribute_constraints = self.cross_attribute_constraints
 
-    mbi_constraints = tuple(c.to_mbi() for c in cross_attribute_constraints)
+    mbi_constraints = tuple(
+        c.to_mbi(self.domains) for c in cross_attribute_constraints
+    )
 
     # Phase 1: Per-column initialization.
     # Measure total count first, then run per-column initializers.
@@ -316,35 +323,42 @@ class TabularConfig(api.MechanismConfig):
 
   Usage::
 
-      config = TabularConfig(domains=domains)
-      calibrated = config.configure(zcdp_rho=1.0)
+      config = TabularConfig()
+      calibrated = config.calibrate(schema=schema, epsilon=1.0, delta=1e-5)
       result = calibrated(rng, df)
       synthetic_df = result.synthetic_data
 
   Attributes:
-    domains: Mapping from column names to attribute domain specifications.
     discrete_mechanism: The mechanism to run on the discretized data.
     numerical_bins: Number of bins for numerical attribute discretization.
     init_budget_fraction: Fraction of total zCDP budget allocated to per-column
       initialization (the rest goes to the discrete mechanism).
     cross_attribute_constraints: Constraints to enforce on generated data.
+    schema: Schema or mapping from column names to attribute domain
+      specifications. Optional; can be supplied at calibration time via
+      ``configure(schema=...)`` or ``calibrate(schema=...)``.
+    domains: Alias for ``schema`` for backward compatibility.
   """
 
-  domains: Mapping[str, domain.AttributeType]
   discrete_mechanism: api.MechanismConfig = discrete_mechanisms.MSTConfig()
   numerical_bins: int = 32
   init_budget_fraction: float = 0.1
-  initializers: dict[str, api.MechanismConfig] | None = None
-  cross_attribute_constraints: Sequence[constraints.Constraint] = ()
+  cross_attribute_constraints: Sequence[constraints_mod.Constraint] = ()
+  schema: domain_mod.Schema | Mapping[str, domain_mod.AttributeType] | None = (
+      None
+  )
+  domains: Mapping[str, domain_mod.AttributeType] | None = None
 
-  def _compute_per_col_deltas(self, delta):
+  def _compute_per_col_deltas(
+      self, schema: Mapping[str, domain_mod.AttributeType], delta: float
+  ) -> dict[str, float]:
     # Split delta across open-set columns, analogous to splitting zcdp_rho.
     # Under calibrate(), any delta not consumed here is automatically
     # available for the zCDP-to-(epsilon, delta) conversion, so this
     # simple additive split is tight.
     num_open_set = sum(
-        isinstance(attr, domain.OpenSetCategoricalAttribute)
-        for attr in self.domains.values()
+        isinstance(attr, domain_mod.OpenSetCategoricalAttribute)
+        for attr in schema.values()
     )
     if num_open_set > 0 and delta <= 0:
       raise ValueError(
@@ -355,8 +369,8 @@ class TabularConfig(api.MechanismConfig):
     thresholding_delta = self.init_budget_fraction * delta
 
     per_col_deltas = {}
-    for col in self.domains:
-      if isinstance(self.domains[col], domain.OpenSetCategoricalAttribute):
+    for col in schema:
+      if isinstance(schema[col], domain_mod.OpenSetCategoricalAttribute):
         per_col_deltas[col] = thresholding_delta / num_open_set
       else:
         per_col_deltas[col] = 0.0
@@ -366,60 +380,56 @@ class TabularConfig(api.MechanismConfig):
       self,
       *,
       zcdp_rho: float,
+      schema: (
+          domain_mod.Schema | Mapping[str, domain_mod.AttributeType] | None
+      ) = None,
+      domain: (
+          domain_mod.Schema | Mapping[str, domain_mod.AttributeType] | None
+      ) = None,
+      constraints: Sequence[constraints_mod.Constraint] | None = None,
       delta: float = 0.0,
       max_records_per_user: int = 1,
   ) -> TabularMechanism:
-    """Returns a calibrated mechanism configured with the given privacy budget.
-
-    Splits the budget additively, just as it does for ``zcdp_rho``:
-
-    - ``init_budget_fraction`` of ``zcdp_rho`` goes to per-column initializers
-      (split evenly, including a total-count mechanism); the remainder goes to
-      the discrete mechanism.
-    - ``init_budget_fraction`` of ``delta`` is reserved for open-set partition
-      selection (split evenly across open-set columns); the remaining delta is
-      unused by pure-zCDP sub-mechanisms.
-
-    When ``calibrate(epsilon, delta)`` is called, the base class binary search
-    passes the guarantee delta here. Because the thresholding delta is honestly
-    reported in the composite ``dp_event``, the binary search automatically
-    ensures the overall (epsilon, delta) guarantee is tight.
-
-    Args:
-      zcdp_rho: The zCDP privacy budget.
-      delta: Overall approximate DP delta for the mechanism. A fraction
-        (``init_budget_fraction``) is allocated to partition selection for
-        open-set columns. Must be positive when open-set categorical attributes
-        are present.
-      max_records_per_user: Assumed upper bound on the number of records a
-        single user contributes. Values greater than 1 scale the added noise
-        (and mechanism sensitivity) to provide user-level rather than
-        record-level DP; the privacy accounting is unchanged. This bound is NOT
-        enforced -- soundness relies on the caller guaranteeing it via
-        preprocessing.
-
-    Returns:
-      A calibrated TabularMechanism ready to be run on tabular data.
-
-    Raises:
-      ValueError: If open-set attributes exist but delta is 0.
-    """
+    """Returns a calibrated mechanism configured with the given privacy budget."""
     api.validate_max_records_per_user(max_records_per_user)
-    per_col_deltas = self._compute_per_col_deltas(delta)
+    if schema is not None:
+      resolved_schema = schema
+    elif domain is not None:
+      resolved_schema = domain
+    elif self.schema is not None:
+      resolved_schema = self.schema
+    elif self.domains is not None:
+      resolved_schema = self.domains
+    else:
+      raise ValueError(
+          "Must provide 'schema' to configure() or in TabularConfig"
+          ' constructor.'
+      )
 
-    inits = (
-        self.initializers
-        if self.initializers is not None
-        else create_initializers(self.domains, self.numerical_bins)
+    attr_schema = (
+        resolved_schema.attributes
+        if isinstance(resolved_schema, Schema)
+        else resolved_schema
     )
+    schema_constraints = (
+        resolved_schema.constraints
+        if isinstance(resolved_schema, Schema)
+        else ()
+    )
+
+    resolved_constraints = (
+        constraints
+        if constraints is not None
+        else (self.cross_attribute_constraints or schema_constraints)
+    )
+
+    per_col_deltas = self._compute_per_col_deltas(attr_schema, delta)
+    inits = create_initializers(attr_schema, self.numerical_bins)
     init_rho = self.init_budget_fraction * zcdp_rho
-    # +1 for the DPGaussianCount that always measures the total.
     per_col_rho = init_rho / (len(inits) + 1)
     discrete_rho = zcdp_rho - init_rho
 
-    calibrated_inits: dict[str, api.CalibratedMechanism]
-
-    calibrated_inits = {
+    calibrated_inits: dict[str, api.CalibratedMechanism] = {
         col: init.configure(
             zcdp_rho=per_col_rho,
             delta=per_col_deltas[col],
@@ -436,10 +446,11 @@ class TabularConfig(api.MechanismConfig):
 
     return TabularMechanism(
         config=self,
-        domains=self.domains,
+        domains=attr_schema,
         base_mechanism=calibrated_discrete,
         initializers=calibrated_inits,
         total_count_sigma=total_count_sigma,
+        cross_attribute_constraints=resolved_constraints,
         max_records_per_user=max_records_per_user,
     )
 
