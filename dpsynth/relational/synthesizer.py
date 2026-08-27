@@ -1049,24 +1049,22 @@ class MultiTableMechanism(api.CalibratedMechanism):
     )
 
 
-@dataclasses.dataclass
+@dataclasses.dataclass(frozen=True, kw_only=True)
 class MultiTableConfig(api.MechanismConfig):
   """Configuration recipe for multi-table relational differential privacy synthesis.
 
   Attributes:
-    domains: Mapping from table name to per-column attribute domain
-      specifications.
     foreign_keys: Sequence of foreign key relationships defining the hierarchy.
     discrete_mechanism: Discrete mechanism config (e.g. AIM, MST) for relational
       links.
     numerical_bins: Number of bins for numerical attribute discretization.
     init_budget_fraction: Fraction of total privacy budget allocated to column
       initialization.
+    initializers: Optional custom per-table, per-column initializers.
     num_permutation_slots: Permutation exploration slot count (o), default 2.
     exploration_strategy: Exploration strategy ('empty_token' or 'size_sliced').
   """
 
-  domains: Mapping[str, domain.Schema]
   foreign_keys: Sequence[rel_domain.ForeignKeyRelation]
   discrete_mechanism: api.MechanismConfig = dataclasses.field(
       default_factory=discrete_mechanisms.AIMConfig
@@ -1078,12 +1076,6 @@ class MultiTableConfig(api.MechanismConfig):
   exploration_strategy: Literal['empty_token', 'size_sliced'] = 'empty_token'
 
   def __post_init__(self):
-    if len(self.domains) < 2:
-      raise ValueError(
-          'MultiTableConfig requires at least two tables in domains, got'
-          f' {len(self.domains)}. For single-table synthesis, use'
-          ' TabularConfig.'
-      )
     if not self.foreign_keys:
       raise ValueError(
           'MultiTableConfig requires at least one foreign key relationship in'
@@ -1112,18 +1104,89 @@ class MultiTableConfig(api.MechanismConfig):
           'discrete_mechanism must be an instance of MechanismConfig, got'
           f' {type(self.discrete_mechanism).__name__}.'
       )
+    if self.initializers is not None:
+      for table_name, table_inits in self.initializers.items():
+        for col_name, init_cfg in table_inits.items():
+          if not isinstance(init_cfg, api.MechanismConfig):
+            raise ValueError(
+                f'Custom initializer for {table_name}.{col_name} must be an'
+                f' api.MechanismConfig, got {type(init_cfg).__name__}.'
+            )
+
+  def configure(
+      self,
+      schema: (
+          Mapping[str, domain.Schema | Mapping[str, domain.AttributeType]]
+          | None
+      ) = None,
+      *,
+      zcdp_rho: float,
+      delta: float = 0.0,
+      max_records_per_user: int = 1,
+  ) -> MultiTableMechanism:
+    """Configures privacy budgets across column initializers and relational links.
+
+    Formal Guarantees:
+      - Additive zCDP Partitioning: The total zCDP budget zcdp_rho is
+        additively split into init_rho (allocated to 1 root total-count
+        measurement and N_total_columns per-column initializers) and
+        total_discrete_rho (split evenly across relational hierarchy links).
+      - Root-Anchored Population Count: Only the root parent table total count
+        is measured with Gaussian noise (total_count_sigma).
+      - Descendant table row counts are generated via post-processing from the
+        wide discrete mechanism (unstacking non-empty slots under 'empty_token'
+        strategy or group size K under 'size_sliced' strategy).
+      - Pure zCDP for Gaussian Primitives: Numerical, closed categorical, and
+        root count initializers operate under pure zCDP (delta = 0.0).
+      - Thresholding Delta Partitioning: Open-set partition selection delta is
+        split additively across all open-set columns in all tables.
+      - Cascading Sensitivity Scaling: Downstream discrete mechanisms are
+        configured with cascading sensitivities Delta_k = prod s_ancestors,
+        guaranteeing root parent differential privacy without Cartesian joins.
+
+    Args:
+      schema: Mapping from table name to per-column AttributeType schemas (e.g.,
+        ``dpsynth.Schema`` or ``dict``).
+      zcdp_rho: The total zCDP privacy budget (rho > 0).
+      delta: Approximate DP delta for open-set Gaussian partition selection.
+      max_records_per_user: Upper bound on root entity contributions (>= 1).
+
+    Returns:
+      A calibrated, runnable MultiTableMechanism.
+
+    Raises:
+      ValueError: If configuration hyperparameters, schemas, or budgets are
+        invalid.
+    """
+    if schema is None or not schema:
+      raise ValueError(
+          'MultiTableConfig requires a non-empty schema mapping table names to'
+          ' domain schemas.'
+      )
+    if len(schema) < 2:
+      raise ValueError(
+          'MultiTableConfig requires at least two tables in schema, got'
+          f' {len(schema)}. For single-table synthesis, use TabularConfig.'
+      )
+
+    domains: dict[str, domain.Schema] = {
+        table_name: (
+            table_schema
+            if isinstance(table_schema, domain.Schema)
+            else domain.Schema(table_schema)
+        )
+        for table_name, table_schema in schema.items()
+    }
 
     # 1. Validate table names, column names, and attribute types.
-    for table_name, schema in self.domains.items():
+    for table_name, table_schema in domains.items():
       if '.' in table_name:
         raise ValueError(
             f"Table name {table_name!r} must not contain '.' characters."
         )
-      if not schema:
-        raise ValueError(
-            f'Table {table_name!r} schema in domains cannot be empty.'
-        )
-      for col_name, attr in schema.items():
+      if not table_schema:
+        raise ValueError(f'Table {table_name!r} schema cannot be empty.')
+      for col_name, attr in table_schema.items():
         if '.' in col_name:
           raise ValueError(
               f"Table {table_name!r} column {col_name!r} must not contain '.'"
@@ -1155,7 +1218,7 @@ class MultiTableConfig(api.MechanismConfig):
     # 2. Validate DAG hierarchy (acyclicity, known tables,
     # in-degree <= 1, single root).
     hierarchy = rel_domain.topological_sort_hierarchy(
-        list(self.domains.keys()), self.foreign_keys
+        list(domains.keys()), self.foreign_keys
     )
     roots = [t for _, t, fk in hierarchy if fk is None]
     if len(roots) > 1:
@@ -1167,100 +1230,52 @@ class MultiTableConfig(api.MechanismConfig):
 
     # 3. Ensure PK and FK columns are not present in domain schemas.
     for fk in self.foreign_keys:
-      if fk.parent_primary_key in self.domains[fk.parent_table]:
+      if fk.parent_primary_key in domains[fk.parent_table]:
         raise ValueError(
             f'Primary key column {fk.parent_primary_key!r} of table'
-            f' {fk.parent_table!r} must not be in domains[{fk.parent_table!r}].'
+            f' {fk.parent_table!r} must not be in schema[{fk.parent_table!r}].'
         )
-      if fk.child_foreign_key in self.domains[fk.child_table]:
+      if fk.child_foreign_key in domains[fk.child_table]:
         raise ValueError(
             f'Foreign key column {fk.child_foreign_key!r} of table'
-            f' {fk.child_table!r} must not be in domains[{fk.child_table!r}].'
+            f' {fk.child_table!r} must not be in schema[{fk.child_table!r}].'
         )
 
     # 4. Validate custom initializers structure if provided.
     if self.initializers is not None:
-      if set(self.initializers.keys()) != set(self.domains.keys()):
+      if set(self.initializers.keys()) != set(domains.keys()):
         raise ValueError(
             f'Custom initializers tables {set(self.initializers.keys())} do not'
-            f' match domains tables {set(self.domains.keys())}.'
+            f' match schema tables {set(domains.keys())}.'
         )
       for table_name, table_inits in self.initializers.items():
-        if set(table_inits.keys()) != set(self.domains[table_name].keys()):
+        if set(table_inits.keys()) != set(domains[table_name].keys()):
           raise ValueError(
               f'Custom initializers for table {table_name!r}'
               f' columns {set(table_inits.keys())} do not match'
-              f' domains columns {set(self.domains[table_name].keys())}.'
+              f' schema columns {set(domains[table_name].keys())}.'
           )
-        for col_name, init_cfg in table_inits.items():
-          if not isinstance(init_cfg, api.MechanismConfig):
-            raise ValueError(
-                f'Custom initializer for {table_name}.{col_name} must be an'
-                f' api.MechanismConfig, got {type(init_cfg).__name__}.'
-            )
 
-  def configure(
-      self,
-      _=None,
-      *,
-      zcdp_rho: float,
-      delta: float = 0.0,
-      max_records_per_user: int = 1,
-  ) -> MultiTableMechanism:
-    """Configures privacy budgets across column initializers and relational links.
-
-    Formal Guarantees:
-      - Additive zCDP Partitioning: The total zCDP budget zcdp_rho is
-        additively split into init_rho (allocated to 1 root total-count
-        measurement and N_total_columns per-column initializers) and
-        total_discrete_rho (split evenly across relational hierarchy links).
-      - Root-Anchored Population Count: Only the root parent table total count
-        is measured with Gaussian noise (total_count_sigma).
-      - Descendant table row counts are generated via post-processing from the
-        wide discrete mechanism (unstacking non-empty slots under 'empty_token'
-        strategy or group size K under 'size_sliced' strategy).
-      - Pure zCDP for Gaussian Primitives: Numerical, closed categorical, and
-        root count initializers operate under pure zCDP (delta = 0.0).
-      - Thresholding Delta Partitioning: Open-set partition selection delta is
-        split additively across all open-set columns in all tables.
-      - Cascading Sensitivity Scaling: Downstream discrete mechanisms are
-        configured with cascading sensitivities Delta_k = prod s_ancestors,
-        guaranteeing root parent differential privacy without Cartesian joins.
-
-    Args:
-      zcdp_rho: The total zCDP privacy budget (rho > 0).
-      delta: Approximate DP delta for open-set Gaussian partition selection.
-      max_records_per_user: Upper bound on root entity contributions (>= 1).
-
-    Returns:
-      A calibrated, runnable MultiTableMechanism.
-
-    Raises:
-      ValueError: If configuration hyperparameters or budgets are invalid.
-    """
     api.validate_max_records_per_user(max_records_per_user)
     if zcdp_rho <= 0:
       raise ValueError(f'zcdp_rho must be positive, got {zcdp_rho}.')
 
-    hierarchy = rel_domain.topological_sort_hierarchy(
-        list(self.domains.keys()), self.foreign_keys
-    )
     link_sensitivities = _compute_link_sensitivities(
         hierarchy, max_records_per_user=max_records_per_user
     )
 
     per_col_deltas = _compute_table_col_deltas(
-        self.domains,
+        domains,
         delta=delta,
         init_budget_fraction=self.init_budget_fraction,
     )
     inits = (
         self.initializers
         if self.initializers is not None
-        else _create_table_initializers(self.domains, self.numerical_bins)
+        else _create_table_initializers(domains, self.numerical_bins)
     )
 
-    total_cols = sum(len(schema) for schema in self.domains.values())
+    total_cols = sum(len(table_schema) for table_schema in domains.values())
     init_rho = self.init_budget_fraction * zcdp_rho
     per_col_rho = init_rho / (total_cols + 1)  # +1 for root table total count.
     total_count_rho = per_col_rho
@@ -1291,7 +1306,7 @@ class MultiTableConfig(api.MechanismConfig):
     }
 
     return MultiTableMechanism(
-        domains=self.domains,
+        domains=domains,
         foreign_keys=self.foreign_keys,
         calibrated_discrete_mechanisms=calibrated_discrete,
         calibrated_initializers=calibrated_inits,

@@ -53,13 +53,12 @@ foreign_keys = [
 
 # Configure relational synthesizer
 config = MultiTableConfig(
-    domains=table_domains,
     foreign_keys=foreign_keys,
     discrete_mechanism=dpsynth.discrete_mechanisms.AIMConfig(),
 )
 
 # Calibrate and run
-calibrated = config.calibrate(epsilon=1.0, delta=1e-5)
+calibrated = config.calibrate(table_domains, epsilon=1.0, delta=1e-5)
 result = calibrated(rng, {"households": df_h, "persons": df_p})
 synth_tables = result.synthetic_tables
 ```

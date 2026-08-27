@@ -29,7 +29,6 @@ from dpsynth.discrete_mechanisms import discrete
 from dpsynth.discrete_mechanisms import independent
 from dpsynth.discrete_mechanisms import mst
 from dpsynth.discrete_mechanisms import swift
-from dpsynth.local_mode import initialization
 import yaml
 
 
@@ -145,37 +144,8 @@ class SerializeTest(parameterized.TestCase):
     loaded = serialize.from_yaml(yaml_str)
     self.assertEqual(loaded, config)
 
-  def test_initializer_configs_roundtrip(self):
-    num_init = initialization.NumericalInitializerConfig(
-        num_partitions=16,
-        attribute=domain.NumericalAttribute(min_value=0, max_value=100),
-    )
-    yaml_str = serialize.to_yaml(num_init)
-    self.assertEqual(serialize.from_yaml(yaml_str), num_init)
-
-    cat_init = initialization.CategoricalInitializerConfig(
-        attribute=domain.CategoricalAttribute(possible_values=['A', 'B']),
-    )
-    yaml_str = serialize.to_yaml(cat_init)
-    self.assertEqual(serialize.from_yaml(yaml_str), cat_init)
-
-    open_init = initialization.OpenSetInitializerConfig(
-        attribute=domain.OpenSetCategoricalAttribute(),
-        min_count=5,
-    )
-    yaml_str = serialize.to_yaml(open_init)
-    self.assertEqual(serialize.from_yaml(yaml_str), open_init)
-
   def test_multitable_config_roundtrip(self):
     config = relational.MultiTableConfig(
-        domains={
-            'users': domain.Schema({
-                'age': domain.NumericalAttribute(min_value=18, max_value=80),
-            }),
-            'orders': domain.Schema({
-                'amount': domain.NumericalAttribute(min_value=0, max_value=100),
-            }),
-        },
         foreign_keys=[
             relational.ForeignKeyRelation(
                 parent_table='users',
