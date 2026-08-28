@@ -26,8 +26,10 @@ from __future__ import annotations
 from collections.abc import Sequence
 import dataclasses
 
+from absl import logging
 import dp_accounting
 from dpsynth import api
+from dpsynth import checkpoint as checkpoint_lib
 from dpsynth.discrete_mechanisms import accounting
 from dpsynth.discrete_mechanisms import common
 from dpsynth.discrete_mechanisms import mst
@@ -49,6 +51,8 @@ class DiscreteConfig(api.MechanismConfig):
       mbi.extensions.precompute_marginals) to compute marginals from Dataset.
     use_jax_for_generation: Whether to use JAX-accelerated generation (via
       mbi.extensions.synthetic_data) to generate synthetic data from the model.
+    working_dir: Base directory path for intermediate checkpoints. If None,
+      checkpointing is disabled.
   """
 
   mechanism: api.MechanismConfig = mst.MSTConfig()
@@ -57,14 +61,17 @@ class DiscreteConfig(api.MechanismConfig):
   constraints: Sequence[mbi.Constraint] = ()
   use_jax_for_bincount: bool = False
   use_jax_for_generation: bool = False
+  working_dir: str | None = None
 
   def configure(self, _=None, *, zcdp_rho, delta=0, max_records_per_user=1):
     """Configures the synthesizer with a zCDP budget."""
     api.validate_max_records_per_user(max_records_per_user)
 
+    inner_mechanism = self.mechanism.with_working_dir(self.working_dir)
+
     one_way_rho = zcdp_rho * self.one_way_budget_fraction
-    remaining_rho = zcdp_rho * (1 - self.one_way_budget_fraction)
-    inner = self.mechanism.configure(
+    remaining_rho = zcdp_rho - one_way_rho
+    inner = inner_mechanism.configure(
         zcdp_rho=remaining_rho,
         delta=delta,
         max_records_per_user=max_records_per_user,
@@ -133,20 +140,30 @@ class DiscreteMechanism(api.CalibratedMechanism):
     if constraints is None:
       constraints = self.config.constraints
 
+    checkpointer = checkpoint_lib.Checkpointer(self.config.working_dir)
+
     if initial_measurements is not None:
       measurements = list(initial_measurements)
     elif self.one_way_gdp_budget > 0:
-      one_way_cliques = [(a,) for a in data.domain]
-      if hasattr(data, 'cliques'):
-        supported = common.downward_closure(data.cliques)
-        one_way_cliques = [cl for cl in one_way_cliques if cl in supported]
-      measurements = common.measure_marginals_with_noise(
-          rng=rng,
-          data=data,  # pyrefly: ignore[bad-argument-type]
-          marginal_queries=one_way_cliques,  # pyrefly: ignore[bad-argument-type]
-          gdp_sigma=accounting.gdp_gaussian_sigma(self.one_way_gdp_budget),
-          max_records_per_user=self.max_records_per_user,
-      )
+      if checkpointer.exists('one_way_measurements.npz'):
+        logging.info(
+            '[DPSynth]: Resuming one-way measurements from checkpoint.'
+        )
+        measurements = checkpointer.load('one_way_measurements.npz')
+        assert measurements is not None
+      else:
+        one_way_cliques = [(a,) for a in data.domain]
+        if hasattr(data, 'cliques'):
+          supported = common.downward_closure(data.cliques)
+          one_way_cliques = [cl for cl in one_way_cliques if cl in supported]
+        measurements = common.measure_marginals_with_noise(
+            rng=rng,
+            data=data,  # pyrefly: ignore[bad-argument-type]
+            marginal_queries=one_way_cliques,  # pyrefly: ignore[bad-argument-type]
+            gdp_sigma=accounting.gdp_gaussian_sigma(self.one_way_gdp_budget),
+            max_records_per_user=self.max_records_per_user,
+        )
+        checkpointer.save('one_way_measurements.npz', measurements)
     else:
       measurements = []
 
@@ -159,6 +176,7 @@ class DiscreteMechanism(api.CalibratedMechanism):
     if mappings and isinstance(data, mbi.Dataset):
       data = data.compress(mappings)  # pyrefly: ignore[bad-argument-type]
       measurements = [m.compress(mappings, data.domain) for m in measurements]  # pyrefly: ignore[bad-argument-type]
+    logging.info('[DPSynth]: Compressed discrete domain:\n%s', data.domain)
 
     cfg = self.config.mechanism
     if isinstance(data, mbi.Dataset) and hasattr(cfg, 'supporting_cliques'):

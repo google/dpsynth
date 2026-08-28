@@ -140,7 +140,7 @@ def generate_synthetic_data_from_marginals(
     log: bool = False,
     nrows: int | None = None,
     estimator: mbi.Estimator | None = None,
-    marginal_oracle: mbi.marginal_oracles.MarginalOracle = mbi.marginal_oracles.message_passing_stable,  # pyrefly: ignore[bad-function-definition]
+    marginal_oracle: mbi.marginal_oracles.MarginalOracle | None = None,
     exact_marginals: Sequence[pd.DataFrame] | None = None,
     cross_attribute_constraints: Sequence[constraints.Constraint] = (),
     extra_domain_elements: dict[str, Sequence[Any]] | None = None,

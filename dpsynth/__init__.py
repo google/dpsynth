@@ -16,6 +16,7 @@
 
 # pylint: disable=g-importing-member
 __version__ = '0.4.0'
+from absl import logging
 from dpsynth import api
 from dpsynth import constraints
 from dpsynth import discrete_mechanisms
@@ -35,6 +36,16 @@ from dpsynth.domain import OpenSetCategoricalAttribute
 from dpsynth.domain import Schema
 from dpsynth.serialize import from_yaml
 from dpsynth.serialize import to_yaml
+import mbi
+
+# Route MBI callback logs (which use print-style formatting) to
+# absl.logging.info.
+if hasattr(mbi, 'callbacks') and hasattr(mbi.callbacks, 'set_log_fn'):
+  mbi.callbacks.set_log_fn(
+      lambda *args, sep=' ', **kwargs: logging.info(
+          sep.join(str(a) for a in args)
+      )
+  )
 
 ForeignKeyRelation = relational.ForeignKeyRelation
 MultiDataGenerationResult = relational.MultiDataGenerationResult
