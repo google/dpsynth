@@ -185,6 +185,7 @@ class DeriveNumericalValuesTest(absltest.TestCase):
     )
 
     accountant.compute_budgets()
+    assert derived_attrs is not None
     derived_attrs_dict = {o.key: o for o in derived_attrs}
 
     self.assertLen(derived_attrs_dict, 2)
@@ -228,6 +229,7 @@ class DeriveNumericalValuesTest(absltest.TestCase):
         num_quantile_buckets=3,
     )
     accountant.compute_budgets()
+    assert derived_attrs is not None
     derived_attrs_list = list(derived_attrs)
     self.assertEmpty(derived_attrs_list)
 
@@ -248,6 +250,7 @@ class DeriveNumericalValuesTest(absltest.TestCase):
     )
 
     accountant.compute_budgets()
+    assert derived_attrs is not None
     derived_attrs_list = list(derived_attrs)
 
     self.assertLen(derived_attrs_list, 1)

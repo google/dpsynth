@@ -296,9 +296,21 @@ class DomainTest(absltest.TestCase):
 
     # Roundtrip verification
     rt_domains, rt_fks = domain.from_dict(serialized)
+    self.assertIsInstance(
+        rt_domains['households']['income'], base_domain.NumericalAttribute
+    )
+    assert isinstance(
+        rt_domains['households']['income'], base_domain.NumericalAttribute
+    )
     self.assertEqual(
         rt_domains['households']['income'].min_value,
         table_domains['households']['income'].min_value,
+    )
+    self.assertIsInstance(
+        rt_domains['persons']['gender'], base_domain.CategoricalAttribute
+    )
+    assert isinstance(
+        rt_domains['persons']['gender'], base_domain.CategoricalAttribute
     )
     self.assertEqual(
         rt_domains['persons']['gender'].possible_values,
@@ -337,6 +349,12 @@ class DomainTest(absltest.TestCase):
     rt_domains, rt_fks = domain.from_yaml_file(tmp_path)
     self.assertIn('households', rt_domains)
     self.assertIn('persons', rt_domains)
+    self.assertIsInstance(
+        rt_domains['households']['income'], base_domain.NumericalAttribute
+    )
+    assert isinstance(
+        rt_domains['households']['income'], base_domain.NumericalAttribute
+    )
     self.assertEqual(rt_domains['households']['income'].max_value, 150000.0)
     self.assertEqual(rt_fks, fks)
 

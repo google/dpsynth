@@ -14,6 +14,8 @@
 
 from __future__ import annotations
 
+from typing import Any, cast
+
 from absl.testing import absltest
 from absl.testing import parameterized
 import dp_accounting
@@ -31,7 +33,7 @@ TabularConfig = data_generation_v3.TabularConfig
 
 
 def _make_discrete_data(rng, n=1000):
-  domains = mbi.Domain(['a', 'b', 'c'], [3, 3, 3])
+  domains = mbi.Domain(('a', 'b', 'c'), (3, 3, 3))
   a = rng.integers(0, 3, size=n)
   b = np.where(rng.random(n) < 0.75, a, rng.integers(0, 3, size=n))
   c = (a + b + rng.integers(0, 2, size=n)) % 3
@@ -196,7 +198,7 @@ class DataGenerationV3Test(parameterized.TestCase):
     rng = np.random.default_rng(0)
     v3 = TabularConfig()
     with self.assertRaises(Exception):
-      v3(rng, df)
+      cast(Any, v3)(rng, df)
 
   def test_dp_event_returns_composed_event(self):
     domains = {
@@ -378,7 +380,9 @@ class MaxRecordsPerUserTest(parameterized.TestCase):
         self._categorical_domains(), zcdp_rho=100.0, max_records_per_user=k
     )
     self.assertEqual(calibrated.max_records_per_user, k)
-    self.assertEqual(calibrated.base_mechanism.max_records_per_user, k)
+    self.assertEqual(
+        getattr(calibrated.base_mechanism, 'max_records_per_user'), k
+    )
 
   def test_dp_event_invariant_to_k(self):
     config = TabularConfig()

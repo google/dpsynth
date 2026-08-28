@@ -197,8 +197,8 @@ def exponential_mechanism(
 
 def measure_marginals_with_noise(
     rng: np.random.Generator,
-    data: mbi.Projectable,
-    marginal_queries: list[tuple[str, ...]],
+    data: mbi.Projectable | mbi.Dataset,
+    marginal_queries: Sequence[tuple[str, ...]],
     gdp_sigma: float,
     weights: np.ndarray | None = None,
     max_records_per_user: int = 1,
@@ -443,7 +443,7 @@ def compiled_workload(
 
 
 def compute_independence_errors(
-    data: mbi.Projectable,
+    data: mbi.Projectable | mbi.Dataset,
     model: mbi.MarkovRandomField,
     cliques: Sequence[mbi.Clique],
 ) -> dict[mbi.Clique, float]:

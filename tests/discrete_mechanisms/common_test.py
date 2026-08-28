@@ -45,7 +45,7 @@ class CommonTest(absltest.TestCase):
     self.assertEqual(idx, 1)
 
   def test_measure_marginals_with_noise(self):
-    data = mbi.Dataset.synthetic(mbi.Domain(["a", "b", "c"], [3, 4, 5]), N=1000)
+    data = mbi.Dataset.synthetic(mbi.Domain(("a", "b", "c"), (3, 4, 5)), N=1000)
     marginal_queries = [("a",), ("b",), ("c",)]
     measurements = common.measure_marginals_with_noise(
         np.random.default_rng(0), data, marginal_queries, gdp_sigma=1.0
@@ -75,7 +75,7 @@ class CommonTest(absltest.TestCase):
     self.assertEqual(compressed_domain, mbi.Domain.fromdict({"a": 5}))
 
   def test_supporting_cliques(self):
-    domain = mbi.Domain(["a", "b", "c", "d"], [3, 3, 3, 100])
+    domain = mbi.Domain(("a", "b", "c", "d"), (3, 3, 3, 100))
     cliques = common.supporting_cliques(domain, workload=None)
     self.assertCountEqual(
         cliques, list(itertools.combinations(domain.attributes, 3))

@@ -24,7 +24,7 @@ for more information.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Sequence
 import dataclasses
 import io
 import math
@@ -227,9 +227,9 @@ class _EncodeAndProject(beam.DoFn):
 
   def __init__(
       self,
-      column_measurements: dict[str, initialization.ColumnMeasurement],
-      domains: dict[str, Any],
-      workload: list[mbi.Clique],
+      column_measurements: Mapping[str, initialization.ColumnMeasurement],
+      domains: Mapping[str, Any],
+      workload: Sequence[mbi.Clique],
   ):
     super().__init__()
     # Reuse the shared per-column codec so Beam encoding matches the in-memory
@@ -298,9 +298,9 @@ class ComputeMarginals(beam.PTransform):
 
   def __init__(
       self,
-      column_measurements: dict[str, initialization.ColumnMeasurement],
-      domains: dict[str, Any],
-      workload: list[mbi.Clique],
+      column_measurements: Mapping[str, initialization.ColumnMeasurement],
+      domains: Mapping[str, Any],
+      workload: Sequence[mbi.Clique],
   ):
     super().__init__()
     self._column_measurements = column_measurements

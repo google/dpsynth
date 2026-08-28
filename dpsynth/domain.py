@@ -58,7 +58,7 @@ import yaml
 
 PathType = pathlib.Path
 
-CategoricalValue: TypeAlias = bool | int | str
+CategoricalValue: TypeAlias = bool | int | float | str
 
 IntervalHandling = Literal['midpoint', 'sample', 'interval']
 
@@ -193,7 +193,7 @@ class NumericalAttribute:
   min_value: float
   max_value: float
   clip_to_range: bool = True
-  sentinel: float | int | str | None = None
+  sentinel: float | int | str | np.integer | np.floating | None = None
   dtype: str = 'float'
   interval_handling: str = 'midpoint'
   description: str | None = None
@@ -232,7 +232,9 @@ class NumericalAttribute:
         )
 
   @property
-  def resolved_sentinel(self) -> float | int | str:
+  def resolved_sentinel(
+      self,
+  ) -> float | int | str | np.integer | np.floating:
     """Returns the effective sentinel, with mode-appropriate defaults."""
     if self.sentinel is not None:
       return self.sentinel

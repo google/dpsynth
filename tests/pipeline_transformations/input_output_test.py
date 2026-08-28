@@ -144,7 +144,7 @@ class InputOutputTest(absltest.TestCase):
     )
     domain_mrf = mbi.Domain(attributes=(0,), shape=(2,))
     clique = (0,)
-    factor = mbi.Factor(domain=domain_mrf, values=np.array([1, 2]))
+    factor = mbi.Factor(domain=domain_mrf, values=jnp.array([1, 2]))
     clique_vector = mbi.CliqueVector(
         domain_mrf,
         [clique],
@@ -177,7 +177,7 @@ class InputOutputTest(absltest.TestCase):
     )
     domain_mrf = mbi.Domain(attributes=(0,), shape=(2,))
     clique = (0,)
-    factor = mbi.Factor(domain=domain_mrf, values=np.array([1, 2]))
+    factor = mbi.Factor(domain=domain_mrf, values=jnp.array([1, 2]))
     clique_vector = mbi.CliqueVector(
         domain_mrf,
         [clique],

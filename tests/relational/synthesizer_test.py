@@ -423,7 +423,7 @@ class SynthesizerTest(absltest.TestCase):
       ):
         synthesizer.MultiTableConfig(
             foreign_keys=foreign_keys,
-            exploration_strategy='unsupported_strategy',
+            exploration_strategy='unsupported_strategy',  # pyrefly: ignore[bad-argument-type]
         )
 
     with self.subTest('invalid_discrete_mechanism'):
@@ -930,6 +930,8 @@ class SynthesizerTest(absltest.TestCase):
 
     self.assertIsInstance(datasets['Household'], mbi.Dataset)
     self.assertIsInstance(datasets['Person'], mbi.Dataset)
+    assert datasets['Household'].weights is not None
+    assert datasets['Person'].weights is not None
     np.testing.assert_allclose(datasets['Household'].weights, [1.0, 1.0])
     np.testing.assert_allclose(datasets['Person'].weights, [0.5, 0.5])
 

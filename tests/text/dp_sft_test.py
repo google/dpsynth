@@ -132,7 +132,9 @@ class GemmaModelTest(absltest.TestCase):
 
   def test_unknown_name_raises(self):
     with self.assertRaises(ValueError):
-      model.GemmaModel.default('nonexistent')
+      model.GemmaModel.default(
+          'nonexistent'  # pyrefly: ignore[bad-argument-type]
+      )
 
 
 class LoraConfigTest(absltest.TestCase):

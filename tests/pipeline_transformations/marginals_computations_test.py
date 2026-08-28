@@ -29,7 +29,7 @@ class MarginalsTest(absltest.TestCase):
 
       queries = pipeline | "Create queries" >> beam.Create([[(0, 1), (2,)]])
       domain = pipeline | "Create domain" >> beam.Create(
-          [mbi.Domain([0, 1, 2], [2, 3, 4])]
+          [mbi.Domain((0, 1, 2), (2, 3, 4))]
       )
       data = pipeline | "Create" >> beam.Create(data)
       backend = pipeline_dp.BeamBackend()
@@ -45,7 +45,7 @@ class MarginalsTest(absltest.TestCase):
     data = [(0, 1, 2), (0, 0, 2), (0, 2, 2), (1, 1, 2)]
 
     queries = [[(0, 1), (2,)]]  # singleton list
-    domain = [mbi.Domain([0, 1, 2], [2, 3, 4])]
+    domain = [mbi.Domain((0, 1, 2), (2, 3, 4))]
     marginals = dict(
         list(
             marginals_computations.compute_exact_marginals(
@@ -106,7 +106,7 @@ class MarginalsTest(absltest.TestCase):
   def test_one_way_dp_marginals_empty_input(self):
     backend = pipeline_dp.LocalBackend()
     data = []
-    domain = [mbi.Domain(["a", "b", "c", "d"], [3, 4, 5, 6])]
+    domain = [mbi.Domain(("a", "b", "c", "d"), (3, 4, 5, 6))]
     dp_engine, accountant = self.create_dp_engine()
     result = marginals_computations.compute_one_way_dp_marginals(
         backend, dp_engine, data, domain, 1
@@ -121,7 +121,7 @@ class MarginalsTest(absltest.TestCase):
     backend = pipeline_dp.LocalBackend()
     dp_engine, accountant = self.create_dp_engine()
     data = [(0, 1)]
-    domain = [mbi.Domain(["col0", "col1"], [2, 2])]
+    domain = [mbi.Domain(("col0", "col1"), (2, 2))]
     result = marginals_computations.compute_one_way_dp_marginals(
         backend, dp_engine, data, domain, 2
     )
@@ -136,7 +136,7 @@ class MarginalsTest(absltest.TestCase):
     backend = pipeline_dp.LocalBackend()
     dp_engine, accountant = self.create_dp_engine()
     data = [(0, 1, 2), (1, 0, 3)]
-    domain = [mbi.Domain(["col0", "col1", "col2"], [3, 4, 5])]
+    domain = [mbi.Domain(("col0", "col1", "col2"), (3, 4, 5))]
     result = marginals_computations.compute_one_way_dp_marginals(
         backend, dp_engine, data, domain, 3
     )
@@ -156,7 +156,7 @@ class MarginalsTest(absltest.TestCase):
     backend = pipeline_dp.LocalBackend()
     dp_engine, accountant = self.create_dp_engine()
     data = [(0, 2), (0, 2), (2, 0), (0, 2)]
-    domain = [mbi.Domain(["col0", "col1"], [3, 3])]
+    domain = [mbi.Domain(("col0", "col1"), (3, 3))]
     result = marginals_computations.compute_one_way_dp_marginals(
         backend, dp_engine, data, domain, 2
     )

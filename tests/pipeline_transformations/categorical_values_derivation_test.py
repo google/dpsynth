@@ -37,6 +37,8 @@ class DeriveCategoricalValuesTest(absltest.TestCase):
         attribute_keys_to_derive=[0, 2],
     )
     accountant.compute_budgets()
+    self.assertIsNotNone(got)
+    assert got is not None
     got = list(got)
     self.assertEqual(
         got[0],

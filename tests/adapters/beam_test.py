@@ -18,6 +18,7 @@ from __future__ import annotations
 import multiprocessing
 import os
 import tempfile
+from typing import Any, cast
 from unittest import mock
 
 from absl.testing import absltest
@@ -34,7 +35,7 @@ import mbi
 import numpy as np
 
 _manager = None
-_test_results = None
+_test_results: Any = None
 
 
 def setUpModule():
@@ -491,8 +492,8 @@ class BeamTabularConfigTest(parameterized.TestCase):
     # dp_event is delegated to the wrapped, now-calibrated synthesizer.
     self.assertIsNotNone(configured.dp_event)
     # The original wrapper is left uncalibrated (configure returns a copy).
-    with self.assertRaises(Exception):
-      _ = beam_synth.dp_event
+    with self.assertRaises(AttributeError):
+      _ = getattr(beam_synth, 'dp_event')
 
   def test_inherited_calibrate_produces_calibrated_wrapper(self):
     # calibrate is inherited from DPMechanism; it binary-searches a zCDP budget
@@ -510,8 +511,8 @@ class BeamTabularConfigTest(parameterized.TestCase):
     beam_synth = beam_adapter.BeamTabularConfig(
         data_generation_v3.TabularConfig()
     )
-    with self.assertRaises(Exception):
-      beam_synth(np.random.default_rng(0), lambda p: p)
+    with self.assertRaises(TypeError):
+      cast(Any, beam_synth)(np.random.default_rng(0), lambda p: p)
 
   def test_honors_temp_location(self):
     domains = {'a': domain.CategoricalAttribute(possible_values=['x', 'y'])}

@@ -52,7 +52,7 @@ class DiscreteConfigTest(absltest.TestCase):
   def test_supporting_cliques_delegates(self):
     inner = MSTConfig(pgm_iters=500)
     config = DiscreteConfig(mechanism=inner)
-    domain = mbi.Domain(['a', 'b', 'c'], [3, 4, 5])
+    domain = mbi.Domain(('a', 'b', 'c'), (3, 4, 5))
     self.assertEqual(
         config.supporting_cliques(domain),
         inner.supporting_cliques(domain),
@@ -62,7 +62,7 @@ class DiscreteConfigTest(absltest.TestCase):
 class DiscreteMechanismTest(absltest.TestCase):
 
   def test_full_pipeline(self):
-    domain = mbi.Domain(['a', 'b', 'c'], [3, 4, 5])
+    domain = mbi.Domain(('a', 'b', 'c'), (3, 4, 5))
     data = mbi.Dataset.synthetic(domain, N=500)
     rng = np.random.default_rng(42)
 
@@ -76,7 +76,7 @@ class DiscreteMechanismTest(absltest.TestCase):
     self.assertEqual(result.synthetic_data.domain, domain)
 
   def test_with_initial_measurements_skips_one_way(self):
-    domain = mbi.Domain(['a', 'b', 'c'], [3, 4, 5])
+    domain = mbi.Domain(('a', 'b', 'c'), (3, 4, 5))
     data = mbi.Dataset.synthetic(domain, N=500)
     rng = np.random.default_rng(42)
 
@@ -92,7 +92,7 @@ class DiscreteMechanismTest(absltest.TestCase):
     self.assertIsInstance(result, common.DiscreteMechanismResult)
 
   def test_compression_restores_domain(self):
-    domain = mbi.Domain(['a', 'b', 'c'], [10, 4, 5])
+    domain = mbi.Domain(('a', 'b', 'c'), (10, 4, 5))
     rng = np.random.default_rng(0)
     df = {col: rng.integers(0, domain[col], size=1000) for col in domain}
     df['a'] = rng.choice(3, size=1000)
@@ -120,7 +120,7 @@ class DiscreteMechanismTest(absltest.TestCase):
     config = DiscreteConfig(
         mechanism=MSTConfig(pgm_iters=500),
     )
-    domain = mbi.Domain(['a', 'b'], [3, 4])
+    domain = mbi.Domain(('a', 'b'), (3, 4))
     data = mbi.Dataset.synthetic(domain, N=200)
     rng = np.random.default_rng(0)
 

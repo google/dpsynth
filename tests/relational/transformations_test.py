@@ -355,17 +355,18 @@ class TransformationsTest(absltest.TestCase):
     # Household 2: (income=30000, region=0), 1 child: P2(age=5)
     # s = 2, o = 2, strategy = 'empty_token'
     parent_dom = mbi.Domain.fromdict({'income': 100000, 'region': 2})
-    parent_data = {
-        'income': np.array([50000, 75000, 30000], dtype=np.int64),
-        'region': np.array([0, 1, 0], dtype=np.int64),
-    }
-    parent_ds = mbi.Dataset(parent_data, parent_dom)
+    parent_ds = mbi.Dataset(
+        {
+            'income': np.array([50000, 75000, 30000], dtype=np.int64),
+            'region': np.array([0, 1, 0], dtype=np.int64),
+        },
+        parent_dom,
+    )
 
     child_dom = mbi.Domain.fromdict({'age': 100})
-    child_data = {
-        'age': np.array([35, 32, 5], dtype=np.int64),
-    }
-    child_ds = mbi.Dataset(child_data, child_dom)
+    child_ds = mbi.Dataset(
+        {'age': np.array([35, 32, 5], dtype=np.int64)}, child_dom
+    )
 
     parent_pks = ['H0', 'H1', 'H2']
     child_fks = ['H0', 'H0', 'H2']
@@ -388,6 +389,7 @@ class TransformationsTest(absltest.TestCase):
     self.assertEqual(expl_ds.records, 5)
 
     # 1. Weight mass invariant: sum(weights) == N_parents = 3.0
+    assert expl_ds.weights is not None
     self.assertAlmostEqual(float(np.sum(expl_ds.weights)), 3.0)
 
     # 2. Domain check
@@ -435,6 +437,7 @@ class TransformationsTest(absltest.TestCase):
         strategy='size_sliced',
     )
     self.assertEqual(expl_ds.records, 2)
+    assert expl_ds.weights is not None
     self.assertAlmostEqual(float(np.sum(expl_ds.weights)), 2.0)
     self.assertEqual(expl_ds.domain.shape, (100, 3, 100, 100))
 
@@ -449,6 +452,7 @@ class TransformationsTest(absltest.TestCase):
         parent_empty, child_empty, [], [], max_group_size=2
     )
     self.assertEqual(expl_empty.records, 0)
+    assert expl_empty.weights is not None
     self.assertAlmostEqual(float(np.sum(expl_empty.weights)), 0.0)
 
     # All orphan children
