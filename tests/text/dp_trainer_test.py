@@ -26,9 +26,9 @@ def _dummy_params_and_loss():
   """Creates a trivial pytree and loss function for testing."""
   params = {'w': jnp.ones((4, 4))}
 
-  def loss_fn(params, batch, prng):
+  def loss_fn(params, data, prng):
     del prng
-    return jnp.sum(params['w'] * batch['x']), ()
+    return jnp.sum(params['w'] * data['x']), ()
 
   return params, loss_fn
 
@@ -52,6 +52,12 @@ class DPTrainerTest(absltest.TestCase):
         mechanism_config=self.dpsgd_config,
         optimizer=optax.adamw(1e-4),
     )
+    self.assertIsInstance(
+        trainer.mechanism_config, jax_privacy.execution_plan.BandMFConfig
+    )
+    assert isinstance(
+        trainer.mechanism_config, jax_privacy.execution_plan.BandMFConfig
+    )
     self.assertEqual(trainer.mechanism_config.iterations, 100)
     self.assertIsNone(trainer.mechanism_config.noise_multiplier)
 
@@ -64,6 +70,14 @@ class DPTrainerTest(absltest.TestCase):
         optimizer=optax.adamw(1e-4),
     ).configure(zcdp_rho=0.5)
     # Single band: sigma = sqrt(T / (2 * rho)) = 10.
+    self.assertIsInstance(
+        trainer.mechanism_config, jax_privacy.execution_plan.BandMFConfig
+    )
+    assert isinstance(
+        trainer.mechanism_config, jax_privacy.execution_plan.BandMFConfig
+    )
+    self.assertIsNotNone(trainer.mechanism_config.noise_multiplier)
+    assert trainer.mechanism_config.noise_multiplier is not None
     self.assertAlmostEqual(trainer.mechanism_config.noise_multiplier, 10.0)
     self.assertIsNotNone(trainer.dp_event)
 
@@ -88,10 +102,10 @@ class DPTrainerTest(absltest.TestCase):
 
     graphdef, trainable, frozen = nnx.split(lora_model, nnx.LoRAParam, ...)
 
-    def loss_fn(params, batch, prng):
+    def loss_fn(params, data, prng):
       del prng
       model = nnx.merge(graphdef, params, frozen)
-      x = batch['x']
+      x = data['x']
       return jnp.mean(model(x) ** 2), ()
 
     full_batch_config = jax_privacy.execution_plan.BandMFConfig.default(
@@ -101,7 +115,7 @@ class DPTrainerTest(absltest.TestCase):
         l2_clip_norm=1.0,
     )
     trainer = dp_trainer.DPTrainer(
-        init_params=trainable,
+        init_params=trainable,  # pyrefly: ignore[bad-argument-type]
         loss_fn=loss_fn,
         mechanism_config=full_batch_config,
         optimizer=optax.adamw(1e-4),

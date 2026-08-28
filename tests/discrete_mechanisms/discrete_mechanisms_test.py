@@ -52,7 +52,7 @@ _MECHANISMS = {
 
 def _make_skewed_dataset(rng):
   """Creates a dataset where column 'a' concentrates in 3 of 10 bins."""
-  domain = mbi.Domain(['a', 'b', 'c'], [10, 4, 5])
+  domain = mbi.Domain(('a', 'b', 'c'), (10, 4, 5))
   df = {col: rng.integers(0, domain[col], size=1000) for col in domain}
   df['a'] = rng.choice(3, size=1000)  # Only bins 0-2 populated.
   return mbi.Dataset(df, domain)
@@ -63,14 +63,16 @@ class SupportingCliquesSufficiencyTest(parameterized.TestCase):
 
   @parameterized.named_parameters(*_MECHANISMS.items())
   def test_mechanism_runs_on_precomputed_marginals(self, mechanism):
-    domain = mbi.Domain(['a', 'b', 'c', 'd'], [3, 4, 5, 6])
+    domain = mbi.Domain(('a', 'b', 'c', 'd'), (3, 4, 5, 6))
     data = mbi.Dataset.synthetic(domain, N=500)
     rng = np.random.default_rng(42)
 
     calibrated = mechanism.configure(zcdp_rho=_ZCDP_RHO)
     cliques = mechanism.supporting_cliques(domain)
 
-    precomputed = mbi.CliqueVector.from_projectable(data, cliques)
+    precomputed = mbi.CliqueVector.from_projectable(
+        data, cliques  # pyrefly: ignore[bad-argument-type]
+    )
 
     result = calibrated(rng, precomputed)
     self.assertIsInstance(result, common.DiscreteMechanismResult)

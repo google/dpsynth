@@ -19,7 +19,7 @@ from __future__ import annotations
 from collections.abc import Collection, Hashable, Mapping, Sequence
 import dataclasses
 import math
-from typing import Any, Literal
+from typing import Any, Literal, TypeAlias
 
 from absl import logging
 import dp_accounting
@@ -42,9 +42,13 @@ import pandas as pd
 _LOGGING_UNUSED = logging
 # pylint: enable=unused-import
 
+TableDomains: TypeAlias = Mapping[
+    str, domain.Schema | Mapping[str, domain.AttributeType]
+]
+
 
 def _validate_input_table_columns(
-    domains: Mapping[str, domain.Schema],
+    domains: TableDomains,
     foreign_keys: Sequence[rel_domain.ForeignKeyRelation],
     table_columns: Mapping[str, Collection[str]],
 ) -> None:
@@ -264,7 +268,7 @@ def _run_table_initializers(
 
 
 def _encode_and_compress_tables(
-    domains: Mapping[str, domain.Schema],
+    domains: TableDomains,
     table_measurements: Mapping[
         str, Mapping[str, initialization.ColumnMeasurement]
     ],
@@ -419,7 +423,7 @@ def _run_table_preprocessing(
 
 
 def _create_table_initializers(
-    domains: Mapping[str, domain.Schema],
+    domains: TableDomains,
     numerical_bins: int,
 ) -> dict[str, dict[str, api.MechanismConfig]]:
   """Creates per-table and per-column initializers from relational schemas."""
@@ -430,7 +434,7 @@ def _create_table_initializers(
 
 
 def _compute_table_col_deltas(
-    domains: Mapping[str, domain.Schema],
+    domains: TableDomains,
     delta: float,
     init_budget_fraction: float,
 ) -> dict[str, dict[str, float]]:
@@ -847,7 +851,7 @@ def _decompress_synthetic_datasets(
 def _decode_synthetic_tables(
     decompressed_datasets: Mapping[str, mbi.Dataset],
     column_codecs: Mapping[str, data_generation_v3.TabularCodec],
-    domains: Mapping[str, domain.Schema],
+    domains: TableDomains,
     rng: np.random.Generator,
 ) -> dict[str, pd.DataFrame]:
   """Decodes discrete datasets into continuous/categorical DataFrames.

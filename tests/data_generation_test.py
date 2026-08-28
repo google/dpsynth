@@ -187,6 +187,7 @@ class DataGenerationTest(parameterized.TestCase):
     )
     input_data = [(1,), (2,)]
 
+    assert config.output_format is not None
     backend = pipeline_dp.LocalBackend()
     formatted_data = list(
         data_generation._format_output_data(
@@ -357,6 +358,7 @@ class DataGenerationTest(parameterized.TestCase):
         attribute="uncompress",
         side_effect=lambda x: x,
     ):
+      assert config.output_format is not None
       output_data = data_generation.generate_from_model(
           models, descriptors, 10, config.output_format
       )
@@ -410,6 +412,7 @@ class DataGenerationTest(parameterized.TestCase):
         attribute="uncompress",
         side_effect=lambda x: x,
     ):
+      assert config.output_format is not None
       output_data = data_generation.generate_from_model(
           models, descriptors, 10, config.output_format
       )

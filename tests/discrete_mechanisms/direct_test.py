@@ -22,7 +22,7 @@ import numpy as np
 class DirectTest(absltest.TestCase):
 
   def test_fits_one_way_marginals(self):
-    data = mbi.Dataset.synthetic(mbi.Domain(['a', 'b', 'c'], [3, 4, 5]), N=1000)
+    data = mbi.Dataset.synthetic(mbi.Domain(('a', 'b', 'c'), (3, 4, 5)), N=1000)
 
     prespecified_queries = [('a', 'b'), ('a', 'c'), ('b', 'c')]
     config = direct.DirectConfig(

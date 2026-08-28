@@ -23,7 +23,7 @@ import json
 import random
 import re
 import time
-from typing import Protocol, TypeVar
+from typing import Any, Protocol, TypeVar
 
 from absl import logging
 from dpsynth import domain
@@ -376,7 +376,7 @@ def _categorical_json_type(
 
 def domain_to_json_schema(
     domain_spec: Mapping[str, domain.AttributeType],
-) -> dict[str, object]:
+) -> dict[str, Any]:
   """Converts a dpsynth Domain to a JSON schema dict for GenAI."""
   properties = {}
   for name, attr in domain_spec.items():

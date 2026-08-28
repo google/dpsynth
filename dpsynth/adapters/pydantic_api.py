@@ -14,6 +14,7 @@
 
 """Pydantic <--> DataFrame conversion utilities for TabularSynthesizer."""
 
+from collections.abc import Mapping
 import enum
 import inspect
 import math
@@ -141,7 +142,7 @@ RecordT = TypeVar("RecordT", bound=pydantic.BaseModel)
 
 def models_to_dataframe(
     records: list[RecordT],
-    domains_dict: dict[str, domain.AttributeType],
+    domains_dict: Mapping[str, domain.AttributeType],
 ) -> pd.DataFrame:
   """Converts a list of pydantic models to a TabularSynthesizer-compatible DataFrame.
 
@@ -166,7 +167,7 @@ def models_to_dataframe(
 def dataframe_to_models(
     df: pd.DataFrame | data_generation_v3.DataGenerationResult,
     model_cls: type[RecordT],
-    domains_dict: dict[str, domain.AttributeType],
+    domains_dict: Mapping[str, domain.AttributeType],
 ) -> list[RecordT]:
   """Converts a synthetic DataFrame back to pydantic model instances.
 

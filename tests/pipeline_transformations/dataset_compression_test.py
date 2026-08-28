@@ -27,7 +27,9 @@ class FakeDataRecordConverter(dataset_descriptor.DataRecordConverter):
   def to_tuple(self, record: Any) -> tuple[Any, ...]:
     raise NotImplementedError("to_tuple is not implemented")
 
-  def from_tuple(self, record: tuple[Any, ...]) -> Any:
+  def from_tuple(
+      self, record: tuple[Any, ...], proto_object: Any | None = None
+  ) -> Any:
     raise NotImplementedError("from_tuple is not implemented")
 
 

@@ -119,8 +119,8 @@ class AttributeDescriptorTest(parameterized.TestCase):
             possible_values=[1, 2, 3]
         ),
     )
-    attr_desc._encoding_transform = mock.Mock()
-    attr_desc._compress_transform = mock.Mock()
+    attr_desc.__dict__["encoding_transform"] = mock.Mock()
+    attr_desc.__dict__["compress_transform"] = mock.Mock()
 
     state = attr_desc.__getstate__()
     self.assertNotIn("encoding_transform", state)

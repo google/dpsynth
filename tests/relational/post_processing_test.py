@@ -57,6 +57,7 @@ class PostProcessingTest(absltest.TestCase):
     self.assertEqual(c1.domain.shape, (11, 3))
     # Inv. combinations: (10, [0..1]) and ([0..9], 2) -> 2 + 10 = 12 inv. states
     self.assertLen(c1.invalid, 12)
+    assert c1.invalid is not None
     # (10, 0) is mixed state -> must be in invalid
     self.assertTrue(np.any((c1.invalid == [10, 0]).all(axis=1)))
     # (0, 2) is mixed state -> must be in invalid
@@ -424,12 +425,14 @@ class PostProcessingTest(absltest.TestCase):
         'slot_1.age': 11,
         'slot_2.age': 11,
     })
-    wide_data = {
-        'group_size': np.array([2, 0, 1], dtype=np.int64),
-        'slot_1.age': np.array([5, 10, 3], dtype=np.int64),
-        'slot_2.age': np.array([8, 10, 10], dtype=np.int64),
-    }
-    wide_ds = mbi.Dataset(wide_data, wide_dom)
+    wide_ds = mbi.Dataset(
+        {
+            'group_size': np.array([2, 0, 1], dtype=np.int64),
+            'slot_1.age': np.array([5, 10, 3], dtype=np.int64),
+            'slot_2.age': np.array([8, 10, 10], dtype=np.int64),
+        },
+        wide_dom,
+    )
 
     unstacked_ds, parent_indices = post_processing.unstack_wide_family_records(
         synth_wide_dataset=wide_ds,
@@ -461,12 +464,14 @@ class PostProcessingTest(absltest.TestCase):
         'slot_1.age': 10,
         'slot_2.age': 10,
     })
-    wide_data = {
-        'group_size': np.array([1, 2], dtype=np.int64),
-        'slot_1.age': np.array([7, 4], dtype=np.int64),
-        'slot_2.age': np.array([7, 9], dtype=np.int64),
-    }
-    wide_ds = mbi.Dataset(wide_data, wide_dom)
+    wide_ds = mbi.Dataset(
+        {
+            'group_size': np.array([1, 2], dtype=np.int64),
+            'slot_1.age': np.array([7, 4], dtype=np.int64),
+            'slot_2.age': np.array([7, 9], dtype=np.int64),
+        },
+        wide_dom,
+    )
 
     unstacked_ds, parent_indices = post_processing.unstack_wide_family_records(
         synth_wide_dataset=wide_ds,
@@ -489,14 +494,16 @@ class PostProcessingTest(absltest.TestCase):
         'slot_2.age': 11,
         'slot_2.gender': 3,
     })
-    wide_data = {
-        'group_size': np.array([1], dtype=np.int64),
-        'slot_1.age': np.array([4], dtype=np.int64),
-        'slot_1.gender': np.array([1], dtype=np.int64),
-        'slot_2.age': np.array([10], dtype=np.int64),
-        'slot_2.gender': np.array([2], dtype=np.int64),
-    }
-    wide_ds = mbi.Dataset(wide_data, wide_dom)
+    wide_ds = mbi.Dataset(
+        {
+            'group_size': np.array([1], dtype=np.int64),
+            'slot_1.age': np.array([4], dtype=np.int64),
+            'slot_1.gender': np.array([1], dtype=np.int64),
+            'slot_2.age': np.array([10], dtype=np.int64),
+            'slot_2.gender': np.array([2], dtype=np.int64),
+        },
+        wide_dom,
+    )
 
     unstacked_ds, parent_indices = post_processing.unstack_wide_family_records(
         synth_wide_dataset=wide_ds,
@@ -594,11 +601,13 @@ class PostProcessingFormalGuaranteesPropertyTest(absltest.TestCase):
       for slot in range(1, o + 1):
         for c in constraints:
           if not all(
-              attr.startswith(f'slot_{slot}.') for attr in c.domain.attributes
+              str(attr).startswith(f'slot_{slot}.')
+              for attr in c.domain.attributes
           ):
             continue
           k1, k2 = c.domain.shape[0] - 1, c.domain.shape[1] - 1
           # Monolithic empty: (k1, k2) -> must be VALID (not in invalid)
+          assert c.invalid is not None
           self.assertFalse(np.any((c.invalid == [k1, k2]).all(axis=1)))
           # Monolithic real: (0, 0) -> must be VALID (not in invalid)
           self.assertFalse(np.any((c.invalid == [0, 0]).all(axis=1)))
@@ -658,8 +667,8 @@ class PostProcessingFormalGuaranteesPropertyTest(absltest.TestCase):
       pair_copies = [
           m
           for m in expanded
-          if any(a.startswith('slot_') for a in m.clique)
-          and not any(a.startswith('p') for a in m.clique)
+          if any(str(a).startswith('slot_') for a in m.clique)
+          and not any(str(a).startswith('p') for a in m.clique)
       ]
       expected_pair_count = math.comb(s, 2) if (o >= 2 and s >= 2) else 0
       self.assertLen(pair_copies, expected_pair_count)
@@ -727,6 +736,7 @@ class PostProcessingFormalGuaranteesPropertyTest(absltest.TestCase):
         )
 
       # 3. Total weight mass strictly preserved
+      assert coupled.weights is not None
       self.assertAlmostEqual(
           float(np.sum(coupled.weights)), float(np.sum(child_weights))
       )
@@ -765,7 +775,7 @@ class PostProcessingFormalGuaranteesPropertyTest(absltest.TestCase):
       wide_dom = mbi.Domain(tuple(attrs), tuple(shapes))
 
       group_sizes = rng.integers(0, s + 1, size=n_parents)
-      wide_data = {'group_size': group_sizes}
+      wide_data: dict[str | int, np.ndarray] = {'group_size': group_sizes}
       for slot in range(1, s + 1):
         # Slot active if slot <= group_size
         is_active = slot <= group_sizes

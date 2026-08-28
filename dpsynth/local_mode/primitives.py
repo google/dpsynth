@@ -45,6 +45,7 @@ applied
 
 from __future__ import annotations
 
+from typing import overload
 
 import numpy as np
 import scipy.stats
@@ -319,6 +320,36 @@ def _select_partitions_sips(
 # ---------------------------------------------------------------------------
 # Simple noisy counting functions
 # ---------------------------------------------------------------------------
+
+
+@overload
+def add_gaussian_noise(
+    rng: np.random.Generator,
+    counts: float | int,
+    sigma: float,
+    max_records_per_user: int = 1,
+) -> float:
+  ...
+
+
+@overload
+def add_gaussian_noise(
+    rng: np.random.Generator,
+    counts: np.ndarray,
+    sigma: float,
+    max_records_per_user: int = 1,
+) -> np.ndarray:
+  ...
+
+
+@overload
+def add_gaussian_noise(
+    rng: np.random.Generator,
+    counts: np.ndarray | float | int,
+    sigma: float,
+    max_records_per_user: int = 1,
+) -> float | np.ndarray:
+  ...
 
 
 def add_gaussian_noise(

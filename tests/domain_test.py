@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import math
+from typing import Any, cast
 
 from absl.testing import absltest
 from dpsynth import domain
@@ -48,7 +49,7 @@ class TestDomain(absltest.TestCase):
     with self.assertRaises(ValueError):
       domain.CategoricalAttribute(possible_values=['a', 1])
     with self.assertRaises(ValueError):
-      domain.CategoricalAttribute(possible_values=[None, 'a'])
+      domain.CategoricalAttribute(possible_values=cast(Any, [None, 'a']))
 
   def test_invalid_range(self):
     with self.assertRaises(ValueError):
@@ -126,7 +127,9 @@ class TestDomain(absltest.TestCase):
     temp_file = self.create_tempfile('temp.yaml', mode='w+')
     domain.to_yaml_file(original, temp_file.full_path)
     loaded = domain.from_yaml_file(temp_file.full_path)
-    self.assertEqual(loaded['num'].sentinel, -1)
+    loaded_num = loaded['num']
+    assert isinstance(loaded_num, domain.NumericalAttribute)
+    self.assertEqual(loaded_num.sentinel, -1)
 
   def test_string_sentinel_allowed_with_interval_handling(self):
     attr = domain.NumericalAttribute(
@@ -154,7 +157,8 @@ class TestDomain(absltest.TestCase):
     attr = domain.NumericalAttribute(0, 10, sentinel=np.int32(-1))
     self.assertEqual(attr.sentinel, -1)
     attr = domain.NumericalAttribute(0, 10, sentinel=np.float32(0.5))
-    self.assertAlmostEqual(attr.sentinel, 0.5, places=5)
+    assert isinstance(attr.sentinel, (float, np.floating))
+    self.assertAlmostEqual(float(attr.sentinel), 0.5, places=5)
 
   def test_freeform_text_defaults(self):
     attribute = domain.FreeFormTextAttribute()

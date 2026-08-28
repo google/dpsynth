@@ -16,20 +16,22 @@
 
 import bisect
 from collections.abc import Callable, Mapping, Sequence
+import dataclasses
 import math
 from typing import Any, Generic, TypeAlias, TypeVar
 
-import attr
 from dpsynth import domain
 import numpy as np
 import pandas as pd
 
 CategoricalValue: TypeAlias = bool | int | float | str
-R, T, S = TypeVar('R'), TypeVar('T'), TypeVar('S')
+R = TypeVar('R')
+T = TypeVar('T')
+S = TypeVar('S')
 
 
-@attr.define(frozen=True)
-class DataTransformation(Generic[R, T]):  # pyrefly: ignore[not-a-type]
+@dataclasses.dataclass(frozen=True)
+class DataTransformation(Generic[R, T]):
   """Dataclass for transforming data from one domain to another.
 
   DataTransformations are both reversible (via inverse) and composable (via @).
@@ -48,22 +50,22 @@ class DataTransformation(Generic[R, T]):  # pyrefly: ignore[not-a-type]
   1
   """
 
-  transform: Callable[[R], T] | Mapping[R, T] = attr.field()  # pyrefly: ignore[not-a-type]
-  inverse_transform: Callable[[T], R] | Mapping[T, R] = attr.field()  # pyrefly: ignore[not-a-type]
+  transform: Callable[[R], T] | Mapping[R, T]
+  inverse_transform: Callable[[T], R] | Mapping[T, R]
 
-  def __call__(self, value: R) -> T:  # pyrefly: ignore[not-a-type]
+  def __call__(self, value: R) -> T:
     if isinstance(self.transform, Mapping):
       return self.transform[value]
     return self.transform(value)
 
   @property
-  def inverse(self) -> 'DataTransformation[T, R]':  # pyrefly: ignore[not-a-type]
+  def inverse(self) -> 'DataTransformation[T, R]':
     """The reverse transformation of this instance."""
-    return DataTransformation(self.inverse_transform, self.transform)  # pyrefly: ignore[bad-argument-count]
+    return DataTransformation(self.inverse_transform, self.transform)
 
   def __matmul__(
-      self, other: 'DataTransformation[T, S]'  # pyrefly: ignore[not-a-type]
-  ) -> 'DataTransformation[R, S]':  # pyrefly: ignore[not-a-type]
+      self, other: 'DataTransformation[S, R]'
+  ) -> 'DataTransformation[S, T]':
     """Returns a DataTransformation that composes this instance with other.
 
     Example Usage:
@@ -82,8 +84,8 @@ class DataTransformation(Generic[R, T]):  # pyrefly: ignore[not-a-type]
       A DataTransformation that composes this instance with other.
     """
     return DataTransformation(
-        lambda x: self(other(x)),  # pyrefly: ignore[bad-argument-count]
-        lambda x: other.inverse(self.inverse(x)),
+        lambda x: self(other(x)),  # pyrefly: ignore[bad-argument-type]
+        lambda x: other.inverse(self.inverse(x)),  # pyrefly: ignore[bad-argument-type]
     )
 
 
@@ -129,10 +131,10 @@ def discrete_encoder(
   ood = attribute_domain.out_of_domain_index
   transform = lambda v: index_map.get(value_type(v), ood)
   reverse = dict(enumerate(attribute_domain.possible_values))
-  return DataTransformation(transform, reverse)  # pyrefly: ignore[bad-argument-count]
+  return DataTransformation(transform, reverse)
 
 
-@attr.define(frozen=True)
+@dataclasses.dataclass(frozen=True)
 class _Interval:
   """A numeric interval with a string representation."""
 
@@ -199,7 +201,7 @@ def create_discretize_transformation(
       attribute_domain.max_value,
   ]
   intervals = [
-      _Interval(left, right, closed_left=(i == 0))  # pyrefly: ignore[bad-argument-count, unexpected-keyword]
+      _Interval(left, right, closed_left=(i == 0))
       for i, (left, right) in enumerate(zip(bin_edges[:-1], bin_edges[1:]))
   ]
   interval_strs = [str(iv) for iv in intervals]
@@ -216,7 +218,7 @@ def create_discretize_transformation(
     idx = bisect.bisect_left(inner_edges, value)
     return interval_strs[idx]
 
-  def reverse(value: str) -> float | str:
+  def reverse(value: str) -> float | int | str | np.integer | np.floating:
     if value == ood_sentinel:
       return sentinel
     idx = interval_strs.index(value)
@@ -231,8 +233,8 @@ def create_discretize_transformation(
       return math.ceil(result)
     return result
 
-  new_domain = domain.CategoricalAttribute(possible_values)  # pyrefly: ignore[bad-argument-count]
-  transformation = DiscretizeTransformation(transform, reverse)  # pyrefly: ignore[bad-argument-count]
+  new_domain = domain.CategoricalAttribute(possible_values)
+  transformation = DiscretizeTransformation(transform, reverse)
   return new_domain, transformation
 
 

@@ -232,7 +232,9 @@ def from_yaml_file(
 
 
 def to_dict(
-    table_domains: Mapping[str, domain.Schema],
+    table_domains: Mapping[
+        str, domain.Schema | Mapping[str, domain.AttributeType]
+    ],
     foreign_keys: Sequence[ForeignKeyRelation] = (),
 ) -> dict[str, Any]:
   """Converts multi-table schemas and foreign keys to a dictionary.
@@ -261,7 +263,9 @@ def to_dict(
 
 
 def to_yaml_file(
-    table_domains: Mapping[str, domain.Schema],
+    table_domains: Mapping[
+        str, domain.Schema | Mapping[str, domain.AttributeType]
+    ],
     foreign_keys: Sequence[ForeignKeyRelation],
     filepath: str | PathType,
 ) -> None:

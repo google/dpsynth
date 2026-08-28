@@ -180,7 +180,7 @@ class MstTest(absltest.TestCase):
     backend = pipeline_dp.LocalBackend()
     num_attributes = 2
     compressed_data = [(0, 1), (0, 1), (1, 0), (1, 1)]
-    compressed_domain = [mbi.Domain(attributes=([0, 1]), shape=(2, 2))]
+    compressed_domain = [mbi.Domain(attributes=(0, 1), shape=(2, 2))]
 
     # Mock one-way DP marginals.
     # For attribute 0: counts for value 0 and 1

@@ -417,7 +417,9 @@ class DomainToJsonSchemaTest(absltest.TestCase):
 
   def test_categorical_rejects_none(self):
     with self.assertRaises(ValueError):
-      domain.CategoricalAttribute(possible_values=[None, 'A', 'B'])
+      domain.CategoricalAttribute(
+          possible_values=[None, 'A', 'B']  # pyrefly: ignore[bad-argument-type]
+      )
 
   def test_numerical_produces_number(self):
     d = {

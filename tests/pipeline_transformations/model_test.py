@@ -19,6 +19,7 @@ from absl.testing import parameterized
 from dpsynth.pipeline_transformations import model
 import jax.numpy as jnp
 import mbi
+import numpy as np
 import pandas as pd
 import pipeline_dp
 
@@ -58,7 +59,11 @@ class ModelTest(parameterized.TestCase):
   def test_generate_synthetic_data(self, num_records: int | None):
     mock_model = mock.create_autospec(mbi.MarkovRandomField, instance=True)
     mock_model.synthetic_data.return_value = mbi.dataset.Dataset(
-        pd.DataFrame({'col1': [1, 2, 3], 'col2': [4, 5, 6], 'col3': [7, 8, 9]}),
+        data={
+            'col1': np.array([1, 2, 3]),
+            'col2': np.array([4, 5, 6]),
+            'col3': np.array([7, 8, 9]),
+        },
         domain=mbi.Domain(
             attributes=('col2', 'col3', 'col1'), shape=(8, 10, 4)
         ),

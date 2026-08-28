@@ -39,7 +39,7 @@ class DirectConfig(api.MechanismConfig):
 
   marginal_oracle: mbi.MarginalOracle | None = None
   pgm_iters: int = 5000
-  prespecified_marginal_queries: list[tuple[str, ...]] = dataclasses.field(
+  prespecified_marginal_queries: Sequence[tuple[str, ...]] = dataclasses.field(
       default_factory=list
   )
 
