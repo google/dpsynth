@@ -117,21 +117,22 @@ class CompressionPropertyTest(parameterized.TestCase):
 class CalibrationTest(parameterized.TestCase):
   """Tests that calibration works across mechanisms."""
 
-  @parameterized.named_parameters(*_MECHANISMS.items())
-  def test_zero_epsilon_calibration(self, mechanism):
-    rng = np.random.default_rng(0)
-    data = _make_skewed_dataset(rng)
+  @parameterized.named_parameters(_MECHANISMS.items())
+  def test_low_epsilon_calibration(self, mechanism):
     if isinstance(mechanism, independent.IndependentConfig):
       return
-    result = mechanism.calibrate(epsilon=0.0, delta=0.01)(rng, data)
-    self.assertIsInstance(result, common.DiscreteMechanismResult)
-
-  @parameterized.named_parameters(*_MECHANISMS.items())
-  def test_low_epsilon_calibration(self, mechanism):
-    self.skipTest('Low epsilon calibration is currently really slow, skipping.')
     rng = np.random.default_rng(0)
     data = _make_skewed_dataset(rng)
     result = mechanism.calibrate(epsilon=1e-3, delta=1e-5)(rng, data)
+    self.assertIsInstance(result, common.DiscreteMechanismResult)
+
+  @parameterized.named_parameters(_MECHANISMS.items())
+  def test_inf_epsilon_calibration(self, mechanism):
+    if isinstance(mechanism, independent.IndependentConfig):
+      return
+    rng = np.random.default_rng(0)
+    data = _make_skewed_dataset(rng)
+    result = mechanism.calibrate(epsilon=float('inf'), delta=1e-5)(rng, data)
     self.assertIsInstance(result, common.DiscreteMechanismResult)
 
 
