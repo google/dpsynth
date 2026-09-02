@@ -70,7 +70,7 @@ class SupportingCliquesSufficiencyTest(parameterized.TestCase):
     calibrated = mechanism.configure(zcdp_rho=_ZCDP_RHO)
     cliques = mechanism.supporting_cliques(domain)
 
-    precomputed = mbi.CliqueVector.from_projectable(data, cliques)
+    precomputed = common.precompute_marginals(data, cliques)
 
     result = calibrated(rng, precomputed)
     self.assertIsInstance(result, common.DiscreteMechanismResult)

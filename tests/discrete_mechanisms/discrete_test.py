@@ -16,6 +16,7 @@
 
 from unittest import mock
 from absl.testing import absltest
+from dpsynth import checkpoint as checkpoint_lib
 from dpsynth.discrete_mechanisms import accounting
 from dpsynth.discrete_mechanisms import common
 from dpsynth.discrete_mechanisms import discrete
@@ -157,6 +158,28 @@ class DiscreteMechanismTest(absltest.TestCase):
     result = synth(rng, data)
     self.assertEqual(result.synthetic_data.domain, domain)
     self.assertEqual(result.synthetic_data.records, 200)
+
+  def test_checkpoint_saves_and_resumes_one_way_measurements(self):
+    working_dir = self.create_tempdir().full_path
+    domain = mbi.Domain(['a', 'b', 'c'], [3, 4, 5])
+    data = mbi.Dataset.synthetic(domain, N=200)
+    rng = np.random.default_rng(0)
+
+    config = DiscreteConfig(
+        mechanism=MSTConfig(pgm_iters=500),
+        working_dir=working_dir,
+    )
+    synth = config.configure(zcdp_rho=100.0)
+    result1 = synth(rng, data)
+    self.assertIsInstance(result1, common.DiscreteMechanismResult)
+
+    # Verify one_way_measurements.npz exists.
+    checkpointer = checkpoint_lib.Checkpointer(working_dir)
+    self.assertTrue(checkpointer.exists('one_way_measurements.npz'))
+
+    # Second run should resume from checkpointed one-way measurements.
+    result2 = synth(rng, data)
+    self.assertIsInstance(result2, common.DiscreteMechanismResult)
 
 
 if __name__ == '__main__':

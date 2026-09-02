@@ -61,7 +61,7 @@ def _filter_candidates(
 def _worst_approximated(
     rng: np.random.Generator,
     candidates: Mapping[mbi.Clique, float],
-    answers: mbi.CliqueVector,
+    data: mbi.Dataset | mbi.CliqueVector,
     estimates: mbi.CliqueVector,
     eps: float,
     sigma: float,
@@ -72,7 +72,7 @@ def _worst_approximated(
   errors = {}
   for cl in candidates:
     wgt = candidates[cl]
-    diff = answers[cl].datavector() - estimates[cl].datavector()
+    diff = data.project(cl).datavector() - estimates[cl].datavector()
     bias = jnp.sqrt(2 / jnp.pi) * max_records_per_user * sigma * domain.size(cl)
     errors[cl] = wgt * (jnp.linalg.norm(diff, ord=1) - bias)
 
@@ -171,13 +171,11 @@ class AIM(api.CalibratedMechanism):
     rho_per_round = self.zcdp_rho / max_rounds
 
     #########################################################################
-    # Compile workload into candidate measurements, and precompute answers. #
+    # Compile workload into candidate measurements.                         #
     #########################################################################
     candidates = common.compiled_workload(
         data.domain, self.config.workload, self.config.max_marginal_size
     )
-    answers = mbi.CliqueVector.from_projectable(data, list(candidates))  # pyrefly: ignore[bad-argument-type]
-    logging.info('[AIM]: Calculated workload-query answers.')
 
     estimator = mbi.estimation.MirrorDescent(self.config.marginal_oracle)
     model = estimator.estimate(
@@ -215,7 +213,7 @@ class AIM(api.CalibratedMechanism):
         marginal_query = _worst_approximated(
             rng,
             small_candidates,
-            answers,
+            data,
             estimates,
             epsilon,
             sigma,

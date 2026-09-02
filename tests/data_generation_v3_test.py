@@ -19,12 +19,14 @@ import functools
 from absl.testing import absltest
 from absl.testing import parameterized
 import dp_accounting
+from dpsynth import checkpoint as checkpoint_lib
 from dpsynth import constraints
 from dpsynth import data_generation_v3
 from dpsynth import discrete_mechanisms
 from dpsynth import domain
 from dpsynth.discrete_mechanisms import aim
 from dpsynth.discrete_mechanisms import aim_gdp
+from dpsynth.discrete_mechanisms import swift
 from dpsynth.discrete_mechanisms.independent import IndependentConfig
 import mbi
 import numpy as np
@@ -577,6 +579,48 @@ class MaxRecordsPerUserTest(parameterized.TestCase):
     result = calibrated(rng, df)
     self.assertIsInstance(result.synthetic_data, pd.DataFrame)
     self.assertListEqual(result.synthetic_data.columns.tolist(), ['A', 'B'])
+
+  def test_mbi_callbacks_logging_configured(self):
+    if not hasattr(mbi, 'callbacks') or not hasattr(
+        mbi.callbacks, 'set_log_fn'
+    ):
+      self.skipTest(
+          'mbi.callbacks.set_log_fn not supported in this mbi version'
+      )
+    import dpsynth  # pylint: disable=g-import-not-at-top,unused-import
+
+    with self.assertLogs(level='INFO') as logs:
+      mbi.callbacks.log('test', 'message', sep=' | ')
+    self.assertTrue(any('test | message' in output for output in logs.output))
+
+  def test_working_dir_propagates_and_checkpoints(self):
+    working_dir = self.create_tempdir().full_path
+    domains = {
+        'A': domain.CategoricalAttribute(
+            possible_values=['a', 'b', 'c'], out_of_domain_index=0
+        ),
+        'B': domain.CategoricalAttribute(
+            possible_values=['x', 'y', 'z'], out_of_domain_index=0
+        ),
+    }
+    df = pd.DataFrame({'A': ['a', 'b', 'c'] * 20, 'B': ['x', 'y', 'z'] * 20})
+    rng = np.random.default_rng(0)
+
+    config = data_generation_v3.TabularConfig(
+        discrete_mechanism=swift.SWIFTConfig(pgm_iters=100),
+        working_dir=working_dir,
+    )
+    calibrated = config.configure(domains, zcdp_rho=100.0)
+    result1 = calibrated(rng, df)
+    self.assertIsInstance(result1.synthetic_data, pd.DataFrame)
+
+    checkpointer = checkpoint_lib.Checkpointer(working_dir)
+    self.assertTrue(checkpointer.exists('model.npz'))
+    self.assertTrue(checkpointer.exists('measurements.npz'))
+
+    # Second run should resume from checkpointed model/measurements.
+    result2 = calibrated(rng, df)
+    self.assertIsInstance(result2.synthetic_data, pd.DataFrame)
 
 
 if __name__ == '__main__':

@@ -64,24 +64,22 @@ def _filter_candidates(
 
 def _compute_dp_errors(
     rng: np.random.Generator,
-    answers: mbi.CliqueVector,
+    data: mbi.Dataset | mbi.CliqueVector,
     estimates: mbi.CliqueVector,
     gdp_budget: float,
-    subset: Iterable[mbi.Clique] | None = None,
+    subset: Iterable[mbi.Clique],
     max_records_per_user: int = 1,
 ) -> dict[mbi.Clique, float]:
   """Compute L1 error between the model answers and the true answers with DP."""
-  if subset is None:
-    subset = answers.cliques
-
+  clique_list = list(subset)
   # The L1 error of a marginal changes by at most ``max_records_per_user`` when
   # a single user (contributing up to that many records) is added or removed.
   per_candidate_sigma = max_records_per_user * accounting.gdp_gaussian_sigma(
-      gdp_budget / len(subset)  # pyrefly: ignore[bad-argument-type]
+      gdp_budget / len(clique_list)  # pyrefly: ignore[bad-argument-type]
   )
   result = {}
-  for cl in subset:
-    actual = answers[cl].datavector(flatten=True)
+  for cl in clique_list:
+    actual = data.project(cl).datavector(flatten=True)
     estimate = estimates[cl].datavector(flatten=True)
     error = jnp.linalg.norm(actual - estimate, ord=1)
     noise = rng.normal(loc=0, scale=per_candidate_sigma)
@@ -93,7 +91,7 @@ def _worst_approximated(
     rng: np.random.Generator,
     candidates: Mapping[mbi.Clique, float],
     errors: dict[mbi.Clique, float],  # will be updated in-place.
-    answers: mbi.CliqueVector,  # derived from sensitive data.
+    data: mbi.Dataset | mbi.CliqueVector,  # sensitive data.
     model: mbi.MarkovRandomField,
     select_budget: float,  # satisfies select_budget-GDP.
     measure_sigma: float,
@@ -118,10 +116,10 @@ def _worst_approximated(
   estimates = mbi.marginal_oracles.bulk_variable_elimination(
       model.potentials, subset, model.total  # pyrefly: ignore[bad-argument-type]
   )
-  # Only step that uses "answers", satisfies DP.
+  # Only step that uses "data", satisfies DP.
   current_errors = _compute_dp_errors(
       rng,
-      answers,
+      data,
       estimates,
       select_budget,
       subset,
@@ -240,13 +238,11 @@ class AIMGDP(api.CalibratedMechanism):
     budget_per_round = budget_remaining / max_rounds
 
     #########################################################################
-    # Compile workload into candidate measurements, and precompute answers. #
+    # Compile workload into candidate measurements.                         #
     #########################################################################
     candidates = common.compiled_workload(
         data.domain, self.config.workload, self.config.max_marginal_size
     )
-    answers = mbi.CliqueVector.from_projectable(data, candidates)  # pyrefly: ignore[bad-argument-type]
-    logging.info('[AIM] Calculated workload-query answers.')
     domain = data.domain
 
     estimator = mbi.estimation.MirrorDescent(self.config.marginal_oracle)
@@ -297,7 +293,7 @@ class AIMGDP(api.CalibratedMechanism):
             rng,
             candidates=small_candidates,
             errors=errors,
-            answers=answers,
+            data=data,
             model=model,
             select_budget=select_budget,
             measure_sigma=measure_sigma,

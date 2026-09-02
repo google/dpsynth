@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import abc
 from collections.abc import Callable
+import dataclasses
 import functools
 from typing import Any
 
@@ -117,6 +118,24 @@ class MechanismConfig(abc.ABC):
   """
 
   _registry: dict[str, type[MechanismConfig]] = {}
+
+  @property
+  def working_dir(self) -> str | None:
+    """Base directory path for checkpointing intermediate mechanism state."""
+    return None
+
+  def with_working_dir(self, working_dir: str | None) -> MechanismConfig:
+    """Returns a copy of the config with working_dir set if supported and unset."""
+    if self.working_dir is not None or working_dir is None:
+      return self
+    if dataclasses.is_dataclass(self):
+      try:
+        return dataclasses.replace(  # pyrefly: ignore[bad-specialization]
+            self, working_dir=working_dir
+        )
+      except (TypeError, ValueError):
+        return self
+    return self
 
   def __init_subclass__(cls, **kwargs: Any):
     super().__init_subclass__(**kwargs)

@@ -19,6 +19,7 @@ from dpsynth.discrete_mechanisms import clique_tree
 from dpsynth.discrete_mechanisms import common
 from dpsynth.discrete_mechanisms import swift
 from dpsynth.discrete_mechanisms import swift_utils
+from etils import epath
 import mbi
 import networkx as nx
 import numpy as np
@@ -145,6 +146,72 @@ class SWIFTTest(absltest.TestCase):
       expected = data.project([col]).datavector()
       actual = result.model.project([col]).datavector()
       np.testing.assert_allclose(actual, expected, atol=1)
+
+  def test_checkpointing_saves_and_resumes(self):
+    temp_dir = self.create_tempdir().full_path
+    data = mbi.Dataset.synthetic(mbi.Domain(['a', 'b', 'c'], [2, 3, 4]), N=500)
+    initial = [
+        mbi.LinearMeasurement(
+            data.project((c,)).datavector(), (c,), stddev=0.01
+        )
+        for c in data.domain
+    ]
+
+    # 1. Cold run: should save measurements and model
+    config = swift.SWIFTConfig(pgm_iters=100, working_dir=temp_dir).configure(
+        zcdp_rho=1000
+    )
+    result1 = config(
+        np.random.default_rng(0), data, initial_measurements=initial
+    )
+
+    ckpt_measurements = epath.Path(temp_dir) / 'measurements.npz'
+    ckpt_model = epath.Path(temp_dir) / 'model.npz'
+
+    self.assertTrue(ckpt_measurements.exists())
+    self.assertTrue(ckpt_model.exists())
+
+    # 2. Resume run: should load model and measurements and skip to synthesis
+    result2 = config(
+        np.random.default_rng(1), data, initial_measurements=initial
+    )
+    self.assertEqual(result2.synthetic_data.records, 500)
+    for cl in result1.model.potentials.cliques:
+      np.testing.assert_allclose(
+          result2.model.potentials[cl].values,
+          result1.model.potentials[cl].values,
+      )
+
+  def test_checkpointing_resumes_from_measurements(self):
+    temp_dir = self.create_tempdir().full_path
+    data = mbi.Dataset.synthetic(mbi.Domain(['a', 'b', 'c'], [2, 3, 4]), N=500)
+    initial = [
+        mbi.LinearMeasurement(
+            data.project((c,)).datavector(), (c,), stddev=0.01
+        )
+        for c in data.domain
+    ]
+
+    # First run to produce measurements and model
+    config1 = swift.SWIFTConfig(pgm_iters=100, working_dir=temp_dir).configure(
+        zcdp_rho=1000
+    )
+    config1(np.random.default_rng(0), data, initial_measurements=initial)
+
+    # Delete model, keep measurements
+    (epath.Path(temp_dir) / 'model.npz').unlink()
+
+    # Second run: should reuse measurements and re-estimate
+    config2 = swift.SWIFTConfig(pgm_iters=100, working_dir=temp_dir).configure(
+        zcdp_rho=1000
+    )
+    result = config2(
+        np.random.default_rng(0), data, initial_measurements=initial
+    )
+
+    self.assertTrue((epath.Path(temp_dir) / 'measurements.npz').exists())
+    self.assertTrue((epath.Path(temp_dir) / 'model.npz').exists())
+    self.assertEqual(result.synthetic_data.records, 500)
 
 
 if __name__ == '__main__':

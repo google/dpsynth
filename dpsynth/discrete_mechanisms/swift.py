@@ -26,15 +26,18 @@ that maximizes the likelihood of the noisy marginals measured.
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
+import concurrent.futures
 import dataclasses
 import functools
 import itertools
 import math
 import time
+from typing import Any
 
 from absl import logging
 import dp_accounting
 from dpsynth import api
+from dpsynth import checkpoint as checkpoint_lib
 from dpsynth.discrete_mechanisms import accounting
 from dpsynth.discrete_mechanisms import clique_tree
 from dpsynth.discrete_mechanisms import common
@@ -59,6 +62,8 @@ class SWIFTConfig(api.MechanismConfig):
     pgm_iters: Number of mirror descent iterations for PGM estimation.
     select_budget_frac: Fraction of the total budget used for selecting which
       marginals to measure.
+    working_dir: Base directory path for intermediate checkpoints (e.g. exact
+      marginals, noisy measurements, model). If None, checkpointing is disabled.
   """
 
   workload: Mapping[mbi.Clique, float] | Iterable[mbi.Clique] | None = None
@@ -67,6 +72,7 @@ class SWIFTConfig(api.MechanismConfig):
   pgm_iters: int = 10_000
   marginal_oracle: mbi.MarginalOracle | None = None
   select_budget_frac: float = 0.1
+  working_dir: str | None = None
 
   def supporting_cliques(self, domain: mbi.Domain) -> list[mbi.Clique]:
     """Returns the workload cliques filtered by max_marginal_size."""
@@ -98,23 +104,24 @@ class SWIFT(api.CalibratedMechanism):
         accounting.gdp_gaussian_sigma(self.gdp_budget)
     )
 
-  def __call__(
+  def _select_and_measure(
       self,
       rng: np.random.Generator,
       data: mbi.Dataset | mbi.CliqueVector,
-      *,
-      initial_measurements: Sequence[mbi.LinearMeasurement] = (),
-      constraints: Sequence[mbi.Constraint] = (),
-  ) -> common.DiscreteMechanismResult:
-    common.validate_initial_measurements(initial_measurements)
-    phase_times = {}
-
+      checkpointer: checkpoint_lib.Checkpointer,
+      phase_times: dict[str, float],
+      initial_measurements: Sequence[mbi.LinearMeasurement],
+      constraints: Sequence[mbi.Constraint],
+  ) -> tuple[
+      list[mbi.LinearMeasurement],
+      nx.Graph,
+      concurrent.futures.Future[Any] | None,
+      concurrent.futures.Future[Any] | None,
+  ]:
+    """Selects and measures candidate marginals, returning measurements and jtree."""
     select_gdp_budget = self.gdp_budget * self.config.select_budget_frac
     measure_gdp_budget = self.gdp_budget - select_gdp_budget
 
-    #########################################################################
-    # Compile workload into candidate measurements, and precompute answers. #
-    #########################################################################
     with common.timed(phase_times, 'compiled_workload'):
       candidates = common.compiled_workload(
           data.domain,
@@ -122,9 +129,6 @@ class SWIFT(api.CalibratedMechanism):
           self.config.max_marginal_size,
       )
     logging.info('[SWIFT] %d candidates.', len(candidates))
-
-    with common.timed(phase_times, 'from_projectable'):
-      answers = mbi.CliqueVector.from_projectable(data, candidates)  # pyrefly: ignore[bad-argument-type]
 
     with common.timed(phase_times, 'initial_mirror_descent'):
       estimator = mbi.estimation.MirrorDescent(self.config.marginal_oracle)
@@ -135,15 +139,11 @@ class SWIFT(api.CalibratedMechanism):
           constraints=constraints,
       )
 
-    ###########################################
-    # Select subset of candidates to measure. #
-    ###########################################
     with common.timed(phase_times, 'selection'):
-
       with common.timed(phase_times, 'compute_initial_errors'):
         noisy_errors = _compute_initial_errors(
             rng,
-            answers,  # pyrefly: ignore[bad-argument-type]
+            data,
             model,  # pyrefly: ignore[bad-argument-type]
             list(candidates),
             select_gdp_budget,
@@ -156,18 +156,16 @@ class SWIFT(api.CalibratedMechanism):
             candidates,
             data.domain,
             self.config.max_clique_size,
-            measure_gdp_budget,  # budget is not consumed (no data dependence)
+            measure_gdp_budget,
         )
 
     all_cliques = [m.clique for m in initial_measurements] + list(selected)
     logging.info(mbi.summarize(data.domain, all_cliques, jtree))
 
-    ########################################################
-    # Precompile MirrorDescent + synth while measuring.    #
-    ########################################################
-    closed_oracle = functools.partial(
-        mbi.marginal_oracles.message_passing_stable, jtree=jtree
+    oracle = self.config.marginal_oracle or mbi.marginal_oracles.default_oracle(
+        all_cliques, data.domain, has_constraints=bool(constraints)
     )
+    closed_oracle = functools.partial(oracle, jtree=jtree)
     estimator = mbi.estimation.MirrorDescent(marginal_oracle=closed_oracle)
     rows = mbi.estimation.minimum_variance_unbiased_total(initial_measurements)  # pyrefly: ignore[bad-argument-type]
     rows = int(max(rows, 1))
@@ -180,46 +178,153 @@ class SWIFT(api.CalibratedMechanism):
     )
     logging.info('[SWIFT] Started precompilation of MirrorDescent + synth.')
 
-    ##########################################
-    # Measure the selected marginal queries. #
-    ##########################################
     with common.timed(phase_times, 'measurement'):
       logging.info('[SWIFT] Starting measurements.')
       new_measurements = _measure_selected_marginals(
           rng,
-          answers,
+          data,
           selected,
           measure_gdp_budget,
           max_records_per_user=self.max_records_per_user,
       )
       measurements = list(initial_measurements) + new_measurements
+      checkpointer.save('measurements.npz', measurements)
       logging.info('[SWIFT] Finished measurements.')
 
-    ########################################################
-    # Estimate the model using all measurements            #
-    ########################################################
-    with common.timed(phase_times, 'estimation'):
-      t0 = time.time()
-      pgm_future.result()
-      logging.info('[SWIFT] PGM precompile wait: %.2fs', time.time() - t0)
+    return measurements, jtree, pgm_future, synth_future
 
+  def _estimate_model(
+      self,
+      domain: mbi.Domain,
+      measurements: Sequence[mbi.LinearMeasurement],
+      jtree: nx.Graph,
+      checkpointer: checkpoint_lib.Checkpointer,
+      phase_times: dict[str, float],
+      constraints: Sequence[mbi.Constraint],
+      pgm_future: concurrent.futures.Future[Any] | None = None,
+  ) -> mbi.Model:
+    """Estimates the MRF model from measurements using MirrorDescent."""
+    with common.timed(phase_times, 'estimation'):
+      if pgm_future is not None:
+        t0 = time.time()
+        pgm_future.result()
+        logging.info('[SWIFT] PGM precompile wait: %.2fs', time.time() - t0)
+
+      all_cliques = list(jtree.nodes)
+      oracle = (
+          self.config.marginal_oracle
+          or mbi.marginal_oracles.default_oracle(
+              all_cliques, domain, has_constraints=bool(constraints)
+          )
+      )
+      closed_oracle = functools.partial(oracle, jtree=jtree)
+      estimator = mbi.estimation.MirrorDescent(marginal_oracle=closed_oracle)
       final_model = estimator.estimate(
-          data.domain,
-          measurements,
+          domain,
+          list(measurements),
           iters=self.config.pgm_iters,
-          callback_fn=mbi.callbacks.default(measurements, data.domain),
+          callback_fn=mbi.callbacks.default(list(measurements), domain),
           constraints=constraints,
       )
+      checkpointer.save('model.npz', final_model)
       logging.info('[SWIFT] Estimated final model.')
+      return final_model
 
-    t0 = time.time()
-    synth_future.result()
-    logging.info('[SWIFT] Synth precompile wait: %.2fs', time.time() - t0)
+  def _synthesize_result(
+      self,
+      final_model: mbi.Model,
+      measurements: Sequence[mbi.LinearMeasurement],
+      initial_measurements: Sequence[mbi.LinearMeasurement],
+      phase_times: dict[str, float],
+      synth_future: concurrent.futures.Future[Any] | None = None,
+  ) -> common.DiscreteMechanismResult:
+    """Synthesizes dataset records from model and builds mechanism result."""
+    if synth_future is not None:
+      t0 = time.time()
+      synth_future.result()
+      logging.info('[SWIFT] Synth precompile wait: %.2fs', time.time() - t0)
 
+    total_src = initial_measurements if initial_measurements else measurements
+    rows = mbi.estimation.minimum_variance_unbiased_total(total_src)  # pyrefly: ignore[bad-argument-type]
+    rows = int(round(max(rows, 1)))
+    syn = mbi.extensions.synthetic_data(final_model, rows)  # pyrefly: ignore[bad-argument-type]
+    logging.info('[SWIFT] Generated %d synthetic records.', rows)
+
+    diagnostics = common.clique_stats(final_model)
+    diagnostics.phase_times = phase_times
     return common.DiscreteMechanismResult(
-        measurements=measurements,
+        synthetic_data=syn,
+        measurements=list(measurements),
         model=final_model,
-        diagnostics=common.clique_stats(final_model),
+        diagnostics=diagnostics,
+    )
+
+  def __call__(
+      self,
+      rng: np.random.Generator,
+      data: mbi.Dataset | mbi.CliqueVector,
+      *,
+      initial_measurements: Sequence[mbi.LinearMeasurement] = (),
+      constraints: Sequence[mbi.Constraint] = (),
+  ) -> common.DiscreteMechanismResult:
+    common.validate_initial_measurements(initial_measurements)
+    phase_times = {}
+    checkpointer = checkpoint_lib.Checkpointer(self.config.working_dir)
+
+    # 1. Full resume: if model and measurements exist, skip to synthesis.
+    if checkpointer.exists('model.npz') and checkpointer.exists(
+        'measurements.npz'
+    ):
+      logging.info('[SWIFT] Resuming from checkpointed model and measurements.')
+      final_model = checkpointer.load('model.npz')
+      measurements = checkpointer.load('measurements.npz')
+      assert final_model is not None and measurements is not None
+      return self._synthesize_result(
+          final_model, measurements, initial_measurements, phase_times
+      )
+
+    # 2. Stage 1: Measurements
+    if checkpointer.exists('measurements.npz'):
+      logging.info('[SWIFT] Resuming from checkpointed measurements.')
+      measurements = checkpointer.load('measurements.npz')
+      assert measurements is not None
+      jtree, _ = mbi.junction_tree.make_junction_tree(
+          data.domain, [m.clique for m in measurements]
+      )
+      pgm_future, synth_future = None, None
+    else:
+      measurements, jtree, pgm_future, synth_future = self._select_and_measure(
+          rng,
+          data,
+          checkpointer,
+          phase_times,
+          initial_measurements,
+          constraints,
+      )
+
+    # 3. Stage 2: Model Estimation
+    if checkpointer.exists('model.npz'):
+      logging.info('[SWIFT] Resuming from checkpointed model.')
+      final_model = checkpointer.load('model.npz')
+      assert final_model is not None
+    else:
+      final_model = self._estimate_model(
+          data.domain,
+          measurements,
+          jtree,
+          checkpointer,
+          phase_times,
+          constraints,
+          pgm_future,
+      )
+
+    # 4. Stage 3: Synthesis & Diagnostics
+    return self._synthesize_result(
+        final_model,
+        measurements,
+        initial_measurements,
+        phase_times,
+        synth_future=synth_future,
     )
 
 
@@ -332,7 +437,7 @@ def build_best_clique_tree(
         if len(cl) == 2 and tuple(sorted(cl)) in supported
     )
 
-    if score > best_score:
+    if score > best_score or best_tree is None:
       best_score = score
       best_tree = tree
   assert best_tree is not None
@@ -348,6 +453,8 @@ def _compute_initial_errors(
     max_records_per_user: int = 1,
 ) -> dict[mbi.Clique, float]:
   """Computes DP initial errors for the SWIFT mechanism."""
+  if not cliques:
+    return {}
   budget_per_clique = gdp_budget / len(cliques)
   sigma_per_clique = max_records_per_user * accounting.gdp_gaussian_sigma(
       budget_per_clique

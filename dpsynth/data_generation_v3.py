@@ -313,6 +313,7 @@ class TabularMechanism(api.CalibratedMechanism):
           m.compress(mappings, discrete.domain)  # pyrefly: ignore[bad-argument-type]
           for m in initial_measurements
       ]
+    logging.info('[DPSynth]: Compressed discrete domain:\n%s', discrete.domain)
 
     cfg = self.config.discrete_mechanism
     if hasattr(cfg, 'supporting_cliques'):
@@ -386,6 +387,8 @@ class TabularConfig(api.MechanismConfig):
       mbi.extensions.precompute_marginals) to compute marginals from Dataset.
     use_jax_for_generation: Whether to use JAX-accelerated generation (via
       mbi.extensions.synthetic_data) to generate synthetic data from the model.
+    working_dir: Base directory path for intermediate checkpoints (passed down
+      to the underlying discrete mechanism). If None, checkpointing is disabled.
   """
 
   domains: Mapping[str, domain.AttributeType] | None = None
@@ -396,6 +399,7 @@ class TabularConfig(api.MechanismConfig):
   compress_columns: bool = False
   use_jax_for_bincount: bool = False
   use_jax_for_generation: bool = False
+  working_dir: str | None = None
 
   def _compute_per_col_deltas(self, domains, delta):
     # Split delta across open-set columns, analogous to splitting zcdp_rho.
@@ -504,7 +508,11 @@ class TabularConfig(api.MechanismConfig):
         for col, init in inits.items()
     }
 
-    calibrated_discrete = self.discrete_mechanism.configure(
+    discrete_mechanism = self.discrete_mechanism.with_working_dir(
+        self.working_dir
+    )
+
+    calibrated_discrete = discrete_mechanism.configure(
         max_records_per_user=max_records_per_user,
         zcdp_rho=discrete_rho,
     )
