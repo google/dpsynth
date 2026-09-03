@@ -98,5 +98,8 @@ jobs:
           uv pip install --system -r pylock.toml
           uv pip install --system -e .
 
+      - name: Run pyrefly
+        run: pyrefly check
+
       - name: Run core tests
         run: pytest -vv -n auto --import-mode=importlib

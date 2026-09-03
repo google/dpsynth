@@ -11,12 +11,13 @@ _pycache__/
 build/
 dist/
 poetry.lock
+uv.lock
 
 # Tests
 .pytest_cache/
 
 # Type checking
-.pytype/
+.pyrefly/
 
 # Other
 *.DS_Store

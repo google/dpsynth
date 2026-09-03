@@ -164,7 +164,7 @@ class AttributeDescriptor:
       )
       encoder = transformations.discrete_encoder(categorical_attr)
       # Discretize then encode: float -> str interval -> int.
-      return encoder @ discretize_transform  # pytype: disable=bad-return-type
+      return encoder @ discretize_transform
 
     raise ValueError(
         '`encoding_transform` is called before values are derived.'

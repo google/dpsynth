@@ -167,7 +167,7 @@ class SWIFT(api.CalibratedMechanism):
     oracle = self.config.marginal_oracle or mbi.marginal_oracles.default_oracle(
         all_cliques, data.domain, has_constraints=bool(constraints)
     )
-    closed_oracle = functools.partial(oracle, jtree=jtree)
+    closed_oracle = functools.partial(oracle, jtree=jtree)  # pyrefly: ignore[unexpected-keyword]
     estimator = mbi.estimation.MirrorDescent(marginal_oracle=closed_oracle)
     rows = mbi.estimation.minimum_variance_unbiased_total(initial_measurements)  # pyrefly: ignore[bad-argument-type]
     rows = int(max(rows, 1))
@@ -210,7 +210,7 @@ class SWIFT(api.CalibratedMechanism):
               all_cliques, data.domain, has_constraints=bool(constraints)
           )
       )
-      closed_oracle = functools.partial(oracle, jtree=jtree)
+      closed_oracle = functools.partial(oracle, jtree=jtree)  # pyrefly: ignore[unexpected-keyword]
       estimator = mbi.estimation.MirrorDescent(marginal_oracle=closed_oracle)
       final_model = estimator.estimate(
           data.domain,
