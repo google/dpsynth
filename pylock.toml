@@ -132,10 +132,10 @@ wheels = [{ url = "https://files.pythonhosted.org/packages/99/91/8acff4f5e50511b
 
 [[packages]]
 name = "anyio"
-version = "4.14.2"
+version = "4.15.0"
 index = "https://pypi.org/simple"
-sdist = { url = "https://files.pythonhosted.org/packages/61/cc/a381afa6efea9f496eff839d4a6a1aed3bfafc7b3ab4b0d1b243a12573dd/anyio-4.14.2.tar.gz", upload-time = 2026-07-12T20:29:07Z, size = 260176, hashes = { sha256 = "cfa139f3ed1a23ee8f88a145ddb5ac7605b8bbfd8592baacd7ce3d8bb4313c7f" } }
-wheels = [{ url = "https://files.pythonhosted.org/packages/da/35/f2287558c17e29fafc8ef3daf819bb9834061cfa43bff8014f7df7f63bdc/anyio-4.14.2-py3-none-any.whl", upload-time = 2026-07-12T20:29:05Z, size = 125813, hashes = { sha256 = "9f505dda5ac9f0c8309b5e8bd445a8c2bf7246f3ce950121e45ea15bc41d1494" } }]
+sdist = { url = "https://files.pythonhosted.org/packages/ea/9a/c15a60547004a3f3cea20296c934f827ddd7bdba225a2e7e9fcb5ec48c80/anyio-4.15.0.tar.gz", upload-time = 2026-09-02T21:46:36Z, size = 276504, hashes = { sha256 = "b5c620ed540725e2579c31b17bb995b3bf02c9281c9cace04c7d186380bab85e" } }
+wheels = [{ url = "https://files.pythonhosted.org/packages/21/a6/2b21ce5ebe4d8938a247c9b0dbb7271566ae559b01795c83ea4bb2660ed7/anyio-4.15.0-py3-none-any.whl", upload-time = 2026-09-02T21:46:35Z, size = 131908, hashes = { sha256 = "7ecd9937369ffce8bba0b5ccb9b3a9507b101b0ed50256aecfbab27e6c2acb99" } }]
 
 [[packages]]
 name = "anywidget"
@@ -589,7 +589,7 @@ wheels = [{ url = "https://files.pythonhosted.org/packages/02/10/5da547df7a391dc
 [[packages]]
 name = "dp-accounting"
 version = "0.6.0"
-vcs = { type = "git", url = "https://github.com/google/differential-privacy.git", commit-id = "275e5f0654add556bdc26bf55625a3a25fc9e43b", subdirectory = "python/dp_accounting" }
+vcs = { type = "git", url = "https://github.com/google/differential-privacy.git", commit-id = "4a4a7b395028bf8338f04494a66c2832ebdcb5cf", subdirectory = "python/dp_accounting" }
 
 [[packages]]
 name = "dpsynth"
@@ -645,6 +645,13 @@ sdist = { url = "https://files.pythonhosted.org/packages/cc/28/c14e053b6762b1044
 wheels = [{ url = "https://files.pythonhosted.org/packages/c1/ea/53f2148663b321f21b5a606bd5f191517cf40b7072c0497d3c92c4a13b1e/executing-2.2.1-py2.py3-none-any.whl", upload-time = 2025-09-01T09:48:08Z, size = 28317, hashes = { sha256 = "760643d3452b4d777d295bb167ccc74c64a81df23fb5e08eff250c425a4b2017" } }]
 
 [[packages]]
+name = "fancyflags"
+version = "1.2"
+index = "https://pypi.org/simple"
+sdist = { url = "https://files.pythonhosted.org/packages/58/44/2487c6c6452c2f2d8428a03ebc0686fae6b69170db097943b0a08a917c7c/fancyflags-1.2.tar.gz", upload-time = 2023-07-04T15:11:34Z, size = 28775, hashes = { sha256 = "3bebace6ff888a22d42987518e588e71310c18db9a8fc5ecd240e6f908a71b1a" } }
+wheels = [{ url = "https://files.pythonhosted.org/packages/07/88/488c96b400cc4f4062227c2905b903daa6e9d937f755561beade58d3285f/fancyflags-1.2-py3-none-any.whl", upload-time = 2023-07-04T15:11:32Z, size = 34535, hashes = { sha256 = "f06b08e92c1996791d325526ee205e8751117c3ff9b943ffe3f65582e0fdfa21" } }]
+
+[[packages]]
 name = "fastavro"
 version = "1.12.2"
 index = "https://pypi.org/simple"
@@ -680,17 +687,17 @@ wheels = [{ url = "https://files.pythonhosted.org/packages/51/ac/e5d886f892666d2
 
 [[packages]]
 name = "fastmcp"
-version = "4.0.0"
+version = "4.0.2"
 index = "https://pypi.org/simple"
-sdist = { url = "https://files.pythonhosted.org/packages/fe/02/4f53258f4fb2b88675246a022d1ed9f653d9129c0ddcc40f88479abde455/fastmcp-4.0.0.tar.gz", upload-time = 2026-08-31T18:20:33Z, size = 42300863, hashes = { sha256 = "613d925f687609973575039afc6bd8874e60ab373e4f5b8c60f7860897063598" } }
-wheels = [{ url = "https://files.pythonhosted.org/packages/24/6a/03160d06bcf2957caf02555d296b343136895e07a1160a6f4b85d0f672af/fastmcp-4.0.0-py3-none-any.whl", upload-time = 2026-08-31T18:20:31Z, size = 8077, hashes = { sha256 = "b041d669971f2325ab41797961bb4e729d1195d0da38d213bfbbcc6ddd65ca75" } }]
+sdist = { url = "https://files.pythonhosted.org/packages/37/1c/981a1854f91a08872f4b8b9a627d5d751cafc1340d29b21b747f0b520b0a/fastmcp-4.0.2.tar.gz", upload-time = 2026-09-02T23:28:08Z, size = 42306015, hashes = { sha256 = "60d5c5ead3b6a117bfada5c0f95fe5c1aba53d1577079ecbdf42eeff0cd9b931" } }
+wheels = [{ url = "https://files.pythonhosted.org/packages/58/3f/b97cfb92e0d6db8232c67c258117cd0dd9def86c8b472270bd7196d5cd9d/fastmcp-4.0.2-py3-none-any.whl", upload-time = 2026-09-02T23:28:03Z, size = 8078, hashes = { sha256 = "9075e64a94634ad660971ed14374c87be06f2a16a921028ca87987e6aa2f3bfa" } }]
 
 [[packages]]
 name = "fastmcp-slim"
-version = "4.0.0"
+version = "4.0.2"
 index = "https://pypi.org/simple"
-sdist = { url = "https://files.pythonhosted.org/packages/29/b1/8abb7c56159cf817718c1fc6b4547fd0f35cb91f05659ffc1d4f5cee1198/fastmcp_slim-4.0.0.tar.gz", upload-time = 2026-08-31T18:20:09Z, size = 683960, hashes = { sha256 = "b6f78c26e369b4c29b485d7d7b662838d9631e765dc496b4560274762f144e6a" } }
-wheels = [{ url = "https://files.pythonhosted.org/packages/2c/4b/7bc65d74cc93684ec8b10d49a51fa14c5e4aa3a08120c7001a85bd2a159a/fastmcp_slim-4.0.0-py3-none-any.whl", upload-time = 2026-08-31T18:20:07Z, size = 857981, hashes = { sha256 = "75259ad8033af011f926f4b99cda9ce080b7853f9831d38f2056a392908e11c2" } }]
+sdist = { url = "https://files.pythonhosted.org/packages/9c/7d/c2597734e3a0859d62c9d8f6f35067d1e296537512e280db3af19204be64/fastmcp_slim-4.0.2.tar.gz", upload-time = 2026-09-02T23:27:39Z, size = 684052, hashes = { sha256 = "86b99bdcb872b52d964c79bc6d43ce79f40ed5538b589d102792b4a7cf3947f4" } }
+wheels = [{ url = "https://files.pythonhosted.org/packages/fa/c0/c022eba3a25ebb56111de1b5f76fbfca81925def58880464263582acfcd8/fastmcp_slim-4.0.2-py3-none-any.whl", upload-time = 2026-09-02T23:27:38Z, size = 858100, hashes = { sha256 = "6bd5b5885628f73263fa2247ea1d26e4a514499a6e079ee3e340cd03a7fe5ed8" } }]
 
 [[packages]]
 name = "filelock"
@@ -845,10 +852,10 @@ wheels = [{ url = "https://files.pythonhosted.org/packages/20/33/e697a69f13bfd44
 
 [[packages]]
 name = "google-cloud-aiplatform"
-version = "2.0.1"
+version = "2.1.0"
 index = "https://pypi.org/simple"
-sdist = { url = "https://files.pythonhosted.org/packages/e1/86/d8b154861ab292566d90dbdea276c33ef824b02de4a3fda61f2075d016d7/google_cloud_aiplatform-2.0.1.tar.gz", upload-time = 2026-08-28T03:41:22Z, size = 11325585, hashes = { sha256 = "46e051b980baed400c5ea4328c79a8ae25f6f44a034b63bf0041aa5cd248ea84" } }
-wheels = [{ url = "https://files.pythonhosted.org/packages/53/3b/9d7974a7430edf56f009247c8d0d68df1a8fcfc19a27598141bb9e0359a7/google_cloud_aiplatform-2.0.1-py2.py3-none-any.whl", upload-time = 2026-08-28T03:41:19Z, size = 9451860, hashes = { sha256 = "a72586889b1eebca0816b34e5914258abe6e76f23fbac40938b47e70103cbeee" } }]
+sdist = { url = "https://files.pythonhosted.org/packages/6f/cc/0c562f5d268f07234e712ee8822dd81ec4c836559f449d9e5e91e9aa2025/google_cloud_aiplatform-2.1.0.tar.gz", upload-time = 2026-09-01T19:11:15Z, size = 11331982, hashes = { sha256 = "964eca160d4af48a2e04b5ee476fb4d38c84388f23b4420e2c71b30151d625bd" } }
+wheels = [{ url = "https://files.pythonhosted.org/packages/c2/26/10f3d4ab6333672ff43ad56255b74e672c2a59b21b7a054632d05b7dd677/google_cloud_aiplatform-2.1.0-py2.py3-none-any.whl", upload-time = 2026-09-01T19:11:08Z, size = 9452898, hashes = { sha256 = "de5c6dace6cb81943fc6ee1fad02f7a02e9b18e50c24b267bd9627f6b9cd3d14" } }]
 
 [[packages]]
 name = "google-cloud-bigquery"
@@ -898,10 +905,10 @@ wheels = [
 
 [[packages]]
 name = "google-genai"
-version = "2.21.0"
+version = "2.22.0"
 index = "https://pypi.org/simple"
-sdist = { url = "https://files.pythonhosted.org/packages/60/a7/a45f64f22ab9302b55fcbeb32acb6f313690a7748629b01e451aad1817a3/google_genai-2.21.0.tar.gz", upload-time = 2026-08-31T21:49:14Z, size = 677301, hashes = { sha256 = "0ecc11c6a5b9f5e3cc58e77ae5fead00c6719f8a1b2b654b803f514a9a6b64c0" } }
-wheels = [{ url = "https://files.pythonhosted.org/packages/fb/d7/c2419dd5fedd5803ce09810e4e39561a0a13a960b3f48d2581c12e42af3e/google_genai-2.21.0-py3-none-any.whl", upload-time = 2026-08-31T21:49:12Z, size = 1080223, hashes = { sha256 = "36b575034be46a03acd603a852e22a6359f2cdd6b26bb1d65d9b7e0cc7ab3648" } }]
+sdist = { url = "https://files.pythonhosted.org/packages/37/f1/f2f31b2a6bd826bc2cb73068df880954a026474c03a4315637d20cc13965/google_genai-2.22.0.tar.gz", upload-time = 2026-09-02T18:06:02Z, size = 684719, hashes = { sha256 = "9fa3b5d9ddb635005d8ab2d6206fb2b3d7204b66965bbce7de13ecd1a866ebcd" } }
+wheels = [{ url = "https://files.pythonhosted.org/packages/de/96/0120d214958cb54f2b9c48da9f564a0e6eae269e9dd702415fb1d0551cc7/google_genai-2.22.0-py3-none-any.whl", upload-time = 2026-09-02T18:06:00Z, size = 1088792, hashes = { sha256 = "c514001c45470cc0a942440ae1b8215445d12bfb6c373aac94637127e1f74ec6" } }]
 
 [[packages]]
 name = "google-pasta"
@@ -1501,7 +1508,7 @@ wheels = [{ url = "https://files.pythonhosted.org/packages/41/09/5b161152e2d90f7
 [[packages]]
 name = "mbi"
 version = "1.3.0"
-vcs = { type = "git", url = "https://github.com/ryan112358/mbi.git", commit-id = "b46389c66f5df7f8ffb5768616849a10d1a3a4a1" }
+vcs = { type = "git", url = "https://github.com/ryan112358/mbi.git", commit-id = "2fe0ae620984e0edfcc5e42fefbc15e2bf127e7b" }
 
 [[packages]]
 name = "mcp"
@@ -2311,6 +2318,25 @@ version = "1.11.0"
 index = "https://pypi.org/simple"
 sdist = { url = "https://files.pythonhosted.org/packages/e8/52/d87eba7cb129b81563019d1679026e7a112ef76855d6159d24754dbd2a51/pyperclip-1.11.0.tar.gz", upload-time = 2025-09-26T14:40:37Z, size = 12185, hashes = { sha256 = "244035963e4428530d9e3a6101a1ef97209c6825edab1567beac148ccc1db1b6" } }
 wheels = [{ url = "https://files.pythonhosted.org/packages/df/80/fc9d01d5ed37ba4c42ca2b55b4339ae6e200b456be3a1aaddf4a9fa99b8c/pyperclip-1.11.0-py3-none-any.whl", upload-time = 2025-09-26T14:40:36Z, size = 11063, hashes = { sha256 = "299403e9ff44581cb9ba2ffeed69c7aa96a008622ad0c46cb575ca75b5b84273" } }]
+
+[[packages]]
+name = "pyrefly"
+version = "1.2.0"
+index = "https://pypi.org/simple"
+sdist = { url = "https://files.pythonhosted.org/packages/89/01/a86e9f24722b095c3f88e3616132b75a21b0df53804bdc6a45314dd4d93c/pyrefly-1.2.0.tar.gz", upload-time = 2026-08-01T02:56:27Z, size = 6243654, hashes = { sha256 = "5485f960fc2481617068c918335c39ab1507ef90b6b5bd35bf57726e60e73185" } }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/7d/9d/3c0ef1d4843987b22f996ed381ec9cf5a3b1273e29804db276252e4c95eb/pyrefly-1.2.0-py3-none-macosx_10_12_x86_64.whl", upload-time = 2026-08-01T02:56:02Z, size = 14026305, hashes = { sha256 = "7f46d983ac49ddd2b043694960a01dc6a19a5cfd8eec609d6bd9c42866f91b4e" } },
+    { url = "https://files.pythonhosted.org/packages/0a/06/03bbb78fbea54cdc65b626619f3597d5611aca4fdef11e72a4e8360e7e63/pyrefly-1.2.0-py3-none-macosx_11_0_arm64.whl", upload-time = 2026-08-01T02:56:04Z, size = 13463880, hashes = { sha256 = "756f669b5555090f5c1a4fef30db1785fabe657764f7e4e6dc88994dfb8ca82d" } },
+    { url = "https://files.pythonhosted.org/packages/13/5a/7d8bc00a38e93bbc9c3e7bd14d305f7948717e667c9bcddeab9dd42fd255/pyrefly-1.2.0-py3-none-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", upload-time = 2026-08-01T02:56:07Z, size = 13907329, hashes = { sha256 = "e3465812ce5ef4781fb592edbf2724547296f0a3124be115d73c7e8b2401862d" } },
+    { url = "https://files.pythonhosted.org/packages/be/94/9e08b4bf799d0b8f36b55a2783c7ba5f51730cf0632a85a67b5b5ed876cd/pyrefly-1.2.0-py3-none-manylinux_2_17_i686.manylinux2014_i686.whl", upload-time = 2026-08-01T02:56:09Z, size = 15039020, hashes = { sha256 = "5de7b2ad2bba5c8055181681a84b74143eac2234a48ba5d1b7ed7e7a722b02bd" } },
+    { url = "https://files.pythonhosted.org/packages/5b/bd/bca5fd0c80f4daf8ee6903a29df9f3de1feb05ff0946b8f35ec8c5096b13/pyrefly-1.2.0-py3-none-manylinux_2_17_ppc64le.manylinux2014_ppc64le.whl", upload-time = 2026-08-01T02:56:11Z, size = 14986199, hashes = { sha256 = "25822ea9505f589ea8a725e4268b475132fb89e038fbf092e446510443ac142a" } },
+    { url = "https://files.pythonhosted.org/packages/97/f7/f07087f3d185ad2eced0c56cef89ca5474dfb4ff25f146cd50a861c97553/pyrefly-1.2.0-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", upload-time = 2026-08-01T02:56:14Z, size = 14393715, hashes = { sha256 = "90efe75e17491ef5d636e10469e9278d7d0256b3b4c5e1f4750069bf3ae0f5d1" } },
+    { url = "https://files.pythonhosted.org/packages/d3/70/0d142c320e284b9e3ce35e9b1e58b8ce2ee1f578f2a7234bc30e5022b94f/pyrefly-1.2.0-py3-none-musllinux_1_2_aarch64.whl", upload-time = 2026-08-01T02:56:16Z, size = 13933008, hashes = { sha256 = "368aaf7eee4f511ddc0f8e564cf14e01ab2f10b0db9105c6d5b153bf498d07bf" } },
+    { url = "https://files.pythonhosted.org/packages/5d/e8/e84f11b6e1f63fd453ad3654213b9a0f6f4de8cef6b58038eef2d0d5955d/pyrefly-1.2.0-py3-none-musllinux_1_2_x86_64.whl", upload-time = 2026-08-01T02:56:18Z, size = 14431827, hashes = { sha256 = "d52d5da7bc65fb7675fbaa80eda879d4f8787c494f04cac21603330d3abbdbbe" } },
+    { url = "https://files.pythonhosted.org/packages/0f/06/810d31380f66c75e1c0779a408d3b16117b1b368b57894f6aa66bef21686/pyrefly-1.2.0-py3-none-win32.whl", upload-time = 2026-08-01T02:56:20Z, size = 13229447, hashes = { sha256 = "8c90751de8506d938e8f802659c74cf35bd7a0036510ee6c634a38eebb280bfa" } },
+    { url = "https://files.pythonhosted.org/packages/ed/98/4dafa3c7a1caed2dc8cc708dde09ba27963c7736508f55b626fff3024113/pyrefly-1.2.0-py3-none-win_amd64.whl", upload-time = 2026-08-01T02:56:23Z, size = 14087387, hashes = { sha256 = "8a8964c224ccc4882730130955815de21ff443c1ac3f0b90685b19bf63848170" } },
+    { url = "https://files.pythonhosted.org/packages/1b/1c/df3cb0a2e5591660ded7a1836cd2f29dc48c91adb1c0a3a700a96f6d09e1/pyrefly-1.2.0-py3-none-win_arm64.whl", upload-time = 2026-08-01T02:56:25Z, size = 13430873, hashes = { sha256 = "3a90bb8df39dfbac74b1f3b2e9d7c526b8f80568884c3944d955023a73ebf61e" } },
+]
 
 [[packages]]
 name = "pytest"

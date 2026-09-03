@@ -39,7 +39,7 @@ from absl import app
 from absl import logging
 from dpsynth import discrete_mechanisms
 from dpsynth import domain
-from dpsynth.examples.relational.california_census import example_eval_california_census as eval_utils
+from examples.relational.california_census import example_eval_california_census as eval_utils
 from dpsynth.relational import domain as rel_domain
 from dpsynth.relational import synthesizer as rel_synth
 from etils import epath

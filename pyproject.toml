@@ -19,6 +19,7 @@ dependencies = [
     "attrs",
     "cattrs",
     "etils[epath]",
+    "fancyflags",
     "numpy",
     "pandas",
     "pydantic>=2.0",
@@ -52,6 +53,7 @@ dev = [
     "chex",
     "pytest",
     "pytest-xdist",
+    "pyrefly",
 ]
 text = [
     "flax",
@@ -86,3 +88,10 @@ filterwarnings = [
     "ignore:.*JAX is running in float32 mode.*:UserWarning",
     "ignore:.*JAX persistent compilation cache is enabled.*:UserWarning",
 ]
+
+[tool.pyrefly]
+project-includes = [
+  "**/*.py",
+]
+preset = "basic"
+

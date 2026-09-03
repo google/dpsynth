@@ -77,13 +77,13 @@ def save_data_local(
   """Saves the synthetic data to a file locally."""
   match data_format:
     case types.DataFormat.CSV:
-      save_csv(data, path, attributes)  # pytype: disable=wrong-arg-types
+      save_csv(data, path, attributes)
     case types.DataFormat.TFRECORD:
       os.makedirs(os.path.dirname(path), exist_ok=True)
       with tf.io.TFRecordWriter(path) as writer:
         for record in data:
           # record is expected to be a proto message.
-          writer.write(record.SerializeToString())  # type: ignore
+          writer.write(record.SerializeToString())
     case _:
       raise ValueError(f'Unsupported data format: {data_format}')
 
