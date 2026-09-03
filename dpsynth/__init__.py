@@ -23,6 +23,7 @@ from dpsynth import discrete_mechanisms
 from dpsynth import domain
 from dpsynth import local_mode
 from dpsynth import relational
+from dpsynth import reporting
 from dpsynth import serialize
 from dpsynth.data_generation_v3 import TabularConfig
 from dpsynth.data_generation_v3 import TabularMechanism
@@ -34,6 +35,7 @@ from dpsynth.domain import FreeFormTextAttribute
 from dpsynth.domain import NumericalAttribute
 from dpsynth.domain import OpenSetCategoricalAttribute
 from dpsynth.domain import Schema
+from dpsynth.reporting import PrivacyReport
 from dpsynth.serialize import from_yaml
 from dpsynth.serialize import to_yaml
 import mbi
@@ -60,6 +62,7 @@ __all__ = [
     'MultiTableMechanism',
     'NumericalAttribute',
     'OpenSetCategoricalAttribute',
+    'PrivacyReport',
     'Schema',
     'TabularConfig',
     'TabularMechanism',
@@ -70,6 +73,7 @@ __all__ = [
     'from_yaml',
     'local_mode',
     'relational',
+    'reporting',
     'serialize',
     'to_yaml',
 ]

@@ -24,6 +24,7 @@ import cattrs
 import dp_accounting
 from dpsynth import api
 from dpsynth import domain
+from dpsynth import reporting
 from dpsynth.relational import domain as relational_domain
 from etils import epath
 import yaml
@@ -40,6 +41,8 @@ def _resolve_type(type_name: str) -> type[Any] | None:
     return getattr(domain, type_name)
   if hasattr(relational_domain, type_name):
     return getattr(relational_domain, type_name)
+  if hasattr(reporting, type_name):
+    return getattr(reporting, type_name)
   if hasattr(dp_accounting.dp_event, type_name):
     candidate = getattr(dp_accounting.dp_event, type_name)
     if isinstance(candidate, type) and issubclass(
@@ -87,6 +90,10 @@ def _make_converter() -> cattrs.Converter:
       lambda cl: isinstance(cl, type) and issubclass(cl, dp_accounting.DpEvent),
       lambda cl: _unstructure_dataclass(cl, conv),
   )
+  conv.register_unstructure_hook(
+      tuple,
+      lambda val: [conv.unstructure(x) for x in val],
+  )
 
   # 2. Polymorphic structuring for abstract base classes and unions
   conv.register_structure_hook(
@@ -112,10 +119,21 @@ def _make_converter() -> cattrs.Converter:
       ],
   )
 
+  # 4. Structure tuple[tuple[float, float], ...] consistently
+  conv.register_structure_hook_func(
+      lambda typ: typ == tuple[tuple[float, float], ...],
+      lambda data, _: tuple((float(x[0]), float(x[1])) for x in data),
+  )
+
   return conv
 
 
 converter = _make_converter()
+
+# Ensure tuples are dumped as standard YAML lists (no !!python/tuple tag).
+yaml.SafeDumper.add_representer(
+    tuple, yaml.representer.SafeRepresenter.represent_list
+)
 
 
 def to_yaml(obj: Any, filepath: str | PathType | None = None) -> str:
@@ -129,7 +147,12 @@ def to_yaml(obj: Any, filepath: str | PathType | None = None) -> str:
     The YAML string representation.
   """
   unstructured = converter.unstructure(obj)
-  yaml_str = yaml.dump(unstructured, default_flow_style=False, sort_keys=False)
+  yaml_str = yaml.dump(
+      unstructured,
+      Dumper=yaml.SafeDumper,
+      default_flow_style=False,
+      sort_keys=False,
+  )
   if filepath is not None:
     epath.Path(filepath).write_text(yaml_str)
   return yaml_str

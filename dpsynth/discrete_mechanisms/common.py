@@ -196,7 +196,7 @@ def compression_mappings(
       else {m.clique[0] for m in one_way_measurements}
   )
   if constraints:
-    constrained = set().union(*(c.domain.attrs for c in constraints))
+    constrained = set().union(*(c.domain.attributes for c in constraints))
     skipped = cols & constrained
     if skipped:
       logging.info(
