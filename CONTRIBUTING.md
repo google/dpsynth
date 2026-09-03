@@ -18,12 +18,12 @@ We welcome contributions in many forms:
 
 ### Bug Fixes, Issues, and Documentation
 
-- **Bug reports**: Open an [issue](https://github.com/google/dpsynth/issues)
-  describing what went wrong and how to reproduce it.
-- **Bug fixes**: Small, focused PRs that fix a specific issue are always
-  appreciated.
-- **Documentation**: Improving docstrings, adding examples, or clarifying
-  existing docs.
+-   **Bug reports**: Open an [issue](https://github.com/google/dpsynth/issues)
+    describing what went wrong and how to reproduce it.
+-   **Bug fixes**: Small, focused PRs that fix a specific issue are always
+    appreciated.
+-   **Documentation**: Improving docstrings, adding examples, or clarifying
+    existing docs.
 
 ### Privacy Hardening
 
@@ -36,16 +36,16 @@ welcome.
 
 We accept new mechanisms at every level of the stack:
 
-- **Tabular data mechanisms**: New algorithms for discrete synthetic data
-  generation (e.g., alternatives to AIM, SWIFT, MST).
-- **Text generation mechanisms**: New approaches for differentially private text
-  synthesis or fine-tuning.
-- **Primitives**: New building blocks such as partition selection algorithms or
-  numerical discretization strategies.
-- **Higher-level components**: Mechanisms that build on top of synthetic data
-  generation — for example, adaptive insights from unstructured text, or
-  modality-specific pipelines that decompose complex problems into
-  subproblems the library already handles well.
+-   **Tabular data mechanisms**: New algorithms for discrete synthetic data
+    generation (e.g., alternatives to AIM, SWIFT, MST).
+-   **Text generation mechanisms**: New approaches for differentially private
+    text synthesis or fine-tuning.
+-   **Primitives**: New building blocks such as partition selection algorithms
+    or numerical discretization strategies.
+-   **Higher-level components**: Mechanisms that build on top of synthetic data
+    generation — for example, adaptive insights from unstructured text, or
+    modality-specific pipelines that decompose complex problems into subproblems
+    the library already handles well.
 
 ### API Design Proposals
 
@@ -59,13 +59,13 @@ backwards-incompatible wrappers later.
 DP Synth is co-developed with several companion libraries, and improvements to
 any of them directly benefit DP Synth:
 
-- [**MBI**](https://github.com/ryan112358/mbi): Graphical model estimation
-  and inference engine used by the tabular mechanisms.
-- [**dp_accounting**](https://github.com/google/differential-privacy/tree/main/python/dp_accounting):
-  Privacy accounting and budget composition.
-- [**jax_privacy**](https://github.com/google-deepmind/jax_privacy):
-  Differentially private training primitives used by the text generation
-  module.
+-   [**MBI**](https://github.com/ryan112358/mbi): Graphical model estimation and
+    inference engine used by the tabular mechanisms.
+-   [**dp_accounting**](https://github.com/google/differential-privacy/tree/main/python/dp_accounting):
+    Privacy accounting and budget composition.
+-   [**jax_privacy**](https://github.com/google-deepmind/jax_privacy):
+    Differentially private training primitives used by the text generation
+    module.
 
 Contributions to these libraries — bug fixes, performance improvements, new
 features — can be surfaced into DP Synth once they land upstream.
@@ -81,9 +81,9 @@ library.
 Once a contribution in `contrib/` has landed, matured, and proven useful, we'll
 work with you to migrate it into the appropriate core module.
 
-If your contribution is a bug fix, documentation improvement, or a change to
-an existing module, submit it directly to the relevant file — `contrib/` is
-only for new standalone additions.
+If your contribution is a bug fix, documentation improvement, or a change to an
+existing module, submit it directly to the relevant file — `contrib/` is only
+for new standalone additions.
 
 ## Acceptance Criteria
 
@@ -91,42 +91,41 @@ When reviewing contributions, we primarily look for two things:
 
 ### 1. Simplicity
 
-Simpler contributions with smaller diffs are more likely to be accepted. For
-new mechanisms in particular:
+Simpler contributions with smaller diffs are more likely to be accepted. For new
+mechanisms in particular:
 
-- **Aim for a single file** with at most ~500 lines of code.
-- You don't need to use the same internal helper functions that existing
-  mechanisms use. If your approach is novel, a self-contained implementation
-  is perfectly fine.
-- However, your mechanism **should conform to the same API contract** as
-  existing mechanisms (e.g., implementing `DPMechanism`, accepting the same
-  calibration/configuration interface). The exception is mechanisms designed
-  for a new data modality (e.g., relational data), where a new API surface
-  may be necessary.
+-   **Aim for a single file** with at most ~500 lines of code.
+-   You don't need to use the same internal helper functions that existing
+    mechanisms use. If your approach is novel, a self-contained implementation
+    is perfectly fine.
+-   However, your mechanism **should conform to the same API contract** as
+    existing mechanisms (e.g., implementing `DPMechanism`, accepting the same
+    calibration/configuration interface). The exception is mechanisms designed
+    for a new data modality (e.g., relational data), where a new API surface may
+    be necessary.
 
 ### 2. No New Heavy Dependencies
 
 DP Synth deliberately keeps its dependency footprint small:
 
-- **Do not introduce PyTorch, TensorFlow, or other heavyweight
-  dependencies.**
-- If you need numerical computing, use **JAX**. If you need neural network
-  layers, use **Flax**.
-- If your contribution requires a new dependency, discuss it in the issue
-  tracker first.
+-   **Do not introduce PyTorch, TensorFlow, or other heavyweight dependencies.**
+-   If you need numerical computing, use **JAX**. If you need neural network
+    layers, use **Flax**.
+-   If your contribution requires a new dependency, discuss it in the issue
+    tracker first.
 
 ## Development Setup
 
 We use [uv](https://docs.astral.sh/uv/) for managing your development
-environment. It provides support for managing `pylock.toml` lock files and
-is significantly faster than `pip`.
+environment. It provides support for managing `pylock.toml` lock files and is
+significantly faster than `pip`.
 
-> [!NOTE]
-> The `pylock.toml` file is generated using `uv`, but it follows standard
-> specifications as per PEP 751 and should work with modern package managers
-> that support it.
+> [!NOTE] The `pylock.toml` file is generated using `uv`, but it follows
+> standard specifications as per PEP 751 and should work with modern package
+> managers that support it.
 
-1.  **Install uv:** Follow the [official instructions](https://docs.astral.sh/uv/getting-started/installation/).
+1.  **Install uv:** Follow the
+    [official instructions](https://docs.astral.sh/uv/getting-started/installation/).
 2.  **Create an environment and install dependencies:**
 
     ```bash
@@ -144,7 +143,7 @@ is significantly faster than `pip`.
 
     ```bash
     uv export --format pylock.toml --all-extras --default-index https://pypi.org/simple -o pylock.toml --python 3.12
-    go run github.com/google/addlicense@v1.1.1 -c "Google LLC" -y "2026" -l apache pylock.toml
+    go run github.com/google/addlicense@v1.2.0 -c "Google LLC" -y "2026" -l apache pylock.toml
     ```
 
     Commit the updated `pylock.toml` to ensure CI and contributors remain in

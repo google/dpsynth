@@ -40,7 +40,7 @@ changelog = "https://github.com/google/dpsynth/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
 pipeline = [
-    "apache-beam",
+    "apache-beam>=2.75.0",
     "google-crc32c",
     "pipeline-dp",
     "tensorflow",
