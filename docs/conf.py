@@ -45,8 +45,19 @@ autodoc_default_options = {
     'show-inheritance': True,
 }
 
-# templates_path = ['_templates']
+templates_path = ['_templates']
 exclude_patterns = ['_build', 'Thumbs.db', '.DS_Store']
+
+# Enable MyST-Parser extensions for math rendering ($...$ and AMS environments).
+myst_enable_extensions = [
+    'dollarmath',
+    'amsmath',
+]
+myst_heading_anchors = 3
+
+suppress_warnings = [
+    'misc.highlighting_failure',
+]
 
 # -- Options for HTML output -------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#options-for-html-output

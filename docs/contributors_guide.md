@@ -130,7 +130,69 @@ without changing a single line of code.
     testing and debugging.
 *   **`pipeline_dp.BeamBackend`**: Executes
     on Apache Beam.
-[PipelineDP](https://github.com/OpenMined/PipelineDP)
+    In open-source deployments, it allows DPSynth to run on Apache Spark
+    or Google Cloud Dataflow.
+
+### 3. Designing Pipeline Functions
+
+When writing new transformations in `pipeline_transformations/`, functions
+**MUST** accept a `backend: PipelineBackend` instance as an argument and use its
+methods exclusively for all data transformations.
+
+```python
+from pipeline_dp import PipelineBackend
+
+def compute_custom_column_stats(backend: PipelineBackend, input_collection):
+    # input_collection is framework-agnostic (PCollection or Python list)
+    # Every operation MUST include a clear, descriptive stage_name
+
+    # 1. Map: Extract column value
+    col_values = backend.map(input_collection, lambda row: row[2], "ExtractColumnValue")
+
+    # 2. Filter: Remove missing entries
+    filtered_values = backend.filter(col_values, lambda x: x is not None, "FilterNonNull")
+
+    # 3. Key: Pair with constant key
+    keyed_data = backend.map(filtered_values, lambda x: ("all_records", x), "AddKey")
+
+    # 4. Group & Reduce: Sum values per key
+    grouped_data = backend.group_by_key(keyed_data, "GroupByKey")
+    summed_data = backend.map_values(grouped_data, sum, "SumValues")
+
+    return summed_data
+```
+
+### 3. Core `PipelineBackend` Methods Available
+
+*   `map(col, fn, stage_name)`: Apply a function to each element.
+*   `flat_map(col, fn, stage_name)`: Apply a function returning an iterable,
+    flattening results.
+*   `filter(col, fn, stage_name)`: Keep elements where `fn` returns `True`.
+*   `group_by_key(col, stage_name)`: Group key-value pairs by key.
+*   `map_values(col, fn, stage_name)`: Apply a function to values of key-value
+    pairs.
+*   `sum_per_key(col, stage_name)` / `reduce_per_key(col, fn, stage_name)`:
+    Aggregate values per key.
+*   `flatten(cols, stage_name)`: Merge multiple collections into one.
+*   `distinct(col, stage_name)`: Get unique elements.
+
+### 4. Critical Constraints & Safety Guardrails
+
+> [!CAUTION] **Never use framework-specific operations** like `beam.Map`,
+> `beam.Filter`, or the Beam pipe operator (`|`) inside functions designed to be
+> backend-agnostic. All transformations must route through methods of the passed
+> `backend` object.
+>
+> **Never assume collection types**. `input_collection` will be a Python
+> iterable for `LocalBackend` but a `PCollection` for `BeamBackend`. Pipeline
+> logic must never invoke methods specific to `list` or `PCollection`.
+
+### 5. PipelineDP Integration & DP Aggregations
+
+While the `PipelineBackend` abstraction is used to write the framework-agnostic
+data manipulation pipeline, the actual **Differentially Private Aggregations**
+are powered by the `pipeline_dp.DPEngine` object from
+the [PipelineDP](https://github.com/OpenMined/PipelineDP)
 library.
 
 When contributing new mechanisms or data transformations, verify that you

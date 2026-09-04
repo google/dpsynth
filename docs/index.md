@@ -77,7 +77,9 @@ interface.
 *   **Execution**: Runs
     on Apache Beam
     (or Apache Spark in open-source deployments).
-[`bin/run_data_generation.py`](../bin/run_data_generation.py). *   **Documentation**:
+*   **Inputs/Outputs**: (Sharded) CSV and TFRecord.
+*   **CLI
+    Binary**: [`bin/run_data_generation.py`](../bin/run_data_generation.py). *   **Documentation**:
     [Scalable PipelineBackend API Guide](scalable_beam_api.md).
 
 --------------------------------------------------------------------------------
@@ -102,6 +104,9 @@ contributor expanding the library, explore the documentation below:
 *   **[Contributor & Architecture Guide](contributors_guide.md)**: Architectural
     separation, core abstractions, PipelineBackend programming rules,
     diagnostics, and the Tabular Evaluation framework.
+*   **[Mechanism API Architecture](mechanism_api.md)**: Design decisions,
+    the 3-step pipeline, configure vs. calibrate semantics, and tight
+    privacy accounting.
 
 --------------------------------------------------------------------------------
 
@@ -146,6 +151,14 @@ scalable_pipeline_api
 
 processing_lifecycle
 contributors_guide
+```
+
+```{toctree}
+:maxdepth: 2
+:caption: Developer documentation:
+:hidden:
+
+mechanism_api
 ```
 
 ```{toctree}

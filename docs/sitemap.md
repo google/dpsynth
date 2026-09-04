@@ -119,3 +119,16 @@
     *   [Running Evaluation (CLI)](contributors_guide.md#running-evaluation-cli)
 
 </details>
+
+--------------------------------------------------------------------------------
+
+<details>
+<summary>📁 <a href="mechanism_api.md">Mechanism API Architecture</a></summary>
+
+*   [Design Decisions: `MechanismConfig` vs. `CalibratedMechanism`](mechanism_api.md#design-decisions)
+*   [The 3-Step Mechanism Pipeline](mechanism_api.md#three-step-pipeline)
+*   [`configure(zcdp_rho)` vs. `calibrate(epsilon, delta)`](mechanism_api.md#configure-vs-calibrate)
+*   [Notes on the `configure(zcdp_rho)` Design](mechanism_api.md#zcdp-intermediate)
+*   [`zcdp_rho` vs. Natural Privacy Parameters](mechanism_api.md#natural-parameters)
+
+</details>

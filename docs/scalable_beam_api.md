@@ -5,7 +5,17 @@
 [TOC]
 
 When your dataset is large enough to be processed on one machine (>1M records)
-[`pipeline_transformations/`](../pipeline_transformations/README.md)
+or when your need distributed processing, use the **Scalable Beam API**.
+
+There are 2 options to run:
+
+1.  Using Library API from you code as Python Beam Pipeline.
+
+1.  From command line.
+
+This interface is built on top of `pipeline_dp.PipelineBackend`, allowing the
+mathematical synthesis transformations
+in [`pipeline_transformations/`](../pipeline_transformations/README.md)
 to run seamlessly on distributed computation engines
 like **Apache Beam**
 (or Apache Spark in open-source deployments).
@@ -86,7 +96,48 @@ config = data_generation.DataGenerationConfig(
     delta=1e-7,
     mechanism=data_generation.Mechanism.MST, # or AIM, SWIFT, INDEPENDENT
     dataset_descriptor=descriptor_object,    # Schema descriptor (CSV, TFRecord)
-    [`bin/run_data_generation.py`](../bin/run_data_generation.py)
+    data_format=types.DataFormat.CSV,  # Input format
+    output_format=types.DataFormat.CSV, # Output format (defaults to data_format)
+    num_out_records=100_000,                 # Number of synthetic records to sample
+)
+```
+
+### Running the Pipeline in Python
+
+```python
+import apache_beam as beam
+from dpsynth import data_generation
+import pipeline_dp
+
+# 1. Instantiate your Beam pipeline
+with beam.Pipeline() as pipeline:
+    # 2. Load raw distributed data into a PCollection
+    raw_records = pipeline | "ReadRecords" >> beam.io.ReadFromTFRecord("/path/to/data.tfrecord*")
+
+    # 3. Instantiate BeamBackend
+    beam_backend = pipeline_dp.BeamBackend()
+
+    # 4. Optional: Capture diagnostic accounting and L1 loss metadata
+    additional_output = data_generation.AdditionalOutput()
+
+    # 5. Execute distributed generation pipeline
+    synthetic_records = data_generation.generate(
+        input_data=raw_records,
+        config=config,
+        backend=beam_backend,
+        additional_output=additional_output,
+    )
+
+    # 6. Write synthetic records to distributed sink
+    synthetic_records | "WriteSynthetic" >> beam.io.WriteToTFRecord("/path/to/synthetic.tfrecord")
+```
+
+--------------------------------------------------------------------------------
+
+## Command-Line Interface: `bin/run_data_generation.py`
+
+The standalone
+binary [`bin/run_data_generation.py`](../bin/run_data_generation.py)
 orchestrates the complete distributed lifecycle. It handles format deduction,
 launches the Beam job on cluster infrastructure, and manages sink connectors.
 
@@ -112,6 +163,30 @@ python3 bin/run_data_generation.py \
 *   `--domain_file`: Optional path to explicit `domain.yaml`. If omitted, the
     schema is deduced and populated privately on-the-fly.
 *   `--epsilon`, `--delta`: Differential privacy budget.
+*   `--data_format`, `--output_format`: Must be one of `CSV` or `TFRECORD`.
+*   `--use_beam`: If `true`, launches a distributed
+    Beam job across computing clusters. If `false`, runs locally
+    in-process using `pipeline_dp.LocalBackend`.
+*   `--mechanism`: Supported options are `mst`, `aim`, `independent`, and
+    `swift`.
+*   `--attributes`: Comma-separated list of specific columns to synthesize. If
+    omitted, all columns are synthesized.
+*   `--num_out_records`: Target number of output synthetic records. If omitted,
+    generates a dataset approximately equal in size to the input data (privately
+    estimated).
+*   `--output_path`: Destination storage path for the synthetic data.
+
+#### Advanced & Diagnostic Flags
+
+*   `--diagnostic_information_path`: Storage path where a
+    `DiagnosticInformation` protobuf (containing DP budget splits, operation
+    counts, and L1 loss metrics) will be saved.
+*   `--model_save_path`: Storage path where the trained `SyntheticModel`
+    protobuf and populated `DatasetDescriptor` will be saved. This allows
+    generating additional records later without re-reading sensitive source
+    data.
+*   `--aim_rounds`, `--aim_pgm_iters`, `--aim_max_model_size`: Advanced tuning
+    parameters specifically for the AIM mechanism.
 
 --------------------------------------------------------------------------------
 
