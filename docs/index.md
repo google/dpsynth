@@ -136,7 +136,7 @@ APIs:
 
 data_and_terminology
 in_memory_api
-scalable_pipeline_api
+scalable_beam_api
 ```
 
 ```{toctree}

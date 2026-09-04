@@ -53,6 +53,9 @@ When initializing `dpsynth.TabularConfig`:
     partition selection (default: `0.1`).
 *   `cross_attribute_constraints`: Optional sequence of constraints to enforce
     on generated data.
+*   `compress_columns`: Whether to compress rare categories (< 3*sigma) for
+    `CategoricalAttribute` columns not present in constraints
+    (default: `False`).
 
 When calling `config.calibrate(...)`:
 

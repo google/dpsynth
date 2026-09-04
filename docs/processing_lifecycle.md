@@ -11,7 +11,8 @@ floating-point ranges, unbounded string categories, high-dimensional state
 spaces, and strict privacy budget accounting.
 
 This page details the 5-stage mathematical lifecycle executed across both the
-[In-Memory](in_memory_api.md) and [Scalable Pipeline](scalable_beam_api.md)
+[In-Memory](in_memory_api.md) and
+[Scalable Pipeline](scalable_beam_api.md)
 APIs.
 
 ```

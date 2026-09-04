@@ -45,8 +45,21 @@ autodoc_default_options = {
     'show-inheritance': True,
 }
 
-# templates_path = ['_templates']
+templates_path = ['_templates']
 exclude_patterns = ['_build', 'Thumbs.db', '.DS_Store']
+
+root_doc = 'index'
+master_doc = 'index'
+
+autodoc_mock_imports = [
+    'pipeline_dp',
+    'apache_beam',
+    'tensorflow',
+    'flax',
+    'gemma',
+    'jax_privacy',
+    'optax',
+]
 
 # -- Options for HTML output -------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#options-for-html-output

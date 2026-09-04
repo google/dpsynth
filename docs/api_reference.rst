@@ -44,6 +44,7 @@ argument to :class:`~dpsynth.TabularConfig`.
    :nosignatures:
    :template: autosummary/class.rst
 
+   Schema
    CategoricalAttribute
    NumericalAttribute
    OpenSetCategoricalAttribute
