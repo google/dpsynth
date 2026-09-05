@@ -36,6 +36,7 @@ from __future__ import annotations
 import abc
 from collections.abc import Callable
 import functools
+import math
 from typing import Any
 
 import dp_accounting
@@ -186,11 +187,23 @@ class MechanismConfig(abc.ABC):
     Raises:
       UnsupportedEventError: If no accountant supports the DpEvent.
     """
+    if target_epsilon <= 0:
+      raise ValueError(
+          f'Target epsilon must be positive, got {target_epsilon}.'
+      )
+
+    if math.isinf(target_epsilon):
+      return float('inf')
+
     rho = float('inf')
+    # Rho is roughly quadratic in epsilon, so we use epsilon^2 as a guess.
+    init_guess = target_epsilon**2
+    pld_error = None
     try:
-      # This is a heuristic to avoid excessively fine discretization in PLD
-      # accounting, which can cause OOM at extremely small target epsilons.
-      value_discretization_interval = max(1e-4, 1e-4 / (target_epsilon + 1e-5))
+      # Scale value_discretization_interval with target_epsilon to avoid
+      # the discretization dominating the epsilon at smaller budgets, which
+      # causes calibration to fail.
+      value_discretization_interval = min(1e-4, 1e-1 * target_epsilon)
       accountant_fn = functools.partial(
           dp_accounting.pld.PLDAccountant,
           value_discretization_interval=value_discretization_interval,
@@ -200,21 +213,36 @@ class MechanismConfig(abc.ABC):
           make_event_from_param=make_event_fn,
           target_epsilon=target_epsilon,
           target_delta=target_delta,
+          bracket_interval=dp_accounting.LowerEndpointAndGuess(0.0, init_guess),  # pyrefly: ignore[bad-argument-count]
       )
-    except (dp_accounting.UnsupportedEventError, NotImplementedError):
-      # If PLD accounting is not supported, fall back to RDP accounting.
-      pass
+    except (dp_accounting.UnsupportedEventError, NotImplementedError) as e:
+      # Okay if one of the accountants fails.
+      pld_error = e
+    rdp_error = None
+    try:
+      # Rho is roughly quadratic in epsilon, so we use epsilon^2 as a guess.
+      rho2 = dp_accounting.calibrate_dp_mechanism(
+          make_fresh_accountant=dp_accounting.rdp.RdpAccountant,
+          make_event_from_param=make_event_fn,
+          target_epsilon=target_epsilon,
+          target_delta=target_delta,
+          bracket_interval=dp_accounting.LowerEndpointAndGuess(0.0, init_guess),  # pyrefly: ignore[bad-argument-count]
+      )
+      rho = min(rho, rho2)
+    except (dp_accounting.UnsupportedEventError, NotImplementedError) as e:
+      # Okay if one of the accountants fails.
+      rdp_error = e
 
-    rho2 = dp_accounting.calibrate_dp_mechanism(
-        make_fresh_accountant=dp_accounting.rdp.RdpAccountant,
-        make_event_from_param=make_event_fn,
-        target_epsilon=target_epsilon,
-        target_delta=target_delta,
-    )
+    if rho == float('inf'):
+      raise dp_accounting.UnsupportedEventError(
+          'No accountant supports the mechanism:\n'
+          f'  PLDAccountant error: {pld_error}\n'
+          f'  RdpAccountant error: {rdp_error}'
+      )
 
     # RDP can also be better than PLD in some cases due to looseness in the
     # handling of certain DpEvents like the ExponentialMechanismDpEvent.
-    return min(rho, rho2)
+    return rho
 
   def calibrate(
       self,
