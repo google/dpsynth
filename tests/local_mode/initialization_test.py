@@ -16,8 +16,8 @@ from absl.testing import absltest
 from absl.testing import parameterized
 import dp_accounting
 from dpsynth import domain
-from dpsynth.local_mode import _quantiles
 from dpsynth.local_mode import initialization
+from dpsynth.local_mode import primitives
 from dpsynth.local_mode import vectorized_transformations as vtx
 import numpy as np
 
@@ -134,7 +134,7 @@ class InitializationTest(absltest.TestCase):
     init = initialization.NumericalInitializerConfig(
         num_partitions=64, max_grid_size=max_grid_size
     )
-    m = _quantiles.jitter_factor(init.num_partitions)
+    m = primitives.jitter_factor(init.num_partitions)
     self.assertLessEqual(
         init.configure(attr, zcdp_rho=1.0).grid_size * m, max_grid_size
     )

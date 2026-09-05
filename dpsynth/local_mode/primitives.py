@@ -14,67 +14,227 @@
 
 """Differentially private primitives for local mode synthetic data generation.
 
+This module is intended to be the singular home for low-level DP building blocks
+in dpsynth, making a potential future switch to a PyDP or OpenDP backend
+simpler.
+While not all DP code in dpsynth currently goes through this module, that is the
+long-term goal (at least for tabular data).
+
 Design Decisions:
 
-1) Summary Statistics: All primitives are defined strictly in terms of summary
-   statistics (counts, histograms, etc.) rather than raw datasets. This ensures
-   computational efficiency and separation of data aggregation from DP
-   calibration.
-2) Pure Functions: Primitives are pure functions that take numpy inputs and
-return
-   numpy outputs. State and DP accounting, when needed, are managed externally.
+1) Pre-Computed Aggregates: All functions expect pre-computed aggregates
+   (counts, histograms, quality scores) rather than performing data aggregation
+   themselves. Therefore, it is the responsibility of the caller to ensure the
+   appropriate privacy assumptions are satisfied (primarily that each user
+   contributes at most one record to one bucket, or that user contributions are
+   properly bounded via max_records_per_user).
+2) Pure Functions: Primitives are pure functions that take NumPy inputs and
+   return NumPy or Python outputs. State and DP accounting, when needed, are
+   managed externally.
 
 Privacy Characterizations:
 
-- Quantiles (via `_quantiles.quantiles_from_histogram`): This mechanism is a
-composition
-  of exponential mechanisms with parameters taken from `epsilon_levels`.
-- Partition Selection (`_select_partitions_sips`): DP-SIPS mechanism for
-discovering
-  open-set vocabulary, utilizing Gaussian Thresholding combined with privacy
-  filtering.
-- Gaussian Thresholding (`select_partitions_gaussian_thresholding`): This
-mechanism adds
-  Gaussian noise to counts and tests against a threshold that provides a (0,
-  delta)
-  bound on false positives for unpopulated partitions.
-- Gaussian Noise (`add_gaussian_noise`): This is a standard Gaussian mechanism
-applied
-  to the input summary statistics (e.g. counts).
+- Exponential Mechanism (`exponential_mechanism`): Standard exponential
+  mechanism for discrete selection given candidate quality scores.
+- Quantiles (`quantiles_from_histogram`): Composition of exponential mechanisms
+  via jittered recursive median bisection over a dense histogram.
+- Gaussian Thresholding (`select_partitions_gaussian_thresholding`): Partition
+  selection mechanism that adds Gaussian noise to counts and tests against a
+  threshold bounding false positives for empty partitions at delta.
+- Gaussian Noise (`add_gaussian_noise`): Standard Gaussian mechanism applied to
+  input summary statistics (e.g., counts).
 """
 
 from __future__ import annotations
 
+from typing import Literal
 
 import numpy as np
+import scipy.special
 import scipy.stats
 
-
-_UNCALIBRATED_MSG = (
-    '{param} has not been set. Set it directly or call calibrate().'
-)
-
-
-def _contribution_bound(prng, user_ids, max_part):
-  """Return array idx where all ids appear <=max_part times in user_ids[idx]."""
-  # Sort by ID + noise to shuffle within groups. Then find where
-  # groups start/end, and select the first max_part elements of each group.
-  # Use lexsort with random keys to shuffle string/object IDs safely.
-  random_keys = prng.uniform(size=user_ids.size)
-  idx = np.lexsort((random_keys, user_ids))
-  sorted_ids = user_ids[idx]
-  diff = np.r_[True, sorted_ids[1:] != sorted_ids[:-1]]
-  kernel = np.ones(max_part, dtype=bool)
-  # This convolution determines if any of previous max_part elements are True.
-  mask = np.convolve(diff, kernel, mode='full')[: user_ids.size]
-  return idx[mask]
+# ---------------------------------------------------------------------------
+# Exponential Mechanism
+# ---------------------------------------------------------------------------
 
 
-def _get_threshold(delta, sigma, max_part):
-  ks = np.arange(1, max_part + 1)
-  failure_prob = (1 - delta) ** (1 / ks)
-  thresholds = 1 / np.sqrt(ks) + sigma * scipy.stats.norm.ppf(failure_prob)
-  return thresholds.max()
+def exponential_mechanism(
+    rng: np.random.Generator,
+    quality_scores: np.ndarray,
+    epsilon: float,
+    sensitivity: float = 1.0,
+    monotonic: bool = False,
+) -> int:
+  """Selects an index using the discrete exponential mechanism.
+
+  Samples a candidate index with probability proportional to
+  exp(coef * epsilon * quality_scores / sensitivity), where coef is 1.0
+  if monotonic is True and 0.5 otherwise.
+
+  Args:
+    rng: A numpy random number generator.
+    quality_scores: 1D array of utility/quality scores for each candidate.
+    epsilon: Privacy parameter epsilon. Must be non-negative.
+    sensitivity: Upper bound on the quality score sensitivity. Must be positive.
+    monotonic: Whether the score function is monotonic with respect to dataset
+      modifications (sensitivity Delta u instead of 2 * Delta u). Defaults to
+      False.
+
+  Returns:
+    The index of the selected candidate.
+
+  Raises:
+    ValueError: If epsilon < 0, sensitivity <= 0, or quality_scores is empty.
+  """
+  if epsilon < 0:
+    raise ValueError(f'epsilon must be non-negative, got {epsilon}')
+  if sensitivity <= 0:
+    raise ValueError(f'sensitivity must be positive, got {sensitivity}')
+
+  scores = np.asarray(quality_scores, dtype=float)
+  if scores.size == 0:
+    raise ValueError('quality_scores must not be empty.')
+
+  if epsilon == np.inf:
+    max_score = np.max(scores)
+    candidates = np.flatnonzero(scores == max_score)
+    return (
+        int(candidates[0])
+        if candidates.size == 1
+        else int(rng.choice(candidates))
+    )
+
+  coef = 1.0 if monotonic else 0.5
+  scaled_scores = (coef * epsilon / sensitivity) * scores
+  probs = scipy.special.softmax(scaled_scores)
+  return int(rng.choice(scores.size, p=probs))
+
+
+# ---------------------------------------------------------------------------
+# DP Quantiles via Recursive Median Bisection
+# ---------------------------------------------------------------------------
+
+
+def _median_from_histogram(
+    rng: np.random.Generator,
+    counts: np.ndarray,
+    epsilon: float,
+) -> int:
+  """Returns the index of a DP median within a dense histogram."""
+  total_points = len(counts)
+  if total_points == 0:
+    return 0
+  n = counts.sum()
+  target = n / 2.0
+  cumsum = np.cumsum(counts)
+
+  # Infinite budget = exact median, useful for testing.
+  if epsilon == np.inf:
+    return int(np.searchsorted(cumsum, target))
+
+  # Score u(v) = -dist(target, [L_v, R_v]), sensitivity 1/2.
+  left_ranks = np.r_[0, cumsum[:-1]]
+  scores = -np.maximum(0, np.maximum(left_ranks - target, target - cumsum))
+
+  return exponential_mechanism(
+      rng=rng,
+      quality_scores=scores,
+      epsilon=epsilon,
+      sensitivity=0.5,
+      monotonic=False,
+  )
+
+
+def jitter_factor(num_partitions: int) -> int:
+  """Returns a data-independent jitter resolution m from num_partitions."""
+  # m >= num_partitions keeps each jittered cell below one partition's mass;
+  # the 4x absorbs multinomial fluctuation.
+  return max(1, 4 * num_partitions)
+
+
+def quantiles_from_histogram(
+    rng: np.random.Generator,
+    counts: np.ndarray,
+    epsilon_levels: np.ndarray,
+    jitter_strategy: Literal['symmetric', 'refine'],
+    max_records_per_user: int = 1,
+) -> list[int]:
+  """DP quantile edge indices into ``counts`` via jittered median bisection.
+
+  Operates purely in index space: it returns cell indices into ``counts`` and
+  leaves the mapping from index to domain value to the caller.
+
+  Tie handling via jitter:
+  Recursive median bisection needs each record assigned to one side of every
+  split independently. A "spike" of records tied on one grid cell breaks this: a
+  whole-cell split sends all that mass to one side, biasing the quantiles and
+  collapsing sub-ranges (dropping edges). We fix this by breaking ties directly
+  in the histogram domain rather than over the raw data values -- each cell's
+  count is redistributed to nearby cells as Multinomial(count, kernel) (one
+  draw per non-empty cell), which is distributionally identical to independently
+  perturbing each record and so needs no extra privacy budget. The ``refine``
+  strategy uses a strictly-positive kernel over refined sub-cells (value-
+  preserving); the ``symmetric`` strategy uses a symmetric kernel over
+  neighboring grid cells.
+
+  Args:
+    rng: A numpy random number generator.
+    counts: Dense 1D histogram counts.
+    epsilon_levels: Per-level exponential mechanism epsilons, ordered from the
+      deepest (finest) level to the shallowest (coarsest).
+    jitter_strategy: Specifies the pre-processing jitter strategy, -
+      'symmetric': jitter mass to +/- m//2 neighbors on the same grid. -
+      'refine': jitter mass to m equivalent sub-cells.
+    max_records_per_user: Assumed upper bound on the number of records per user.
+
+  Returns:
+    A sorted list of ``2 ** len(epsilon_levels) - 1`` cell indices.
+  """
+  if max_records_per_user != 1:
+    # The privacy analysis of this mechanism relies on parallel composition
+    # across the nodes of each level of the hierarchy. When users have
+    # multiple records, they may contribute to multiple nodes, which would
+    # require a different privacy analysis (TBD).
+    raise NotImplementedError('max_records_per_user != 1 not yet supported.')
+  counts = np.asarray(counts)
+  m = jitter_factor(2 ** len(epsilon_levels))
+
+  if jitter_strategy == 'refine':
+    stride, offsets = m, np.arange(m)
+  else:
+    half = m // 2
+    stride, offsets = 1, np.arange(-half, half + 1)
+
+  # Scatter each cell's mass over its jittered targets: same law as perturbing
+  # each record, so it breaks ties without spending extra privacy budget.
+  num_cells = counts.size * stride
+  nz = np.flatnonzero(counts)
+  probas = np.full(offsets.size, 1.0 / offsets.size)
+  split = rng.multinomial(counts[nz].astype(np.int64), probas)
+  targets = np.clip(nz[:, None] * stride + offsets, 0, num_cells - 1)
+  jittered = np.bincount(  # pyrefly: ignore[no-matching-overload]
+      targets.flatten(), weights=split.flatten(), minlength=num_cells
+  )
+
+  def _rec(lo_idx, hi_idx, depth):
+    if depth == 0:
+      return []
+    median_idx = lo_idx + _median_from_histogram(
+        rng, jittered[lo_idx:hi_idx], epsilon_levels[depth - 1]
+    )
+    left = _rec(lo_idx, median_idx, depth - 1)
+    right = _rec(median_idx, hi_idx, depth - 1)
+    return left + [median_idx] + right
+
+  result = _rec(0, jittered.size, len(epsilon_levels))
+  if jitter_strategy == 'refine':
+    result = [idx // m for idx in result]
+  return result
+
+
+# ---------------------------------------------------------------------------
+# Partition Selection
+# ---------------------------------------------------------------------------
 
 
 def select_partitions_gaussian_thresholding(
@@ -171,7 +331,7 @@ def select_partitions_gaussian_thresholding(
   base = float(max_records_per_user + min_count - 1)
   threshold = base + stddev * scipy.stats.norm.ppf(1.0 - delta)
   passed = noisy_counts >= threshold
-  # unique_parts is sorted (see np.unique), so the output order is determinstic.
+  # unique_parts is sorted (np.unique), so the output order is deterministic.
   return unique_parts[passed], noisy_counts[passed], stddev
 
 
@@ -211,113 +371,8 @@ def ensure_public_partitions(
   return all_selected[order], all_counts[order]
 
 
-def _select_partitions_sips(
-    rng: np.random.Generator,
-    data: np.ndarray,
-    gdp_budget: float,
-    delta: float,
-    num_rounds: int | None = None,
-    user_ids: np.ndarray | None = None,
-    max_part: int = 1,
-    allocation_factor: float = 0.3,
-) -> tuple[np.ndarray, np.ndarray, float]:
-  """Implements the DP-SIPS mechanism for partition selection.
-
-  Args:
-    rng: A numpy random number generator.
-    data: 1D array of integers, where each element is a partition ID.
-    gdp_budget: Total privacy budget in terms of squared Gaussian DP mu
-      parameter (gdp_budget = mu^2 = 1 / sigma^2).
-    delta: Failure probability (false positive bound per empty partition).
-    num_rounds: Number of rounds to run the mechanism. Defaults to 1 if user_ids
-      is None, and 3 otherwise.
-    user_ids: Optional 1D array of user IDs corresponding to data. If provided,
-      user-level DP is guaranteed. If None, item-level DP is guaranteed
-      (assuming each record is a unique user).
-    max_part: Maximum number of partitions any single user can contribute to in
-      a single round.
-    allocation_factor: Factor by which to increase the budget each round.
-
-  Returns:
-    A tuple containing:
-      - selected_partitions: 1D array of unique partition IDs that passed the
-        threshold.
-      - estimated_counts: 1D array of noisy (or weighted noisy) counts for each
-        selected partition in the round it was discovered.
-      - standard_deviation: A single float representing the uniform standard
-        deviation of the noise added to the estimated counts.
-  """
-  if num_rounds is None:
-    num_rounds = 1 if user_ids is None else 3
-  if num_rounds <= 0:
-    raise ValueError(f'num_rounds ({num_rounds}) must be greater than 0.')
-  if gdp_budget <= 0 or delta <= 0 or delta > 1:
-    raise ValueError(f'{gdp_budget=} and {delta=} must be positive.')
-
-  fractions = allocation_factor ** np.arange(num_rounds)[::-1]
-  fractions /= fractions.sum()
-  gdp_rounds, delta_rounds = gdp_budget * fractions, delta * fractions
-  sigma_rounds = 1.0 / np.sqrt(gdp_rounds)
-  max_sigma = float(np.max(sigma_rounds))
-
-  if data.size == 0:
-    return np.empty(0, dtype=data.dtype), np.empty(0, dtype=float), max_sigma
-
-  if user_ids is None:
-    user_ids = np.arange(data.size)
-  if user_ids.size != data.size:
-    raise ValueError('user_ids must have the same size as data.')
-
-  combined = np.stack((user_ids, data), axis=1)
-  unique_combined = np.unique(combined, axis=0)
-  rem_user_ids = unique_combined[:, 0]
-  rem_partitions = unique_combined[:, 1]
-
-  selected_partitions = []
-  selected_counts = []
-  for i in range(num_rounds):
-    if rem_partitions.size == 0:
-      break
-
-    threshold = _get_threshold(delta_rounds[i], sigma_rounds[i], max_part)
-
-    mask = _contribution_bound(rng, rem_user_ids, max_part)
-    curr_user_ids = rem_user_ids[mask]
-    curr_partitions = rem_partitions[mask]
-
-    unique_users, user_counts = np.unique(curr_user_ids, return_counts=True)
-    user_to_count = dict(zip(unique_users, user_counts))
-    weights = np.array([1.0 / user_to_count[u] ** 0.5 for u in curr_user_ids])
-
-    unique_parts, inverse_indices = np.unique(
-        curr_partitions, return_inverse=True
-    )
-    weighted_counts = np.bincount(inverse_indices, weights=weights)
-    noised_counts = rng.normal(weighted_counts, scale=sigma_rounds[i])
-
-    passed_mask = noised_counts >= threshold
-    round_selections = unique_parts[passed_mask]
-    round_counts = noised_counts[passed_mask]
-    if round_selections.size > 0:
-      selected_partitions.append(round_selections)
-      selected_counts.append(round_counts)
-
-      mask = ~np.isin(rem_partitions, round_selections)
-      rem_user_ids = rem_user_ids[mask]
-      rem_partitions = rem_partitions[mask]
-
-  if not selected_partitions:
-    return (
-        np.empty(0, dtype=data.dtype),
-        np.empty(0, dtype=float),
-        max_sigma,
-    )
-  selected_partitions = np.concatenate(selected_partitions)
-  selected_counts = np.concatenate(selected_counts)
-  return selected_partitions, selected_counts, max_sigma
-
 # ---------------------------------------------------------------------------
-# Simple noisy counting functions
+# Gaussian Noise
 # ---------------------------------------------------------------------------
 
 
