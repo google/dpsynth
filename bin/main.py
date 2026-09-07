@@ -32,7 +32,6 @@ import fancyflags as ff
 import numpy as np
 import pandas as pd
 
-
 _DATASET_PATH = flags.DEFINE_string(
     'dataset',
     None,
@@ -63,7 +62,7 @@ _DELTA = flags.DEFINE_float(
 _MECHANISM = flags.DEFINE_enum(
     'mechanism',
     'mst',
-    ['mst', 'aim', 'independent', 'aim_gdp'],
+    ['mst', 'aim', 'independent'],
     'Mechanism to use.',
 )
 
@@ -100,8 +99,6 @@ def main(_):
       mechanism_config = dpsynth.discrete_mechanisms.AIMConfig()
     case 'independent':
       mechanism_config = dpsynth.discrete_mechanisms.IndependentConfig()
-    case 'aim_gdp':
-      mechanism_config = dpsynth.discrete_mechanisms.AIMGDPConfig()
     case _:
       raise ValueError(f'Unknown mechanism: {_MECHANISM.value}')
 

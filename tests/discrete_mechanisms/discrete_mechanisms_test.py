@@ -23,7 +23,6 @@ compression.
 from absl.testing import absltest
 from absl.testing import parameterized
 from dpsynth.discrete_mechanisms import aim
-from dpsynth.discrete_mechanisms import aim_gdp
 from dpsynth.discrete_mechanisms import common
 from dpsynth.discrete_mechanisms import direct
 from dpsynth.discrete_mechanisms import discrete
@@ -38,9 +37,6 @@ _WORKLOAD = [('a', 'b'), ('b', 'c'), ('a',), ('b',), ('c',)]
 
 _MECHANISMS = {
     'AIM': aim.AIMConfig(workload=_WORKLOAD, max_rounds=4, pgm_iters=500),
-    'AIM_GDP': aim_gdp.AIMGDPConfig(
-        workload=_WORKLOAD, max_rounds=4, pgm_iters=500
-    ),
     'MST': mst.MSTConfig(pgm_iters=500),
     'SWIFT': swift.SWIFTConfig(workload=_WORKLOAD, pgm_iters=500),
     'Independent': independent.IndependentConfig(),

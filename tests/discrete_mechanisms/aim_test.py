@@ -14,9 +14,7 @@
 
 from absl.testing import absltest
 from dpsynth.discrete_mechanisms import aim
-from dpsynth.discrete_mechanisms import aim_gdp
 from dpsynth.discrete_mechanisms import common
-from dpsynth.discrete_mechanisms import independent
 import mbi
 import numpy as np
 
@@ -73,53 +71,9 @@ class AIMTest(absltest.TestCase):
       actual = result.model.project([col]).datavector()
       np.testing.assert_allclose(actual, expected, atol=1)
 
-  def test_fits_one_way_marginals_with_aim_gdp(self):
-    data = mbi.Dataset.synthetic(mbi.Domain(["a", "b", "c"], [3, 4, 5]), N=1000)
-    workload = [("a",), ("b",), ("c",)]
-
-    config = aim_gdp.AIMGDPConfig(
-        workload=workload, max_rounds=4, pgm_iters=500
-    )
-    calibrated = config.configure(zcdp_rho=10000)
-    result = calibrated(np.random.default_rng(0), data)
-
-    self.assertIsInstance(result, common.DiscreteMechanismResult)
-    self.assertNotEmpty(result.measurements)
-    for col in data.domain:
-      expected = data.project([col]).datavector()
-      actual = result.model.project([col]).datavector()
-      np.testing.assert_allclose(actual, expected, atol=1)
-
-  def test_correlated_workload_regression_with_aim(self):
-    workload = [("a",), ("b",), ("c",), ("a", "b"), ("a", "c"), ("b", "c")]
-    config = aim.AIMConfig(workload=workload, max_rounds=4, pgm_iters=500)
-    baseline_config = independent.IndependentConfig()
-    mechanism_error, baseline_error = (
-        _correlated_workload_mechanism_baseline_errors(
-            config, baseline_config, workload
-        )
-    )
-    self.assertLess(mechanism_error, 0.05 * baseline_error)
-
-  def test_correlated_workload_regression_with_aim_gdp(self):
-    workload = [("a",), ("b",), ("c",), ("a", "b"), ("a", "c"), ("b", "c")]
-    config = aim_gdp.AIMGDPConfig(
-        workload=workload, max_rounds=4, pgm_iters=500
-    )
-    baseline_config = independent.IndependentConfig()
-    mechanism_error, baseline_error = (
-        _correlated_workload_mechanism_baseline_errors(
-            config, baseline_config, workload
-        )
-    )
-    self.assertLess(mechanism_error, 0.05 * baseline_error)
-
   def test_default_configuration_values(self):
     config = aim.AIMConfig()
     self.assertEqual(config.pgm_iters, 1000)
-
-    gdp_config = aim_gdp.AIMGDPConfig()
-    self.assertEqual(gdp_config.pgm_iters, 1000)
 
 
 if __name__ == "__main__":

@@ -133,7 +133,6 @@ marginal measurement and domain compression.
    IndependentConfig
    DirectConfig
    SWIFTConfig
-   AIMGDPConfig
 
 DiscreteConfig and DiscreteMechanism
 ------------------------------------

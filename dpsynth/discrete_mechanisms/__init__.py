@@ -26,8 +26,6 @@ from dpsynth.api import CalibratedMechanism
 from dpsynth.api import MechanismConfig
 from dpsynth.discrete_mechanisms.aim import AIM
 from dpsynth.discrete_mechanisms.aim import AIMConfig
-from dpsynth.discrete_mechanisms.aim_gdp import AIMGDP
-from dpsynth.discrete_mechanisms.aim_gdp import AIMGDPConfig
 from dpsynth.discrete_mechanisms.common import DiscreteMechanismResult
 from dpsynth.discrete_mechanisms.common import MechanismDiagnostics
 from dpsynth.discrete_mechanisms.direct import Direct
@@ -43,7 +41,6 @@ from dpsynth.discrete_mechanisms.swift import SWIFTConfig
 
 # Backwards-compatible aliases.
 AIMMechanism = AIMConfig
-AIMGDPMechanism = AIMGDPConfig
 DirectMechanism = DirectConfig
 IndependentMechanism = IndependentConfig
 MSTMechanism = MSTConfig

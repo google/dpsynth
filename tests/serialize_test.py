@@ -24,7 +24,6 @@ from dpsynth import domain
 from dpsynth import relational
 from dpsynth import serialize
 from dpsynth.discrete_mechanisms import aim
-from dpsynth.discrete_mechanisms import aim_gdp
 from dpsynth.discrete_mechanisms import direct
 from dpsynth.discrete_mechanisms import discrete
 from dpsynth.discrete_mechanisms import independent
@@ -87,15 +86,6 @@ class SerializeTest(parameterized.TestCase):
     config = direct.DirectConfig(
         pgm_iters=4000,
         prespecified_marginal_queries=[('a', 'b'), ('c',)],
-    )
-    yaml_str = serialize.to_yaml(config)
-    loaded = serialize.from_yaml(yaml_str)
-    self.assertEqual(loaded, config)
-
-  def test_aim_gdp_config_roundtrip(self):
-    config = aim_gdp.AIMGDPConfig(
-        pgm_iters=500,
-        max_rounds=10,
     )
     yaml_str = serialize.to_yaml(config)
     loaded = serialize.from_yaml(yaml_str)

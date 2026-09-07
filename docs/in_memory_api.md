@@ -162,8 +162,7 @@ python3 bin/main.py \
     arguments via `--read_csv_args`).
 *   `--domain`: Path to the YAML domain specification file.
 *   `--epsilon`, `--delta`: Total DP privacy budget.
-*   `--mechanism`: Supported options are `mst`, `aim`, `independent`, and
-    `aim_gdp`.
+*   `--mechanism`: Supported options are `mst`, `aim`, and `independent`.
 *   `--seed`: Integer seed for reproducible randomness across DP sampling and
     PGM inference.
 *   `--output_path`: Destination filepath where the synthetic CSV will be

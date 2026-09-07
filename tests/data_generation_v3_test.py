@@ -24,7 +24,6 @@ from dpsynth import data_generation_v3
 from dpsynth import discrete_mechanisms
 from dpsynth import domain
 from dpsynth.discrete_mechanisms import aim
-from dpsynth.discrete_mechanisms import aim_gdp
 from dpsynth.discrete_mechanisms.independent import IndependentConfig
 import mbi
 import numpy as np
@@ -318,33 +317,9 @@ class DataGenerationV3Test(parameterized.TestCase):
     )
     self.assertLess(mechanism_error, 0.05 * baseline_error)
 
-  def test_discrete_workload_regression_with_aim_gdp(self):
-    workload = [('a',), ('b',), ('c',), ('a', 'b'), ('a', 'c'), ('b', 'c')]
-    config = aim_gdp.AIMGDPConfig(
-        workload=workload, max_rounds=4, pgm_iters=500
-    )
-    baseline_config = IndependentConfig(pgm_iters=500)
-    mechanism_error, baseline_error = (
-        _discrete_workload_mechanism_baseline_errors(
-            config, baseline_config, workload
-        )
-    )
-    self.assertLess(mechanism_error, 0.05 * baseline_error)
-
   def test_mixed_workload_regression_with_aim(self):
     workload = [('a',), ('b',), ('c',), ('a', 'b'), ('a', 'c'), ('b', 'c')]
     config = aim.AIMConfig(workload=workload, max_rounds=4, pgm_iters=500)
-    baseline_config = IndependentConfig(pgm_iters=500)
-    mechanism_error, baseline_error = _mixed_workload_mechanism_baseline_errors(
-        config, baseline_config, workload
-    )
-    self.assertLess(mechanism_error, 0.05 * baseline_error)
-
-  def test_mixed_workload_regression_with_aim_gdp(self):
-    workload = [('a',), ('b',), ('c',), ('a', 'b'), ('a', 'c'), ('b', 'c')]
-    config = aim_gdp.AIMGDPConfig(
-        workload=workload, max_rounds=4, pgm_iters=500
-    )
     baseline_config = IndependentConfig(pgm_iters=500)
     mechanism_error, baseline_error = _mixed_workload_mechanism_baseline_errors(
         config, baseline_config, workload

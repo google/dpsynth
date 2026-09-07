@@ -88,18 +88,6 @@ workload; `_allocate_budget()` reserves rho for the adaptive loop; `_run()`
 replaces the standard base execution path. Helper functions filter valid
 candidates and privately choose the worst-approximated marginal.
 
-## `aim_gdp.py` — AIM with GDP-Oriented Allocation
-
-Implements `AIMGDPConfig`, a variant of AIM with the same adaptive workflow
-but GDP units for its internal loop budgeting. It is useful when its alternative
-privacy-accounting behavior is preferred.
-
-**Public API:** `AIMGDPConfig(workload=...)`
-
-**Internal behavior:** Like `aim.py`, it overrides `_one_way_cliques()`,
-`_allocate_budget()`, and `_run()`. Its internal helpers compute GDP-aware error
-scores and select the next workload marginal.
-
 ## `swift.py` — Workload and Clique-Tree Mechanism
 
 Implements `SWIFT`, a workload-informed mechanism that selects
