@@ -22,3 +22,12 @@ require remain optional for the core library to keep it lightweight).
 > between the pipeline DP implementations and the local-mode NumPy-based
 > implementations. How it fits within the broader ecosystem long-term is an
 > open question.
+
+## Optional Dependencies
+
+To keep the core DPSynth package lightweight, adapter dependencies are optional:
+
+- **Pydantic**: Included in core dependencies (`pip install dpsynth`).
+- **Protobuf**: Install via `pip install protobuf`.
+- **Beam**: Install via `pip install dpsynth[pipeline]` or `pip install apache-beam`.
+
