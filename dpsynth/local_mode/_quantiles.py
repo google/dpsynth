@@ -91,7 +91,6 @@ def quantiles_from_histogram(
     counts: np.ndarray,
     epsilon_levels: np.ndarray,
     jitter_strategy: Literal['symmetric', 'refine'],
-    max_records_per_user: int = 1,
 ) -> list[int]:
   """DP quantile edge indices into ``counts`` via jittered median bisection.
 
@@ -106,17 +105,10 @@ def quantiles_from_histogram(
     jitter_strategy: Specifies the pre-processing jitter strategy, -
       'symmetric': jitter mass to +/- m//2 neighbors on the same grid. -
       'refine': jitter mass to m equivalent sub-cells.
-    max_records_per_user: Assumed upper bound on the number of records per user.
 
   Returns:
     A sorted list of ``2 ** len(epsilon_levels) - 1`` cell indices.
   """
-  if max_records_per_user != 1:
-    # The privacy analysis of this mechanism relies on parallel composition
-    # across the nodes of each level of the hierarchy. When users have
-    # multiple records, they may contirbute to multiple nodes, which would
-    # require a different privacy analysis (TBD).
-    raise NotImplementedError('max_records_per_user != 1 not yet supported.')
   counts = np.asarray(counts)
   m = jitter_factor(2 ** len(epsilon_levels))
 

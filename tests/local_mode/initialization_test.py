@@ -27,7 +27,7 @@ class InitializationTest(absltest.TestCase):
   def test_numerical_initializer_dp_event(self):
     attr = domain.NumericalAttribute(min_value=0, max_value=10)
     initializer = initialization.NumericalInitializerConfig(num_partitions=4)
-    event = initializer.configure(attr, zcdp_rho=1.0).dp_event
+    event = initializer.configure(attr, zcdp_rho=1.0).dp_event(group_size=1)
     self.assertIsInstance(event, dp_accounting.ComposedDpEvent)
     self.assertLen(event.events, 2)
     for e in event.events:
@@ -464,7 +464,7 @@ class CategoricalInitializerTest(absltest.TestCase):
   def test_dp_event(self):
     attr = domain.CategoricalAttribute(possible_values=['A', 'B', 'C'])
     initializer = initialization.CategoricalInitializerConfig()
-    event = initializer.configure(attr, zcdp_rho=0.5).dp_event
+    event = initializer.configure(attr, zcdp_rho=0.5).dp_event(group_size=1)
     self.assertIsInstance(event, dp_accounting.GaussianDpEvent)
     # rho = 0.5 => sigma = 1/sqrt(2*0.5) = 1.0
     self.assertEqual(event.noise_multiplier, 1.0)
@@ -500,7 +500,9 @@ class OpenSetCategoricalInitializerTest(absltest.TestCase):
   def test_dp_event(self):
     attr = domain.OpenSetCategoricalAttribute(default_value='<OOD>')
     initializer = initialization.OpenSetInitializerConfig()
-    event = initializer.configure(attr, zcdp_rho=0.5, delta=1e-5).dp_event
+    event = initializer.configure(attr, zcdp_rho=0.5, delta=1e-5).dp_event(
+        group_size=1
+    )
     self.assertIsInstance(event, dp_accounting.ComposedDpEvent)
     self.assertLen(event.events, 2)
     self.assertIsInstance(event.events[0], dp_accounting.GaussianDpEvent)
@@ -565,7 +567,7 @@ class NumericalInitializerFromSummaryTest(absltest.TestCase):
         num_partitions=4,
         max_grid_size=10001,
     ).configure(attr, zcdp_rho=1.0)
-    event = init.dp_event
+    event = init.dp_event(group_size=1)
     self.assertIsInstance(event, dp_accounting.ComposedDpEvent)
     # 4 partitions = 2 levels.
     self.assertLen(event.events, 2)
@@ -604,49 +606,45 @@ class NumericalInitializerFromSummaryTest(absltest.TestCase):
     self.assertIsNotNone(cm_summary.noisy_counts)
 
 
-class MaxRecordsPerUserTest(parameterized.TestCase):
-  """Tests the user-level DP knob ``max_records_per_user`` on initializers."""
+class GroupSizeTest(parameterized.TestCase):
+  """Tests group_size scaling on initializers."""
 
-  def test_categorical_stddev_scales_with_k(self):
+  def test_categorical_dp_event_scales_with_group_size(self):
     attr = domain.CategoricalAttribute(possible_values=['a', 'b', 'c'])
-    data = np.array(['a', 'b', 'c', 'a'])
-    base = initialization.CategoricalInitializerConfig().configure(
+    init = initialization.CategoricalInitializerConfig().configure(
         attr, zcdp_rho=1.0
     )
-    scaled = initialization.CategoricalInitializerConfig().configure(
-        attr, zcdp_rho=1.0, max_records_per_user=4
-    )
-    b = base(np.random.default_rng(0), data)
-    s = scaled(np.random.default_rng(0), data)
-    self.assertAlmostEqual(s.stddev, 4 * b.stddev)
+    e1 = init.dp_event(group_size=1)
+    e4 = init.dp_event(group_size=4)
+    self.assertAlmostEqual(e1.noise_multiplier, 4 * e4.noise_multiplier)
 
-  def test_numerical_raises_with_multiple_records_per_user(self):
-    attr = domain.NumericalAttribute(min_value=0, max_value=10)
-    with self.assertRaises(NotImplementedError):
-      _ = initialization.NumericalInitializerConfig(num_partitions=4).configure(
-          attr, zcdp_rho=1.0, max_records_per_user=4
-      )
-
-  def test_open_set_stddev_scales_with_k(self):
+  def test_open_set_dp_event_group_size(self):
     attr = domain.OpenSetCategoricalAttribute()
-    data = np.array(['a'] * 50 + ['b'] * 40 + ['c'] * 30)
-    base = initialization.OpenSetInitializerConfig().configure(
+    init = initialization.OpenSetInitializerConfig().configure(
         attr, zcdp_rho=1.0, delta=1e-5
     )
-    scaled = initialization.OpenSetInitializerConfig().configure(
-        attr, zcdp_rho=1.0, delta=1e-5, max_records_per_user=4
-    )
-    b = base(np.random.default_rng(0), data)
-    s = scaled(np.random.default_rng(0), data)
-    self.assertAlmostEqual(s.stddev, 4 * b.stddev)
+    e1 = init.dp_event(group_size=1)
+    self.assertIsInstance(e1, dp_accounting.ComposedDpEvent)
+    with self.assertRaises(NotImplementedError):
+      init.dp_event(group_size=2)
+
+  def test_numerical_dp_event_scales_with_group_size(self):
+    attr = domain.NumericalAttribute(min_value=0, max_value=10)
+    init = initialization.NumericalInitializerConfig(
+        num_partitions=4
+    ).configure(attr, zcdp_rho=1.0)
+    e1 = init.dp_event(group_size=1)
+    e4 = init.dp_event(group_size=4)
+    self.assertAlmostEqual(e4.events[0].epsilon, 4 * e1.events[0].epsilon)
 
   @parameterized.named_parameters(('zero', 0), ('negative', -3))
-  def test_invalid_k_raises(self, k):
+  def test_invalid_group_size_raises(self, k):
     attr = domain.CategoricalAttribute(possible_values=['a', 'b'])
+    init = initialization.CategoricalInitializerConfig().configure(
+        attr, zcdp_rho=0.5
+    )
     with self.assertRaises(ValueError):
-      initialization.CategoricalInitializerConfig().configure(
-          attr, zcdp_rho=0.5, max_records_per_user=k
-      )
+      init.dp_event(group_size=k)
 
   def test_open_set_public_possible_values_retained(self):
     attr = domain.OpenSetCategoricalAttribute(

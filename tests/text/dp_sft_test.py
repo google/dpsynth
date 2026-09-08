@@ -183,14 +183,14 @@ class DPFineTunerTest(absltest.TestCase):
         mechanism_config=_default_config(),
     )
     with self.assertRaises(ValueError):
-      _ = mechanism.dp_event
+      _ = mechanism.dp_event(group_size=1)
 
   def test_dp_event_after_calibration(self):
     mechanism = dp_sft.DPFineTuner(
         model_variant=model.GemmaModel.default('gemma3_270m_it'),
         mechanism_config=_default_config(),
     ).configure(zcdp_rho=0.5)
-    event = mechanism.dp_event
+    event = mechanism.dp_event(group_size=1)
     self.assertIsNotNone(event)
 
 

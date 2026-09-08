@@ -38,9 +38,10 @@ abstractions:
 2.  **{class}`~dpsynth.CalibratedMechanism`**: An abstract base class
     representing a runnable mechanism with concrete privacy parameters bound.
     The abstract two key methods: `dp_event` and `__call__`. The former provides
-    an exact characterization of the mechanisms privacy properties in the
-    language of `dp_accounting`, and the latter allows you to run the mechanism
-    on actual data. The format of the data can vary between subclasses.
+    an exact characterization of the mechanism's privacy properties in the
+    language of `dp_accounting` for a specified `group_size`, and the latter
+    allows you to run the mechanism on actual data. The format of the data can
+    vary between subclasses.
 
 ### Architectural Motivation: Decoupling Blueprint from Execution
 
@@ -70,7 +71,7 @@ To resolve this, DPSynth strictly decouples the immutable **recipe**
 | **Data Dependencies** | None (independent of data & budget) | Bound to domain & concrete budget |
 | **Privacy Parameters** | None (holds only budget fractions) | Fully concrete ($\sigma$, thresholds) |
 | **Serialization** | Fully serializable to/from YAML | Runtime only (not serialized) |
-| **Interface** | `.configure()`, `.calibrate()` | `dp_event`, `__call__(rng, data)` |
+| **Interface** | `.configure()`, `.calibrate()` | `dp_event(group_size)`, `__call__(rng, data)` |
 
 By enforcing this separation:
 
@@ -196,14 +197,14 @@ subclass **must** implement. Its responsibilities are:
 The CalibratedMechanism returned by `configure()` should satisfy rho-zCDP, but
 this is not the tightest characterization of the privacy properties of the
 mechanism! The exact `dp_event` associated with the mechanism can be obtained
-via the property `CalibratedMechanism.dp_event`.
+via the method `CalibratedMechanism.dp_event(group_size: int)`.
 
 **Exercise for the Reader:** Configure the `DirectMechanism` with zcdp_rho=1.0
 and compute epsilon for delta=1e-5 using two different methods:
 
 1.  Using the formula $\epsilon = \rho + 2 \cdot \sqrt(\rho \cdot \ln(1/\delta))$,
     or any other zCDP -> DP conversion formula.
-2.  Using dp_accounting directly on the `calibrated.dp_event`.
+2.  Using dp_accounting directly on `calibrated.dp_event(group_size=1)`.
 
 (2) should yield a strictly smaller epsilon than (1). Understanding
 this point is critical to understand the design decisions and correctness of the

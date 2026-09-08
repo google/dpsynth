@@ -468,10 +468,7 @@ def _run_two_pass(
     column_measurements = run_from_summary(sparse_stats, inits, rng)
     num_rows = int(_read(count_path))
     logging.info('[DPSynth/Beam]: Pass 1 complete.')
-    # pyrefly: ignore[missing-attribute]
-    total = primitives.add_gaussian_noise(
-        rng, float(num_rows), sigma, cast(int, synth.max_records_per_user)
-    )
+    total = primitives.add_gaussian_noise(rng, float(num_rows), sigma)
     total = float(max(1.0, total))
     total_measurement = mbi.LinearMeasurement(np.array([total]), (), sigma)
 
@@ -515,9 +512,8 @@ class BeamTabularMechanism(api.CalibratedMechanism):
   temp_location: str | None = None
   pipeline_options: beam.options.pipeline_options.PipelineOptions | None = None
 
-  @property
-  def dp_event(self) -> dp_accounting.DpEvent:
-    return self.synthesizer.dp_event
+  def dp_event(self, group_size: int) -> dp_accounting.DpEvent:
+    return self.synthesizer.dp_event(group_size)
 
   def __call__(
       self,
@@ -565,14 +561,13 @@ class BeamTabularConfig(api.MechanismConfig):
       )
 
   def configure(
-      self, schema=None, *, zcdp_rho, delta=0, max_records_per_user=1
+      self, schema=None, *, zcdp_rho, delta=0
   ) -> BeamTabularMechanism:
     """Returns a copy whose synthesizer is configured with the given budget."""
     synthesizer = self.synthesizer.configure(
         schema,
         zcdp_rho=zcdp_rho,
         delta=delta,
-        max_records_per_user=max_records_per_user,
     )
     return BeamTabularMechanism(
         synthesizer=synthesizer,

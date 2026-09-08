@@ -29,7 +29,7 @@ class IndependentConfig(api.MechanismConfig):
 
   pgm_iters: int = 5000
 
-  def configure(self, _=None, *, zcdp_rho, delta=0.0, max_records_per_user=1):
+  def configure(self, _=None, *, zcdp_rho, delta=0.0):
     return Independent(config=self)
 
   def supporting_cliques(self, domain: mbi.Domain) -> list[mbi.Clique]:
@@ -43,9 +43,9 @@ class Independent(api.CalibratedMechanism):
 
   config: IndependentConfig
 
-  @property
-  def dp_event(self) -> dp_accounting.DpEvent:
+  def dp_event(self, group_size: int) -> dp_accounting.DpEvent:
     """Returns a zero-cost DP event (no new measurements)."""
+    api.validate_group_size(group_size)
     return dp_accounting.NoOpDpEvent()
 
   def __call__(

@@ -98,7 +98,7 @@ class DPTrainer(api.DPMechanism):
   performance_flags: execution_plan.PerformanceFlags | None = None
   callback: training.CallbackFn | None = None
 
-  def configure(self, _=None, *, zcdp_rho, delta=0.0, max_records_per_user=1):
+  def configure(self, _=None, *, zcdp_rho, delta=0.0):
     """Returns a copy with noise calibrated to the zCDP budget.
 
     Uses a loose upper bound ignoring subsampling amplification:
@@ -108,7 +108,6 @@ class DPTrainer(api.DPMechanism):
     Args:
       zcdp_rho: The zCDP privacy budget (rho).
       delta: Unused. Accepted for interface compatibility.
-      max_records_per_user: Maximum number of records per user.
 
     Returns:
       A new ``DPTrainer`` with calibrated ``config.noise_multiplier``.
@@ -125,9 +124,13 @@ class DPTrainer(api.DPMechanism):
     )
     return dataclasses.replace(self, mechanism_config=calibrated_config)
 
-  @property
-  def dp_event(self) -> dp_accounting.DpEvent:
+  def dp_event(self, group_size: int) -> dp_accounting.DpEvent:
     """The DpEvent characterizing the privacy cost of DP-SGD training."""
+    api.validate_group_size(group_size)
+    if group_size != 1:
+      raise NotImplementedError(
+          'group_size > 1 is not currently supported for DPTrainer.'
+      )
     if (
         hasattr(self.mechanism_config, 'noise_multiplier')
         and self.mechanism_config.noise_multiplier is None

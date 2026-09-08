@@ -489,7 +489,7 @@ class BeamTabularConfigTest(parameterized.TestCase):
 
     self.assertIsInstance(configured, beam_adapter.BeamTabularMechanism)
     # dp_event is delegated to the wrapped, now-calibrated synthesizer.
-    self.assertIsNotNone(configured.dp_event)
+    self.assertIsNotNone(configured.dp_event(group_size=1))
     # The original wrapper is left uncalibrated (configure returns a copy).
     with self.assertRaises(Exception):
       _ = beam_synth.dp_event
@@ -504,7 +504,7 @@ class BeamTabularConfigTest(parameterized.TestCase):
     calibrated = beam_synth.calibrate(self._domains(), epsilon=1.0, delta=1e-6)
 
     self.assertIsInstance(calibrated, beam_adapter.BeamTabularMechanism)
-    self.assertIsNotNone(calibrated.dp_event)
+    self.assertIsNotNone(calibrated.dp_event(group_size=1))
 
   def test_uncalibrated_call_raises(self):
     beam_synth = beam_adapter.BeamTabularConfig(

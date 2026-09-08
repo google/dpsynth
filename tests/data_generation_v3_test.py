@@ -216,7 +216,9 @@ class DataGenerationV3Test(parameterized.TestCase):
         ),
     }
     calibrated = TabularConfig().configure(domains, zcdp_rho=100.0)
-    self.assertIsInstance(calibrated.dp_event, dp_accounting.ComposedDpEvent)
+    self.assertIsInstance(
+        calibrated.dp_event(group_size=1), dp_accounting.ComposedDpEvent
+    )
 
   def test_calibrate_domain_positional_only(self):
     domains = {
@@ -358,51 +360,49 @@ class MaxRecordsPerUserTest(parameterized.TestCase):
         'B': domain.CategoricalAttribute(['x', 'y', 'z']),
     }
 
-  def test_configure_propagates_k_to_submechanisms(self):
-    k = 5
+  def test_dp_event_scales_with_group_size(self):
     config = TabularConfig()
-    calibrated = config.configure(
-        self._categorical_domains(), zcdp_rho=100.0, max_records_per_user=k
-    )
-    self.assertEqual(calibrated.max_records_per_user, k)
-    self.assertEqual(calibrated.base_mechanism.max_records_per_user, k)
+    calibrated = config.configure(self._categorical_domains(), zcdp_rho=100.0)
+    e1 = calibrated.dp_event(group_size=1)
+    e5 = calibrated.dp_event(group_size=5)
+    self.assertIsInstance(e1, dp_accounting.ComposedDpEvent)
+    self.assertIsInstance(e5, dp_accounting.ComposedDpEvent)
 
-  def test_dp_event_invariant_to_k(self):
+  def test_calibrate_scales_with_group_size(self):
     config = TabularConfig()
-    calibrated1 = config.configure(self._categorical_domains(), zcdp_rho=100.0)
-    calibrated2 = config.configure(
-        self._categorical_domains(), zcdp_rho=100.0, max_records_per_user=5
+    domains = self._categorical_domains()
+    cal_base = config.calibrate(domains, epsilon=1.0, delta=1e-5, group_size=1)
+    cal_scaled = config.calibrate(
+        domains, epsilon=1.0, delta=1e-5, group_size=4
     )
-    self.assertEqual(repr(calibrated1.dp_event), repr(calibrated2.dp_event))
+    self.assertIsNotNone(cal_base)
+    self.assertIsNotNone(cal_scaled)
 
-  def test_end_to_end_with_k(self):
-    df = pd.DataFrame({'A': ['a', 'b', 'c'], 'B': [1.0, 5.0, 10.0]})
+  def test_end_to_end(self):
+    df = pd.DataFrame({'A': ['a', 'b', 'c'], 'B': ['x', 'y', 'z']})
     config = TabularConfig()
-    calibrated = config.configure(
-        self._categorical_domains(), zcdp_rho=100.0, max_records_per_user=3
-    )
+    calibrated = config.configure(self._categorical_domains(), zcdp_rho=100.0)
     synthetic_df = calibrated(np.random.default_rng(0), df).synthetic_data
     self.assertListEqual(synthetic_df.columns.tolist(), ['A', 'B'])
 
-  def test_open_set_with_k_supported(self):
-    df = pd.DataFrame({'A': ['a', 'b', 'c', 'a', 'b', 'a'] * 5})
+  def test_open_set_dp_event_group_size(self):
     domains = {'A': domain.OpenSetCategoricalAttribute()}
-    base = TabularConfig().configure(domains, zcdp_rho=100.0, delta=1e-5)
     config = TabularConfig()
-    mech = config.configure(
-        domains, zcdp_rho=100.0, delta=1e-5, max_records_per_user=3
-    )
-    # Accounting is byte-identical across k; only the injected noise scales.
-    self.assertEqual(repr(mech.dp_event), repr(base.dp_event))
-    synthetic_df = mech(np.random.default_rng(0), df).synthetic_data
-    self.assertListEqual(synthetic_df.columns.tolist(), ['A'])
+    mech = config.configure(domains, zcdp_rho=100.0, delta=1e-5)
+    e1 = mech.dp_event(group_size=1)
+    self.assertIsInstance(e1, dp_accounting.ComposedDpEvent)
+    with self.assertRaises(NotImplementedError):
+      mech.dp_event(group_size=3)
 
   @parameterized.named_parameters(('zero', 0), ('negative', -3))
-  def test_invalid_k_raises(self, k):
+  def test_invalid_group_size_raises(self, k):
     config = TabularConfig()
-    with self.assertRaises(Exception):
-      _ = config.configure(
-          self._categorical_domains(), zcdp_rho=100.0, max_records_per_user=k
+    mech = config.configure(self._categorical_domains(), zcdp_rho=100.0)
+    with self.assertRaises(ValueError):
+      mech.dp_event(group_size=k)
+    with self.assertRaises(ValueError):
+      config.calibrate(
+          self._categorical_domains(), epsilon=1.0, delta=1e-5, group_size=k
       )
 
   def test_poisson_calibrate_with_categorical_domains_and_gdp_mech(self):

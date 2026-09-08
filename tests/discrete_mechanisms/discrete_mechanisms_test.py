@@ -22,6 +22,7 @@ compression.
 
 from absl.testing import absltest
 from absl.testing import parameterized
+import dp_accounting
 from dpsynth.discrete_mechanisms import aim
 from dpsynth.discrete_mechanisms import common
 from dpsynth.discrete_mechanisms import direct
@@ -123,37 +124,45 @@ class CalibrationTest(parameterized.TestCase):
     self.assertIsInstance(result, common.DiscreteMechanismResult)
 
 
-class MaxRecordsPerUserTest(parameterized.TestCase):
-  """Tests the user-level DP knob ``max_records_per_user``."""
+class GroupSizeTest(parameterized.TestCase):
+  """Tests the group_size parameter for privacy accounting and calibration."""
 
   @parameterized.named_parameters(*_MECHANISMS.items())
-  def test_dp_event_invariant_to_max_records_per_user(self, mechanism):
-    base = mechanism.configure(zcdp_rho=_ZCDP_RHO)
-    scaled = mechanism.configure(zcdp_rho=_ZCDP_RHO, max_records_per_user=4)
-    self.assertEqual(repr(scaled.dp_event), repr(base.dp_event))
+  def test_dp_event_scales_with_group_size(self, mechanism):
+    calibrated = mechanism.configure(zcdp_rho=_ZCDP_RHO)
+    e1 = calibrated.dp_event(group_size=1)
+    e4 = calibrated.dp_event(group_size=4)
+    if isinstance(e1, dp_accounting.NoOpDpEvent):
+      self.assertIsInstance(e4, dp_accounting.NoOpDpEvent)
+    elif isinstance(e1, dp_accounting.ZCDpEvent):
+      self.assertAlmostEqual(e4.rho, 16 * e1.rho)
+    elif isinstance(e1, dp_accounting.GaussianDpEvent):
+      self.assertAlmostEqual(e1.noise_multiplier, 4 * e4.noise_multiplier)
 
   @parameterized.named_parameters(
       ('MST', _MECHANISMS['MST']),
       ('Direct', _MECHANISMS['Direct']),
   )
-  def test_measurement_stddev_scales_with_k(self, mechanism):
+  def test_calibrate_scales_with_group_size(self, mechanism):
     k = 4
-    data = _make_skewed_dataset(np.random.default_rng(0))
-    base = mechanism.configure(zcdp_rho=_ZCDP_RHO)(
-        np.random.default_rng(1), data
-    )
-    scaled = mechanism.configure(zcdp_rho=_ZCDP_RHO, max_records_per_user=k)(
-        np.random.default_rng(1), data
-    )
-    self.assertNotEmpty(base.measurements)
-    self.assertLen(scaled.measurements, len(base.measurements))
-    for base_m, scaled_m in zip(base.measurements, scaled.measurements):
-      self.assertAlmostEqual(scaled_m.stddev, k * base_m.stddev)
+    cal_base = mechanism.calibrate(epsilon=1.0, delta=1e-5, group_size=1)
+    cal_scaled = mechanism.calibrate(epsilon=1.0, delta=1e-5, group_size=k)
+    e_base = cal_base.dp_event(group_size=1)
+    e_scaled = cal_scaled.dp_event(group_size=k)
+    if isinstance(e_base, dp_accounting.ZCDpEvent):
+      self.assertAlmostEqual(e_base.rho, e_scaled.rho, places=4)
+    elif isinstance(e_base, dp_accounting.GaussianDpEvent):
+      self.assertAlmostEqual(
+          e_base.noise_multiplier, e_scaled.noise_multiplier, places=4
+      )
 
   @parameterized.named_parameters(('zero', 0), ('negative', -3))
-  def test_invalid_k_raises(self, k):
+  def test_invalid_group_size_raises(self, k):
+    mech = mst.MSTConfig().configure(zcdp_rho=_ZCDP_RHO)
     with self.assertRaises(ValueError):
-      mst.MSTConfig().configure(zcdp_rho=_ZCDP_RHO, max_records_per_user=k)
+      mech.dp_event(group_size=k)
+    with self.assertRaises(ValueError):
+      mst.MSTConfig().calibrate(epsilon=1.0, delta=1e-5, group_size=k)
 
 
 if __name__ == '__main__':

@@ -180,7 +180,7 @@ class SynthesizerTest(absltest.TestCase):
         total_count_sigma=5.0,
     )
 
-    event = mech.dp_event
+    event = mech.dp_event(group_size=1)
     self.assertIsInstance(event, dp_accounting.ComposedDpEvent)
     # Expected: 3 column initializers
     # + 1 root Gaussian count + 1 discrete mechanism = 5 events.
@@ -214,16 +214,13 @@ class SynthesizerTest(absltest.TestCase):
     ]
     hierarchy = rel_domain.topological_sort_hierarchy(tables, foreign_keys)
 
-    # Unit sensitivity (max_records_per_user = 1)
-    sensitivities = synthesizer._compute_link_sensitivities(
-        hierarchy, max_records_per_user=1
-    )
+    sensitivities = synthesizer._compute_link_sensitivities(hierarchy)
     # Link 1 (Household -> Person): Delta_1 = 1
     self.assertEqual(sensitivities['Household->Person'], 1)
     # Link 2 (Person -> Activity): Delta_2 = s_1 = 3
     self.assertEqual(sensitivities['Person->Activity'], 3)
 
-  def test_compute_link_sensitivities_branching_and_scaled(self):
+  def test_compute_link_sensitivities_branching(self):
     tables = ['Household', 'Person', 'Vehicle']
     foreign_keys = [
         rel_domain.ForeignKeyRelation(
@@ -243,19 +240,14 @@ class SynthesizerTest(absltest.TestCase):
     ]
     hierarchy = rel_domain.topological_sort_hierarchy(tables, foreign_keys)
 
-    sensitivities = synthesizer._compute_link_sensitivities(
-        hierarchy, max_records_per_user=4
-    )
-    # Both direct children scale by max_records_per_user * 1 = 4
-    self.assertEqual(sensitivities['Household->Person'], 4)
-    self.assertEqual(sensitivities['Household->Vehicle'], 4)
+    sensitivities = synthesizer._compute_link_sensitivities(hierarchy)
+    self.assertEqual(sensitivities['Household->Person'], 1)
+    self.assertEqual(sensitivities['Household->Vehicle'], 1)
 
   def test_compute_link_sensitivities_no_links(self):
     tables = ['Household', 'Logs']
     hierarchy = rel_domain.topological_sort_hierarchy(tables, foreign_keys=())
-    sensitivities = synthesizer._compute_link_sensitivities(
-        hierarchy, max_records_per_user=1
-    )
+    sensitivities = synthesizer._compute_link_sensitivities(hierarchy)
     self.assertEmpty(sensitivities)
 
   def test_configure_single_table_raises(self):
@@ -320,7 +312,7 @@ class SynthesizerTest(absltest.TestCase):
     # init_rho = 0.1 * 0.6 = 0.06 => per_col_rho = 0.01.
     # total_count_sigma = sqrt(0.5 / 0.01) = sqrt(50).
     # discrete_rho = 0.6 - 0.06 = 0.54 => per_link_rho = 0.27 across 2 links.
-    mech = config.configure(domains, zcdp_rho=0.6, max_records_per_user=1)
+    mech = config.configure(domains, zcdp_rho=0.6)
 
     self.assertIsInstance(mech, synthesizer.MultiTableMechanism)
     self.assertAlmostEqual(mech.total_count_sigma, math.sqrt(50.0))
@@ -331,7 +323,7 @@ class SynthesizerTest(absltest.TestCase):
 
     # Verify composed DpEvent has
     # 5 col inits + 1 root Gaussian + 2 discrete links = 8 events.
-    event = mech.dp_event
+    event = mech.dp_event(group_size=1)
     self.assertIsInstance(event, dp_accounting.ComposedDpEvent)
     self.assertLen(event.events, 8)
 
@@ -706,30 +698,27 @@ class SynthesizerTest(absltest.TestCase):
         rng,
         root_record_count=100,
         total_count_sigma=0.0,
-        max_records_per_user=1,
     )
     self.assertEqual(total, 100.0)
     self.assertEqual(measurement.clique, ())
     self.assertEqual(measurement.stddev, 0.0)
     np.testing.assert_allclose(measurement.noisy_measurement, [100.0])
 
-    # Noisy test with sensitivity scaling
+    # Noisy test
     total_noisy, measurement_noisy = synthesizer._measure_root_total_count(
         rng,
         root_record_count=100,
         total_count_sigma=5.0,
-        max_records_per_user=2,
     )
     self.assertGreaterEqual(total_noisy, 1.0)
     self.assertEqual(measurement_noisy.clique, ())
-    self.assertEqual(measurement_noisy.stddev, 10.0)
+    self.assertEqual(measurement_noisy.stddev, 5.0)
 
     # Negative noisy value clips to 1.0
     total_clipped, measurement_clipped = synthesizer._measure_root_total_count(
         rng,
         root_record_count=0,
         total_count_sigma=0.0,
-        max_records_per_user=1,
     )
     self.assertEqual(total_clipped, 1.0)
     np.testing.assert_allclose(measurement_clipped.noisy_measurement, [1.0])
@@ -962,7 +951,7 @@ class SynthesizerTest(absltest.TestCase):
         foreign_keys=foreign_keys,
         init_budget_fraction=0.2,
     )
-    mech = config.configure(domains, zcdp_rho=0.5, max_records_per_user=1)
+    mech = config.configure(domains, zcdp_rho=0.5)
     rng = np.random.default_rng(42)
 
     data = {
@@ -1223,7 +1212,7 @@ class SynthesizerTest(absltest.TestCase):
         ),
         num_permutation_slots=2,
     )
-    mech = cfg.configure(domains, zcdp_rho=0.5, max_records_per_user=1)
+    mech = cfg.configure(domains, zcdp_rho=0.5)
 
     preprocessed = synthesizer._run_table_preprocessing(
         mechanism=mech,
@@ -1313,7 +1302,7 @@ class SynthesizerTest(absltest.TestCase):
         ),
         num_permutation_slots=2,
     )
-    mech = cfg.configure(domains, zcdp_rho=0.5, max_records_per_user=1)
+    mech = cfg.configure(domains, zcdp_rho=0.5)
 
     preprocessed = synthesizer._run_table_preprocessing(
         mechanism=mech,
