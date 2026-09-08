@@ -23,6 +23,55 @@ from typing import Any
 import dp_accounting
 
 
+def with_group_size(
+    event: dp_accounting.DpEvent, group_size: int
+) -> dp_accounting.DpEvent:
+  """Lifts a DpEvent from record-level (group_size=1) to the given group_size.
+
+  Args:
+    event: The record-level ``DpEvent`` to transform.
+    group_size: Positive integer bound on the number of records per group/user.
+
+  Returns:
+    A ``DpEvent`` characterizing the privacy guarantee for groups of size
+    ``group_size``.
+
+  Raises:
+    ValueError: If ``group_size < 1``.
+    UnsupportedEventError: If ``group_size > 1`` and ``event`` (or a nested
+      sub-event) does not support group-size scaling.
+  """
+  if group_size < 1:
+    raise ValueError(f'group_size must be >= 1, got {group_size}.')
+  if group_size == 1:
+    return event
+  if isinstance(
+      event, (dp_accounting.NoOpDpEvent, dp_accounting.NonPrivateDpEvent)
+  ):
+    return event
+  if isinstance(event, dp_accounting.GaussianDpEvent):
+    return dp_accounting.GaussianDpEvent(event.noise_multiplier / group_size)
+  if isinstance(event, dp_accounting.LaplaceDpEvent):
+    return dp_accounting.LaplaceDpEvent(event.noise_multiplier / group_size)
+  if isinstance(event, dp_accounting.ExponentialMechanismDpEvent):
+    return dp_accounting.ExponentialMechanismDpEvent(event.epsilon * group_size)
+  if isinstance(event, dp_accounting.ZCDpEvent):
+    return dp_accounting.ZCDpEvent(
+        rho=event.rho * group_size**2, xi=event.xi * group_size
+    )
+  if isinstance(event, dp_accounting.ComposedDpEvent):
+    scaled = [with_group_size(e, group_size) for e in event.events]
+    return dp_accounting.ComposedDpEvent(scaled)
+  if isinstance(event, dp_accounting.SelfComposedDpEvent):
+    inner = with_group_size(event.event, group_size)
+    return dp_accounting.SelfComposedDpEvent(inner, event.count)
+  # (EpsilonDeltaDpEvent) for group_size > 1.
+  raise dp_accounting.UnsupportedEventError(
+      f'with_group_size does not support {type(event).__name__} for'
+      f' group_size={group_size}.'
+  )
+
+
 def calibrate(
     config: Any,
     domain: Any = None,
@@ -50,10 +99,10 @@ def calibrate(
       input data is subsampled with the given probability. The actual sampling
       is **NOT** handled internally by the calibrated mechanism.
     max_records_per_user: Assumed upper bound on the number of records a single
-      user contributes. Added noise (and mechanism sensitivity) is scaled by
-      this factor to provide user-level rather than record-level DP; the privacy
-      accounting is unchanged. Soundness relies on the caller enforcing this
-      bound.
+      user contributes. Lifts the candidate mechanism's ``dp_event`` via
+      ``with_group_size`` during calibration so the resulting mechanism provides
+      user-level rather than record-level DP. Soundness relies on the caller
+      enforcing this bound.
     accountant_fn: Optional zero-argument callable returning a fresh
       ``PrivacyAccountant``. If specified, calibrate using this accountant.
 
@@ -61,19 +110,19 @@ def calibrate(
     A calibrated, runnable mechanism.
 
   Raises:
-    ValueError: If epsilon is not positive.
+    ValueError: If epsilon is not positive or max_records_per_user < 1.
     UnsupportedEventError: If no accountant supports the mechanism.
   """
   if epsilon <= 0:
     raise ValueError(f'Target epsilon must be positive, got {epsilon}.')
+  if max_records_per_user < 1:
+    raise ValueError(
+        f'max_records_per_user must be >= 1, got {max_records_per_user}.'
+    )
 
   def make_event_fn(rho: float) -> dp_accounting.DpEvent:
-    base = config.configure(
-        domain,
-        zcdp_rho=rho,
-        delta=delta,
-        max_records_per_user=max_records_per_user,
-    ).dp_event
+    base = config.configure(domain, zcdp_rho=rho, delta=delta).dp_event
+    base = with_group_size(base, max_records_per_user)
     sampled = dp_accounting.PoissonSampledDpEvent(poisson_sampling_prob, base)
     return base if poisson_sampling_prob == 1.0 else sampled
 
@@ -117,5 +166,4 @@ def calibrate(
       domain,
       zcdp_rho=optimal_rho,
       delta=delta,
-      max_records_per_user=max_records_per_user,
   )
