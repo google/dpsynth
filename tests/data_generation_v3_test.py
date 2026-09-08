@@ -170,7 +170,11 @@ class DataGenerationV3Test(parameterized.TestCase):
     self.assertIsInstance(synthetic_df, pd.DataFrame)
     self.assertListEqual(synthetic_df.columns.tolist(), ['A', 'B'])
 
-  def test_end_to_end_with_epsilon_delta(self):
+  @parameterized.named_parameters(
+      ('large_epsilon', 100, 0.1),
+      ('small_epsilon', 1e-5, 1e-6),
+  )
+  def test_end_to_end_with_epsilon_delta(self, epsilon: float, delta: float):
     domains = {
         'A': domain.CategoricalAttribute(
             possible_values=['a', 'b', 'c'], out_of_domain_index=0
@@ -181,7 +185,9 @@ class DataGenerationV3Test(parameterized.TestCase):
     }
     df = pd.DataFrame({'A': ['a', 'b', 'c'], 'B': ['x', 'y', 'z']})
     rng = np.random.default_rng(0)
-    calibrated = TabularConfig().calibrate(domains, epsilon=100, delta=0.1)
+    calibrated = TabularConfig().calibrate(
+        domains, epsilon=epsilon, delta=delta
+    )
     result = calibrated(rng, df)
     synthetic_df = result.synthetic_data
     self.assertIsInstance(synthetic_df, pd.DataFrame)
@@ -422,13 +428,13 @@ class MaxRecordsPerUserTest(parameterized.TestCase):
         'C': domain.OpenSetCategoricalAttribute(),
     }
     config = TabularConfig()
-    with self.assertRaises(dp_accounting.UnsupportedEventError):
-      _ = config.calibrate(
-          domains,
-          epsilon=1.0,
-          delta=1e-3,
-          poisson_sampling_prob=0.1,
-      )
+    mechanism = config.calibrate(
+        domains,
+        epsilon=1.0,
+        delta=1e-6,
+        poisson_sampling_prob=0.1,
+    )
+    self.assertIsNotNone(mechanism)
 
   def test_configure_infinite_zcdp_rho(self):
     domains = {
