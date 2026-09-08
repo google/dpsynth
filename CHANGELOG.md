@@ -8,6 +8,54 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Added
+
+-   **API stabilization (`MechanismConfig` / `CalibratedMechanism`)**: Unified
+    the mechanism lifecycle into a clean, predictable workflow: construct a
+    configuration recipe (`MechanismConfig`), bind privacy parameters via
+    `calibrate(schema, epsilon=..., delta=...)` to produce an immutable
+    `CalibratedMechanism`, and run on data. Accompanied by the new
+    `dpsynth.Schema` dataclass for attribute specs and cross-attribute
+    constraints, accepted directly by `calibrate()` and `configure()` to enable
+    reusable presets decoupled from individual datasets.
+-   **Relational (multi-table) synthesis**: Exposed `MultiTableConfig`,
+    `MultiTableMechanism`, and `ForeignKeyRelation` at top-level API (`dpsynth`
+    and `dpsynth.relational`). Enables private synthesis of relational databases
+    with foreign-key integrity (`ForeignKeyRelation`), including an end-to-end
+    California Census housing example.
+-   **Nested tabular synthesis**: Added `NestedTabularSynthesizer` for
+    typed/nested tabular data where records share common attributes but have
+    type-specific sub-schemas, using a two-model shared/per-type architecture.
+-   **YAML serialization**: New `dpsynth.serialize` module with
+    `dpsynth.to_yaml()` and `dpsynth.from_yaml()` for human-readable
+    serialization of mechanism configs, calibration results, and
+    `dp_accounting.DpEvent` objects.
+-   **Composition-over-inheritance architecture**: Refactored discrete mechanism
+    implementations to improve code-reuse while ensuring mechanism
+    implementations can be verified in isolation (without understanding and
+    traversing complex inheritance hierarchies).
+-   **`calibrate()` enhancements (schema, Poisson sampling, user bounding)**:
+    `MechanismConfig.calibrate()` now accepts an optional `schema` (or
+    `domain`), `poisson_sampling_prob` (accounting for subsampling amplification
+    via PLD/RDP), and `max_records_per_user` (scaling sensitivity for
+    user-level differential privacy).
+-   **Synthetic text generation example**: Added end-to-end `finetune_pubmed.py`
+    example demonstrating DP fine-tuning for synthetic text generation using JAX
+    Privacy under the hood.
+-   **JAX acceleration & column compression**: Optional `use_jax_for_bincount`
+    and `use_jax_for_generation` flags in `TabularConfig` / `DiscreteConfig`
+    greatly improving efficiency over the default numpy implementations in very
+    large scale settings.
+-   **`compress_columns` in `TabularConfig`**: Automatically compresses rare
+    categories (< 3σ) for categorical columns not present in constraints.
+
+### Internal / Cleanups
+
+-   **Decoupled initializers from MBI**: Removed MBI and JAX dependencies from
+    `adapters/beam.py` worker execution paths.
+-   **Dependency management with `uv` and `pylock.toml`**: Added PEP 751
+    lockfile and `uv` setup for contributors, enforced in CI.
+
 ## [0.4.0] - 2026-08-26
 
 ### Removed
