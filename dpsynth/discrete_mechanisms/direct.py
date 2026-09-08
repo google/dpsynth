@@ -29,12 +29,10 @@ import numpy as np
 class DirectConfig(api.MechanismConfig):
   """Config for the direct mechanism that measures prespecified marginals."""
 
-  def configure(self, _=None, *, zcdp_rho, delta=0, max_records_per_user=1):
-    api.validate_max_records_per_user(max_records_per_user)
+  def configure(self, _=None, *, zcdp_rho, delta=0):
     return Direct(
         config=self,
         gdp_budget=accounting.zcdp_to_gdp(zcdp_rho),
-        max_records_per_user=max_records_per_user,
     )
 
   marginal_oracle: mbi.MarginalOracle | None = None
@@ -55,7 +53,6 @@ class Direct(api.CalibratedMechanism):
 
   config: DirectConfig
   gdp_budget: float
-  max_records_per_user: int = 1
 
   @property
   def dp_event(self) -> dp_accounting.DpEvent:
@@ -91,7 +88,6 @@ class Direct(api.CalibratedMechanism):
         data=data,  # pyrefly: ignore[bad-argument-type]
         marginal_queries=selected,
         gdp_sigma=accounting.gdp_gaussian_sigma(self.gdp_budget),
-        max_records_per_user=self.max_records_per_user,
     )
     measurements = list(initial_measurements) + new_measurements
 

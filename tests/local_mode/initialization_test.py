@@ -638,42 +638,40 @@ class MaxRecordsPerUserTest(parameterized.TestCase):
   def test_categorical_stddev_scales_with_k(self):
     attr = domain.CategoricalAttribute(possible_values=['a', 'b', 'c'])
     data = np.array(['a', 'b', 'c', 'a'])
-    base = initialization.CategoricalInitializerConfig().configure(
-        attr, zcdp_rho=1.0
+    base = initialization.CategoricalInitializerConfig().calibrate(
+        attr, epsilon=1.0, delta=1e-5, max_records_per_user=1
     )
-    scaled = initialization.CategoricalInitializerConfig().configure(
-        attr, zcdp_rho=1.0, max_records_per_user=4
+    scaled = initialization.CategoricalInitializerConfig().calibrate(
+        attr, epsilon=1.0, delta=1e-5, max_records_per_user=4
     )
     b = base(np.random.default_rng(0), data)
     s = scaled(np.random.default_rng(0), data)
-    self.assertAlmostEqual(s.stddev, 4 * b.stddev)
+    self.assertAlmostEqual(s.stddev, 4 * b.stddev, places=3)
 
-  def test_numerical_raises_with_multiple_records_per_user(self):
+  def test_numerical_scales_with_multiple_records_per_user(self):
     attr = domain.NumericalAttribute(min_value=0, max_value=10)
-    with self.assertRaises(NotImplementedError):
-      _ = initialization.NumericalInitializerConfig(num_partitions=4).configure(
-          attr, zcdp_rho=1.0, max_records_per_user=4
-      )
+    cfg = initialization.NumericalInitializerConfig(num_partitions=4)
+    base = cfg.calibrate(attr, epsilon=1.0, delta=1e-5, max_records_per_user=1)
+    scaled = cfg.calibrate(
+        attr, epsilon=1.0, delta=1e-5, max_records_per_user=4
+    )
+    self.assertAlmostEqual(
+        base.epsilon_levels[0], 4 * scaled.epsilon_levels[0], places=3
+    )
 
-  def test_open_set_stddev_scales_with_k(self):
+  def test_open_set_raises_with_multiple_records_per_user(self):
     attr = domain.OpenSetCategoricalAttribute()
-    data = np.array(['a'] * 50 + ['b'] * 40 + ['c'] * 30)
-    base = initialization.OpenSetInitializerConfig().configure(
-        attr, zcdp_rho=1.0, delta=1e-5
-    )
-    scaled = initialization.OpenSetInitializerConfig().configure(
-        attr, zcdp_rho=1.0, delta=1e-5, max_records_per_user=4
-    )
-    b = base(np.random.default_rng(0), data)
-    s = scaled(np.random.default_rng(0), data)
-    self.assertAlmostEqual(s.stddev, 4 * b.stddev)
+    with self.assertRaises(dp_accounting.UnsupportedEventError):
+      initialization.OpenSetInitializerConfig().calibrate(
+          attr, epsilon=1.0, delta=1e-5, max_records_per_user=4
+      )
 
   @parameterized.named_parameters(('zero', 0), ('negative', -3))
   def test_invalid_k_raises(self, k):
     attr = domain.CategoricalAttribute(possible_values=['a', 'b'])
     with self.assertRaises(ValueError):
-      initialization.CategoricalInitializerConfig().configure(
-          attr, zcdp_rho=0.5, max_records_per_user=k
+      initialization.CategoricalInitializerConfig().calibrate(
+          attr, epsilon=1.0, delta=1e-5, max_records_per_user=k
       )
 
   def test_open_set_public_possible_values_retained(self):

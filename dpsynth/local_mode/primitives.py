@@ -26,8 +26,7 @@ Design Decisions:
    (counts, histograms, quality scores) rather than performing data aggregation
    themselves. Therefore, it is the responsibility of the caller to ensure the
    appropriate privacy assumptions are satisfied (primarily that each user
-   contributes at most one record to one bucket, or that user contributions are
-   properly bounded via max_records_per_user).
+   contributes at most one record to one bucket).
 2) Pure Functions: Primitives are pure functions that take NumPy inputs and
    return NumPy or Python outputs. State and DP accounting, when needed, are
    managed externally.
@@ -150,7 +149,6 @@ def quantiles_from_histogram(
     counts: np.ndarray,
     epsilon_levels: np.ndarray,
     jitter_strategy: Literal['symmetric', 'refine'],
-    max_records_per_user: int = 1,
 ) -> list[int]:
   """DP quantile edge indices into ``counts`` via jittered median bisection.
 
@@ -178,17 +176,10 @@ def quantiles_from_histogram(
     jitter_strategy: Specifies the pre-processing jitter strategy, -
       'symmetric': jitter mass to +/- m//2 neighbors on the same grid. -
       'refine': jitter mass to m equivalent sub-cells.
-    max_records_per_user: Assumed upper bound on the number of records per user.
 
   Returns:
     A sorted list of ``2 ** len(epsilon_levels) - 1`` cell indices.
   """
-  if max_records_per_user != 1:
-    # The privacy analysis of this mechanism relies on parallel composition
-    # across the nodes of each level of the hierarchy. When users have
-    # multiple records, they may contribute to multiple nodes, which would
-    # require a different privacy analysis (TBD).
-    raise NotImplementedError('max_records_per_user != 1 not yet supported.')
   counts = np.asarray(counts)
   m = jitter_factor(2 ** len(epsilon_levels))
 
@@ -236,7 +227,6 @@ def select_partitions_gaussian_thresholding(
     gdp_budget: float,
     delta: float,
     min_count: int = 1,
-    max_records_per_user: int = 1,
 ) -> tuple[np.ndarray, np.ndarray, float]:
   """Selects partitions using Gaussian Thresholding (Weighted Gaussian).
 
@@ -261,15 +251,6 @@ def select_partitions_gaussian_thresholding(
   boundary case (one dataset at ``min_count - 1``, the other at
   ``min_count``) is covered by the same additive delta.
 
-  When ``max_records_per_user > 1`` the mechanism switches to user-level DP
-  via a naive, conservative reduction: a single user may place all ``k``
-  records in one partition, so the histogram's L2 sensitivity grows to ``k``.
-  Both the noise standard deviation and the threshold are scaled by ``k``,
-  which is equivalent to running the item-level mechanism with ``k`` times the
-  sigma and threshold. This is sound but suboptimal -- a user->record mapping
-  would allow tighter per-user contribution bounding (e.g. capping the number
-  of distinct partitions a user touches) and hence far better utility.
-
   Args:
     rng: A numpy random number generator.
     data: 1D array of integers, where each element is a partition ID.
@@ -278,11 +259,6 @@ def select_partitions_gaussian_thresholding(
     delta: Failure probability (false positive bound per empty partition).
     min_count: Minimum true count for a partition to be eligible. Partitions
       with fewer occurrences in the data are never returned. Must be >= 1.
-    max_records_per_user: Assumed upper bound on the number of records a single
-      user contributes. Added noise (and mechanism sensitivity) is scaled by
-      this factor to provide user-level rather than record-level DP; the privacy
-      accounting is unchanged. Soundness relies on the caller enforcing this
-      bound.
 
   Returns:
     A tuple containing:
@@ -290,15 +266,14 @@ def select_partitions_gaussian_thresholding(
         threshold.
       - estimated_counts: 1D array of noisy counts for each selected
         partition.
-      - stddev: The standard deviation of the Gaussian noise added
-        (``max_records_per_user * sigma``).
+      - stddev: The standard deviation of the Gaussian noise added.
   """
   if gdp_budget <= 0 or delta <= 0 or delta > 1:
     raise ValueError(f'{gdp_budget=} and {delta=} must be positive.')
   if min_count < 1:
     raise ValueError(f'{min_count=} must be >= 1.')
 
-  stddev = max_records_per_user / np.sqrt(gdp_budget)
+  stddev = 1.0 / np.sqrt(gdp_budget)
 
   if data.size == 0:
     return np.empty(0, dtype=data.dtype), np.empty(0, dtype=float), stddev
@@ -312,16 +287,7 @@ def select_partitions_gaussian_thresholding(
     return np.empty(0, dtype=data.dtype), np.empty(0, dtype=float), stddev
 
   noisy_counts = counts + rng.normal(scale=stddev, size=counts.size)
-
-  # A partition that is a candidate here but absent from a neighbor drives the
-  # per-partition false-positive budget `delta`. One user contributes up to
-  # k = max_records_per_user records, so (i) the noise std is
-  # stddev = k / sqrt(gdp_budget), and (ii) such a partition's true count can
-  # reach (min_count - 1) + k -- the neighbor sits just under the eligibility
-  # cutoff at min_count - 1 and the user piles all k records into it. Bounding
-  #   Pr[(min_count - 1 + k) + N(0, stddev^2) >= T] <= delta
-  # gives T = (min_count + k - 1) + stddev * ppf(1 - delta).
-  base = float(max_records_per_user + min_count - 1)
+  base = float(min_count)
   threshold = base + stddev * scipy.stats.norm.ppf(1.0 - delta)
   passed = noisy_counts >= threshold
   # unique_parts is sorted (np.unique), so the output order is deterministic.
@@ -373,7 +339,6 @@ def add_gaussian_noise(
     rng: np.random.Generator,
     counts: np.ndarray | float | int,
     sigma: float,
-    max_records_per_user: int = 1,
 ) -> float | np.ndarray:
   """Adds Gaussian noise to scalar, 1D array, or multi-dimensional array counts.
 
@@ -382,20 +347,15 @@ def add_gaussian_noise(
     counts: The true count(s). Can be a scalar, 1D array, or multi-dimensional
       array.
     sigma: The Gaussian noise standard deviation.
-    max_records_per_user: Assumed upper bound on the number of records a single
-      user contributes, used to scale the noise for user-level DP.
 
   Returns:
     The noisy count(s) with the same shape as `counts`.
   """
   if sigma < 0:
     raise ValueError(f'sigma must be positive, got {sigma}')
-  stddev = max_records_per_user * sigma
 
   if isinstance(counts, (int, float, np.generic)):
-    noise = float(rng.normal(scale=stddev))
-    return float(counts) + noise
+    return float(counts) + float(rng.normal(scale=sigma))
 
   counts_arr = np.asarray(counts, dtype=float)
-  noise = rng.normal(scale=stddev, size=counts_arr.shape)
-  return counts_arr + noise
+  return counts_arr + rng.normal(scale=sigma, size=counts_arr.shape)

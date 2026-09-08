@@ -397,7 +397,7 @@ class DataGenerationV3Test(parameterized.TestCase):
 
 
 class MaxRecordsPerUserTest(parameterized.TestCase):
-  """Tests the experimental user-level DP knob end to end."""
+  """Tests the user-level DP knob ``max_records_per_user`` end to end."""
 
   def _categorical_domains(self):
     return {
@@ -405,52 +405,106 @@ class MaxRecordsPerUserTest(parameterized.TestCase):
         'B': domain.CategoricalAttribute(['x', 'y', 'z']),
     }
 
-  def test_configure_propagates_k_to_submechanisms(self):
+  def test_calibrate_scales_noise_with_max_records_per_user(self):
     k = 5
     config = TabularConfig()
-    calibrated = config.configure(
-        self._categorical_domains(), zcdp_rho=100.0, max_records_per_user=k
+    domains = self._categorical_domains()
+    cal_base = dpsynth.calibrate(
+        config, domains, epsilon=1.0, delta=1e-5, max_records_per_user=1
     )
-    self.assertEqual(calibrated.max_records_per_user, k)
-    self.assertEqual(calibrated.base_mechanism.max_records_per_user, k)
-
-  def test_dp_event_invariant_to_k(self):
-    config = TabularConfig()
-    calibrated1 = config.configure(self._categorical_domains(), zcdp_rho=100.0)
-    calibrated2 = config.configure(
-        self._categorical_domains(), zcdp_rho=100.0, max_records_per_user=5
+    cal_scaled = dpsynth.calibrate(
+        config, domains, epsilon=1.0, delta=1e-5, max_records_per_user=k
     )
-    self.assertEqual(repr(calibrated1.dp_event), repr(calibrated2.dp_event))
+    self.assertAlmostEqual(
+        cal_scaled.total_count_sigma, k * cal_base.total_count_sigma, places=4
+    )
 
   def test_end_to_end_with_k(self):
-    df = pd.DataFrame({'A': ['a', 'b', 'c'], 'B': [1.0, 5.0, 10.0]})
+    df = pd.DataFrame({'A': ['a', 'b', 'c'], 'B': ['x', 'y', 'z']})
     config = TabularConfig()
-    calibrated = config.configure(
-        self._categorical_domains(), zcdp_rho=100.0, max_records_per_user=3
+    calibrated = dpsynth.calibrate(
+        config,
+        self._categorical_domains(),
+        epsilon=10.0,
+        delta=1e-5,
+        max_records_per_user=3,
     )
     synthetic_df = calibrated(np.random.default_rng(0), df).synthetic_data
     self.assertListEqual(synthetic_df.columns.tolist(), ['A', 'B'])
 
-  def test_open_set_with_k_supported(self):
-    df = pd.DataFrame({'A': ['a', 'b', 'c', 'a', 'b', 'a'] * 5})
+  def test_open_set_with_k_greater_than_one_raises(self):
     domains = {'A': domain.OpenSetCategoricalAttribute()}
-    base = TabularConfig().configure(domains, zcdp_rho=100.0, delta=1e-5)
     config = TabularConfig()
-    mech = config.configure(
-        domains, zcdp_rho=100.0, delta=1e-5, max_records_per_user=3
-    )
-    # Accounting is byte-identical across k; only the injected noise scales.
-    self.assertEqual(repr(mech.dp_event), repr(base.dp_event))
-    synthetic_df = mech(np.random.default_rng(0), df).synthetic_data
-    self.assertListEqual(synthetic_df.columns.tolist(), ['A'])
+    with self.assertRaises(dp_accounting.UnsupportedEventError):
+      dpsynth.calibrate(
+          config, domains, epsilon=1.0, delta=1e-5, max_records_per_user=3
+      )
 
   @parameterized.named_parameters(('zero', 0), ('negative', -3))
   def test_invalid_k_raises(self, k):
     config = TabularConfig()
-    with self.assertRaises(Exception):
-      _ = config.configure(
-          self._categorical_domains(), zcdp_rho=100.0, max_records_per_user=k
+    with self.assertRaises(ValueError):
+      _ = dpsynth.calibrate(
+          config,
+          self._categorical_domains(),
+          epsilon=1.0,
+          delta=1e-5,
+          max_records_per_user=k,
       )
+
+  def test_with_group_size(self):
+    with_group_size = dpsynth._calibration.with_group_size
+
+    g = dp_accounting.GaussianDpEvent(noise_multiplier=6.0)
+    self.assertEqual(
+        with_group_size(g, 3),
+        dp_accounting.GaussianDpEvent(noise_multiplier=2.0),
+    )
+    self.assertIs(with_group_size(g, 1), g)
+
+    l = dp_accounting.LaplaceDpEvent(noise_multiplier=6.0)
+    self.assertEqual(
+        with_group_size(l, 3),
+        dp_accounting.LaplaceDpEvent(noise_multiplier=2.0),
+    )
+
+    e = dp_accounting.ExponentialMechanismDpEvent(epsilon=0.5)
+    self.assertEqual(
+        with_group_size(e, 4),
+        dp_accounting.ExponentialMechanismDpEvent(epsilon=2.0),
+    )
+
+    z = dp_accounting.ZCDpEvent(rho=0.2)
+    self.assertEqual(
+        with_group_size(z, 3),
+        dp_accounting.ZCDpEvent(rho=1.8),
+    )
+
+    noop = dp_accounting.NoOpDpEvent()
+    self.assertEqual(with_group_size(noop, 5), noop)
+
+    non_priv = dp_accounting.NonPrivateDpEvent()
+    self.assertEqual(with_group_size(non_priv, 5), non_priv)
+
+    composed = dp_accounting.ComposedDpEvent([
+        dp_accounting.SelfComposedDpEvent(g, 2),
+        e,
+    ])
+    expected_composed = dp_accounting.ComposedDpEvent([
+        dp_accounting.SelfComposedDpEvent(
+            dp_accounting.GaussianDpEvent(noise_multiplier=2.0), 2
+        ),
+        dp_accounting.ExponentialMechanismDpEvent(epsilon=1.5),
+    ])
+    self.assertEqual(with_group_size(composed, 3), expected_composed)
+
+    ed = dp_accounting.dp_event.EpsilonDeltaDpEvent(0.0, 1e-5)
+    self.assertEqual(with_group_size(ed, 1), ed)
+    with self.assertRaises(dp_accounting.UnsupportedEventError):
+      with_group_size(ed, 2)
+
+    with self.assertRaises(ValueError):
+      with_group_size(g, 0)
 
   def test_poisson_calibrate_with_categorical_domains_and_gdp_mech(self):
     domains = {

@@ -129,9 +129,7 @@ class MechanismConfig(abc.ABC):
     return cls._registry.get(name)
 
   @abc.abstractmethod
-  def configure(
-      self, domain=None, *, zcdp_rho, delta=0, max_records_per_user=1
-  ) -> CalibratedMechanism:
+  def configure(self, domain=None, *, zcdp_rho, delta=0) -> CalibratedMechanism:
     """Returns a calibrated mechanism for the given zCDP budget.
 
     Converts the zCDP budget into the mechanism's natural privacy parameter
@@ -153,12 +151,6 @@ class MechanismConfig(abc.ABC):
       delta: Approximate DP delta consumed by the mechanism itself (e.g., for
         thresholding). Defaults to 0 (pure zCDP). Mechanisms that need delta
         should raise if it is 0.
-      max_records_per_user: Assumed upper bound on the number of records a
-        single user contributes. Values greater than 1 scale the added noise
-        (and mechanism sensitivity) to provide user-level rather than
-        record-level DP; the privacy accounting is unchanged. This bound is NOT
-        enforced -- soundness relies on the caller guaranteeing it via
-        preprocessing.
 
     Returns:
       A calibrated, runnable mechanism.
@@ -207,9 +199,3 @@ class DPMechanism(MechanismConfig, CalibratedMechanism, abc.ABC):
   the historical abstract surface (``configure`` + ``dp_event`` + ``__call__``,
   with ``calibrate`` inherited). Remove once every mechanism is split.
   """
-
-
-def validate_max_records_per_user(value: int) -> None:
-  """Raises ValueError if the per-user record bound is not a positive int."""
-  if value < 1:
-    raise ValueError(f'max_records_per_user must be >= 1, got {value}.')

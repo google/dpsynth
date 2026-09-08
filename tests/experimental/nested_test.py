@@ -98,20 +98,6 @@ class NestedTabularConfigTest(absltest.TestCase):
     self.assertIn('element', result.synthetic_data['click'].columns)
     self.assertIn('amount', result.synthetic_data['purchase'].columns)
 
-  def test_max_records_per_user(self):
-    schema = self._make_schema()
-    synth = nested.NestedTabularConfig(_allow_multiple_records_per_user=True)
-    calibrated = synth.configure(schema, zcdp_rho=10.0, max_records_per_user=5)
-    self.assertEqual(calibrated.shared_synth.max_records_per_user, 5)
-    for detail_synth in calibrated.detail_synths.values():
-      self.assertEqual(detail_synth.max_records_per_user, 5)
-
-  def test_max_records_per_user_requires_bypass(self):
-    schema = self._make_schema()
-    synth = nested.NestedTabularConfig()
-    with self.assertRaises(ValueError):
-      synth.configure(schema, zcdp_rho=10.0, max_records_per_user=5)
-
 
 def load_tests(loader, tests, ignore):
   del loader, ignore  # Unused.

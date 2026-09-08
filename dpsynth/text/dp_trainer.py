@@ -98,7 +98,7 @@ class DPTrainer(api.DPMechanism):
   performance_flags: execution_plan.PerformanceFlags | None = None
   callback: training.CallbackFn | None = None
 
-  def configure(self, _=None, *, zcdp_rho, delta=0.0, max_records_per_user=1):
+  def configure(self, _=None, *, zcdp_rho, delta=0.0):
     """Returns a copy with noise calibrated to the zCDP budget.
 
     Uses a loose upper bound ignoring subsampling amplification:
@@ -108,7 +108,6 @@ class DPTrainer(api.DPMechanism):
     Args:
       zcdp_rho: The zCDP privacy budget (rho).
       delta: Unused. Accepted for interface compatibility.
-      max_records_per_user: Maximum number of records per user.
 
     Returns:
       A new ``DPTrainer`` with calibrated ``config.noise_multiplier``.
