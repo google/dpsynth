@@ -29,6 +29,17 @@ from dpsynth.relational import domain as relational_domain
 from etils import epath
 import yaml
 
+try:
+  import jax_privacy  # pylint: disable=g-import-not-at-top
+except ImportError:
+  jax_privacy = None
+
+_execution_plan: Any = (
+    getattr(jax_privacy, 'execution_plan', None)
+    if jax_privacy is not None
+    else None
+)
+
 PathType = epath.PathLike
 
 
@@ -49,6 +60,10 @@ def _resolve_type(type_name: str) -> type[Any] | None:
         candidate, dp_accounting.DpEvent
     ):
       return candidate
+  if _execution_plan is not None and hasattr(_execution_plan, type_name):
+    candidate = getattr(_execution_plan, type_name)
+    if isinstance(candidate, type):
+      return candidate
   return None
 
 
@@ -59,12 +74,20 @@ def _unstructure_dataclass(cl: type[Any], conv: cattrs.Converter) -> Any:
   return lambda obj: {'type': obj.__class__.__name__, **base_fn(obj)}
 
 
-def _structure_polymorphic(data: Any, _: Any, conv: cattrs.Converter) -> Any:
-  if isinstance(data, Mapping) and 'type' in data:
-    cls = _resolve_type(data['type'])
-    if cls is not None:
-      return cattrs.gen.make_dict_structure_fn(cls, conv)(data, cls)
-    raise ValueError(f"Unknown type: '{data['type']}'")
+def _structure_polymorphic(
+    data: Any, target_cls: Any, conv: cattrs.Converter
+) -> Any:
+  """Structures polymorphic dataclasses based on type tag or target class."""
+  if isinstance(data, Mapping):
+    if 'type' in data:
+      cls = _resolve_type(data['type'])
+      if cls is not None:
+        return cattrs.gen.make_dict_structure_fn(cls, conv)(data, cls)
+      raise ValueError(f"Unknown type: '{data['type']}'")
+    if target_cls is not None and dataclasses.is_dataclass(target_cls):
+      return cattrs.gen.make_dict_structure_fn(target_cls, conv)(
+          data, target_cls
+      )
   return data
 
 
@@ -86,6 +109,11 @@ def _make_converter() -> cattrs.Converter:
       dp_accounting.DpEvent,
       lambda obj: _unstructure_dataclass(obj.__class__, conv)(obj),
   )
+  if _execution_plan is not None:
+    conv.register_unstructure_hook(
+        _execution_plan.ExecutionPlanConfig,
+        lambda obj: _unstructure_dataclass(obj.__class__, conv)(obj),
+    )
   conv.register_unstructure_hook_factory(
       lambda cl: isinstance(cl, type) and issubclass(cl, dp_accounting.DpEvent),
       lambda cl: _unstructure_dataclass(cl, conv),
@@ -94,19 +122,41 @@ def _make_converter() -> cattrs.Converter:
       tuple,
       lambda val: [conv.unstructure(x) for x in val],
   )
+  try:
+    import numpy as np  # pylint: disable=g-import-not-at-top
+
+    conv.register_unstructure_hook(np.ndarray, lambda arr: arr.tolist())
+  except ImportError:
+    pass
+  try:
+    import jax  # pylint: disable=g-import-not-at-top
+
+    conv.register_unstructure_hook(jax.Array, lambda arr: arr.tolist())
+  except ImportError:
+    pass
 
   # 2. Polymorphic structuring for abstract base classes and unions
+  conv.register_structure_hook_factory(
+      dataclasses.is_dataclass,
+      lambda cl: cattrs.gen.make_dict_structure_fn(cl, conv),
+  )
   conv.register_structure_hook(
-      api.MechanismConfig, lambda data, _: _structure_polymorphic(data, _, conv)
+      api.MechanismConfig,
+      lambda data, t: _structure_polymorphic(data, t, conv),
   )
   conv.register_structure_hook(
       domain.AttributeType,
-      lambda data, _: _structure_polymorphic(data, _, conv),
+      lambda data, t: _structure_polymorphic(data, t, conv),
   )
   conv.register_structure_hook(
       dp_accounting.DpEvent,
-      lambda data, _: _structure_polymorphic(data, _, conv),
+      lambda data, t: _structure_polymorphic(data, t, conv),
   )
+  if _execution_plan is not None:
+    conv.register_structure_hook(
+        _execution_plan.ExecutionPlanConfig,
+        lambda data, t: _structure_polymorphic(data, t, conv),
+    )
 
   # 3. Structure Sequence[T] consistently as list
   conv.register_structure_hook_func(
@@ -183,6 +233,14 @@ def from_yaml(
 
   data = yaml.safe_load(yaml_str)
   if expected_type is not None:
+    if (
+        isinstance(data, Mapping)
+        and dataclasses.is_dataclass(expected_type)
+        and 'type' not in data
+    ):
+      return cattrs.gen.make_dict_structure_fn(expected_type, converter)(
+          data, expected_type
+      )
     return converter.structure(data, expected_type)
 
   if isinstance(data, Mapping) and 'type' in data:

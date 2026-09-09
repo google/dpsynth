@@ -86,6 +86,7 @@ class DPFineTuner(api.DPMechanism):
       default_factory=lambda: optax.adamw(1e-4)
   )
   performance_flags: execution_plan.PerformanceFlags | None = None
+  callback: training.CallbackFn | None = None
 
   def configure(self, _=None, *, zcdp_rho, delta=0.0, max_records_per_user=1):
     """Returns a copy with noise_multiplier calibrated to the zCDP budget.
@@ -169,6 +170,7 @@ class DPFineTuner(api.DPMechanism):
         loss_fn=loss_fn,  # pyrefly: ignore[bad-argument-type]
         optimizer=self.optimizer,
         performance_flags=self.performance_flags,
+        callback=self.callback,
     )
     state = trainer(rng=rng, data=dataset)
 

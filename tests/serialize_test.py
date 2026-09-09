@@ -15,6 +15,7 @@
 """Unit tests for cattrs-based serialize.py in DPSynth."""
 
 import os
+from typing import Any
 from absl.testing import absltest
 from absl.testing import parameterized
 import dp_accounting
@@ -31,6 +32,14 @@ from dpsynth.discrete_mechanisms import mst
 from dpsynth.discrete_mechanisms import swift
 from dpsynth.local_mode import initialization
 import yaml
+
+try:
+  import jax_privacy  # pylint: disable=g-import-not-at-top
+
+  _execution_plan: Any = getattr(jax_privacy, 'execution_plan', None)
+except ImportError:
+  jax_privacy = None
+  _execution_plan = None
 
 
 class SerializeTest(parameterized.TestCase):
@@ -258,6 +267,49 @@ class SerializeTest(parameterized.TestCase):
     yaml_str = dpsynth.to_yaml(event)
     loaded = dpsynth.from_yaml(yaml_str)
     self.assertEqual(loaded, event)
+
+  def test_execution_plan_roundtrip(self):
+    if _execution_plan is None:
+      self.skipTest('jax_privacy.execution_plan is not available')
+    config = _execution_plan.BandMFConfig(
+        iterations=100,
+        expected_participations=4.0,
+        strategy=[0.5, 0.3, 0.2],
+        noise_multiplier=1.0,
+    )
+    yaml_str = serialize.to_yaml(config)
+    raw_dict = yaml.safe_load(yaml_str)
+    self.assertEqual(raw_dict['type'], 'BandMFConfig')
+    self.assertEqual(raw_dict['iterations'], 100)
+    self.assertEqual(raw_dict['expected_participations'], 4.0)
+    self.assertEqual(raw_dict['noise_multiplier'], 1.0)
+    self.assertLen(raw_dict['strategy'], 3)
+
+    loaded = serialize.from_yaml(yaml_str)
+    self.assertEqual(loaded, config)
+
+    loaded_typed = serialize.from_yaml(
+        yaml_str, expected_type=_execution_plan.BandMFConfig
+    )
+    self.assertEqual(loaded_typed, config)
+
+  def test_execution_plan_without_type_tag(self):
+    if _execution_plan is None:
+      self.skipTest('jax_privacy.execution_plan is not available')
+    yaml_str = """
+iterations: 100
+expected_participations: 4.0
+strategy: [1.0, 0.5, 0.2]
+noise_multiplier: 1.0
+"""
+    config = serialize.from_yaml(
+        yaml_str, expected_type=_execution_plan.BandMFConfig
+    )
+    self.assertIsInstance(config, _execution_plan.BandMFConfig)
+    self.assertEqual(config.iterations, 100)
+    self.assertEqual(config.expected_participations, 4.0)
+    self.assertEqual(config.noise_multiplier, 1.0)
+    self.assertEqual(config.num_bands, 3)
 
   def test_unknown_type_raises(self):
     with self.assertRaises(ValueError):

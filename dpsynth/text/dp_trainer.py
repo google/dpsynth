@@ -158,7 +158,12 @@ class DPTrainer(api.DPMechanism):
     cfg = typing.cast(typing.Any, self.mechanism_config)
     d = dataclasses.asdict(cfg)
     if hasattr(self.mechanism_config, 'strategy') and cfg.strategy is not None:
-      d['strategy'] = cfg.strategy.tolist()  # JSON/numpy hack.
+      strat = (
+          cfg.strategy.tolist()
+          if hasattr(cfg.strategy, 'tolist')
+          else list(cfg.strategy)
+      )
+      d['strategy'] = strat
     logging.info('DPTrainer config:\n%s', json.dumps(d, indent=2))
 
     dp_trainer = training.DPTrainer(
