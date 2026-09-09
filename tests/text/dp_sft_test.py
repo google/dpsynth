@@ -20,13 +20,18 @@ without loading any real model checkpoints.
 
 import dataclasses
 import math
+from unittest import mock
 
 from absl.testing import absltest
 from dpsynth.text import dp_sft
+from dpsynth.text import dp_trainer
 from dpsynth.text import model
+from gemma import peft
+import grain.python as pygrain
 import jax
 import jax.numpy as jnp
 from jax_privacy import execution_plan
+import numpy as np
 
 
 def _default_config():
@@ -192,6 +197,172 @@ class DPFineTunerTest(absltest.TestCase):
     ).configure(zcdp_rho=0.5)
     event = mechanism.dp_event
     self.assertIsNotNone(event)
+
+  @mock.patch.object(peft, 'merge_params', autospec=True)
+  @mock.patch.object(dp_trainer, 'DPTrainer', autospec=True)
+  @mock.patch.object(model, 'load_gemma', autospec=True)
+  def test_call_with_map_dataset_materializes_to_numpy(
+      self, mock_load, mock_trainer_cls, mock_merge
+  ):
+    mock_load.return_value = (mock.MagicMock(), {}, {})
+    mock_trainer = mock_trainer_cls.return_value
+    mock_trainer.return_value = mock.MagicMock(params={})
+    mock_merge.return_value = {}
+
+    variant = model.GemmaModel(
+        model_class=mock.MagicMock(),
+        checkpoint_path='/mock/path',
+        tokenizer_class=_MockTokenizer,
+    )
+    pairs = [('prompt1', 'resp1'), ('prompt2', 'resp2')]
+    ds = pygrain.MapDataset.source(pairs)
+
+    fine_tuner = dp_sft.DPFineTuner(
+        model_variant=variant,
+        mechanism_config=_default_config(),
+        max_seq_length=16,
+    ).configure(zcdp_rho=0.5)
+
+    res = fine_tuner(rng=0, data=ds)
+    self.assertIsInstance(res, dp_sft.FineTuneResult)
+    mock_trainer.assert_called_once()
+    passed_dataset = mock_trainer.call_args.kwargs['data']
+    self.assertIsInstance(passed_dataset['input_tokens'], np.ndarray)
+    self.assertIsInstance(passed_dataset['loss_mask'], np.ndarray)
+    self.assertEqual(passed_dataset['input_tokens'].shape, (2, 16))
+    self.assertEqual(passed_dataset['loss_mask'].shape, (2, 16))
+
+    expected_dataset = model.tokenize_texts(pairs, variant, max_seq_length=16)
+    np.testing.assert_array_equal(
+        passed_dataset['input_tokens'], expected_dataset['input_tokens']
+    )
+    np.testing.assert_array_equal(
+        passed_dataset['loss_mask'], expected_dataset['loss_mask']
+    )
+
+  @mock.patch.object(peft, 'merge_params', autospec=True)
+  @mock.patch.object(dp_trainer, 'DPTrainer', autospec=True)
+  @mock.patch.object(model, 'load_gemma', autospec=True)
+  def test_call_with_sequence(self, mock_load, mock_trainer_cls, mock_merge):
+    mock_load.return_value = (mock.MagicMock(), {}, {})
+    mock_trainer = mock_trainer_cls.return_value
+    mock_trainer.return_value = mock.MagicMock(params={})
+    mock_merge.return_value = {}
+
+    variant = model.GemmaModel(
+        model_class=mock.MagicMock(),
+        checkpoint_path='/mock/path',
+        tokenizer_class=_MockTokenizer,
+    )
+    pairs = [('prompt1', 'resp1'), ('prompt2', 'resp2')]
+    fine_tuner = dp_sft.DPFineTuner(
+        model_variant=variant,
+        mechanism_config=_default_config(),
+        max_seq_length=16,
+    ).configure(zcdp_rho=0.5)
+
+    res = fine_tuner(rng=0, data=pairs)
+    self.assertIsInstance(res, dp_sft.FineTuneResult)
+    mock_trainer.assert_called_once()
+    passed_dataset = mock_trainer.call_args.kwargs['data']
+    expected_dataset = model.tokenize_texts(pairs, variant, max_seq_length=16)
+    np.testing.assert_array_equal(
+        passed_dataset['input_tokens'], expected_dataset['input_tokens']
+    )
+    np.testing.assert_array_equal(
+        passed_dataset['loss_mask'], expected_dataset['loss_mask']
+    )
+
+
+class _MockSpecialTokens:
+  START_OF_TURN = 0
+  END_OF_TURN = 1
+
+
+class _MockTokenizer:
+
+  def __init__(self):
+    self.special_tokens = _MockSpecialTokens()
+    self.tokens = ['<start>', '<end>']
+
+  def encode(self, text, add_bos=False, add_eos=False):
+    del add_bos, add_eos
+    return [len(text) % 10 + 1, len(text) % 5 + 1]
+
+
+class TokenizeExampleTest(absltest.TestCase):
+
+  def setUp(self):
+    super().setUp()
+    self.tokenizer = _MockTokenizer()
+
+  def test_tokenize_example_shapes_and_types(self):
+    example = ('Hello', 'World')
+    result = model.tokenize_example(example, self.tokenizer, max_seq_length=16)
+    self.assertIn('input_tokens', result)
+    self.assertIn('loss_mask', result)
+    self.assertEqual(result['input_tokens'].shape, (16,))
+    self.assertEqual(result['loss_mask'].shape, (16,))
+    self.assertEqual(result['input_tokens'].dtype, np.int32)
+    self.assertEqual(result['loss_mask'].dtype, np.int32)
+
+  def test_tokenize_example_masking(self):
+    example = ('Hi', 'There')
+    result = model.tokenize_example(example, self.tokenizer, max_seq_length=8)
+    np.testing.assert_array_equal(result['loss_mask'][:2], [0, 0])
+    np.testing.assert_array_equal(result['loss_mask'][2:4], [1, 1])
+    np.testing.assert_array_equal(result['loss_mask'][4:], [0, 0, 0, 0])
+
+  def test_tokenize_example_truncation(self):
+    example = ('Hi', 'There')
+    result = model.tokenize_example(example, self.tokenizer, max_seq_length=3)
+    self.assertEqual(result['input_tokens'].shape, (3,))
+    self.assertEqual(result['loss_mask'].shape, (3,))
+    np.testing.assert_array_equal(result['loss_mask'], [0, 0, 1])
+
+
+class TokenizeTextsTest(absltest.TestCase):
+
+  def test_parity_with_tokenize_example(self):
+    variant = model.GemmaModel(
+        model_class=mock.MagicMock(),
+        checkpoint_path='/mock/path',
+        tokenizer_class=_MockTokenizer,
+    )
+    tokenizer = variant.tokenizer_class()
+    pairs = [('Hello', 'World'), ('How are you?', 'I am fine.')]
+    seq_result = model.tokenize_texts(
+        pairs, model_variant=variant, max_seq_length=16
+    )
+    for i, pair in enumerate(pairs):
+      ex_result = model.tokenize_example(pair, tokenizer, max_seq_length=16)
+      np.testing.assert_array_equal(
+          seq_result['input_tokens'][i], ex_result['input_tokens']
+      )
+      np.testing.assert_array_equal(
+          seq_result['loss_mask'][i], ex_result['loss_mask']
+      )
+
+  def test_parity_between_sequence_and_numpy_array(self):
+    variant = model.GemmaModel(
+        model_class=mock.MagicMock(),
+        checkpoint_path='/mock/path',
+        tokenizer_class=_MockTokenizer,
+    )
+    pairs = [('Hello', 'World'), ('How are you?', 'I am fine.')]
+    seq_result = model.tokenize_texts(
+        pairs, model_variant=variant, max_seq_length=16
+    )
+    np_result = model.tokenize_texts(
+        np.asarray(pairs), model_variant=variant, max_seq_length=16
+    )
+
+    np.testing.assert_array_equal(
+        seq_result['input_tokens'], np_result['input_tokens']
+    )
+    np.testing.assert_array_equal(
+        seq_result['loss_mask'], np_result['loss_mask']
+    )
 
 
 if __name__ == '__main__':
