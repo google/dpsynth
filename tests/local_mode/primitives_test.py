@@ -12,9 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Tests for quantiles primitives."""
-
-import unittest
+"""Tests for differentially private primitives."""
 
 from absl.testing import absltest
 from absl.testing import parameterized
@@ -22,107 +20,191 @@ from dpsynth.local_mode import primitives
 import numpy as np
 
 
-@unittest.skip(
-    "SIPS tests are broken at HEAD; will be replaced by Gaussian partition"
-    " selection."
-)
-class SelectPartitionsSipsTest(parameterized.TestCase):
+class ExponentialMechanismTest(parameterized.TestCase):
 
   def setUp(self):
     super().setUp()
     self.rng = np.random.default_rng(42)
 
-  def test_basic_operation(self):
-    data = np.array([1] * 50 + [2] * 5)
-    selected, counts, sigma = primitives._select_partitions_sips(
-        self.rng, data, gdp_budget=10.0, delta=1e-5
+  def test_basic_selection(self):
+    scores = np.array([5.0, 20.0, -10.0, 3.0])
+    idx = primitives.exponential_mechanism(
+        self.rng, scores, epsilon=1.0, sensitivity=1.0
     )
-    self.assertIn(1, selected)
-    self.assertEqual(sigma, 1.0 / np.sqrt(10.0))
-    self.assertEqual(selected.size, counts.size)
+    self.assertIn(idx, [0, 1, 2, 3])
 
-  def test_empty_data(self):
-    data = np.array([], dtype=int)
-    selected, counts, sigma = primitives._select_partitions_sips(
-        self.rng, data, gdp_budget=1.0, delta=1e-5
+  def test_infinite_budget_selects_max_score(self):
+    scores = np.array([5.0, 20.0, -10.0, 3.0])
+    idx = primitives.exponential_mechanism(
+        self.rng, scores, epsilon=np.inf, sensitivity=1.0
     )
-    self.assertEmpty(selected)
-    self.assertEmpty(counts)
-    self.assertEqual(sigma, 1.0)
+    self.assertEqual(idx, 1)
 
-  def test_infinite_budget(self):
-    data = np.array([1, 2, 3, 4, 5])
-    selected, counts, sigma = primitives._select_partitions_sips(
-        self.rng, data, gdp_budget=np.inf, delta=0.1
+  def test_high_budget_selects_max_score(self):
+    scores = np.array([5.0, 20.0, -10.0, 3.0])
+    idx = primitives.exponential_mechanism(
+        self.rng, scores, epsilon=100.0, sensitivity=1.0
     )
-    self.assertCountEqual(selected, [1, 2, 3, 4, 5])
-    self.assertEqual(sigma, 0.0)
-    np.testing.assert_array_equal(counts, np.ones(5))
+    self.assertEqual(idx, 1)
 
-  def test_zero_budget_raises(self):
-    data = np.array([1, 2, 3])
+  def test_zero_budget_uniform_distribution(self):
+    scores = np.array([100.0, 0.0, -100.0])
+    selections = [
+        primitives.exponential_mechanism(
+            self.rng, scores, epsilon=0.0, sensitivity=1.0
+        )
+        for _ in range(1500)
+    ]
+    counts = np.bincount(selections, minlength=3)
+    for c in counts:
+      self.assertBetween(c, 400, 600)
+
+  def test_monotonic_scaling(self):
+    scores = np.array([1.0, 2.0])
+    rng1 = np.random.default_rng(123)
+    rng2 = np.random.default_rng(123)
+    idx1 = primitives.exponential_mechanism(
+        rng1, scores, epsilon=1.0, sensitivity=1.0, monotonic=True
+    )
+    idx2 = primitives.exponential_mechanism(
+        rng2, scores, epsilon=2.0, sensitivity=1.0, monotonic=False
+    )
+    self.assertEqual(idx1, idx2)
+
+  def test_invalid_inputs_raise(self):
+    scores = np.array([1.0, 2.0])
     with self.assertRaises(ValueError):
-      primitives._select_partitions_sips(
-          self.rng, data, gdp_budget=-0.1, delta=1e-5
+      primitives.exponential_mechanism(
+          self.rng, scores, epsilon=-1.0, sensitivity=1.0
       )
     with self.assertRaises(ValueError):
-      primitives._select_partitions_sips(
-          self.rng, data, gdp_budget=1.0, delta=-0.001
+      primitives.exponential_mechanism(
+          self.rng, scores, epsilon=1.0, sensitivity=0.0
+      )
+    with self.assertRaises(ValueError):
+      primitives.exponential_mechanism(
+          self.rng, scores, epsilon=1.0, sensitivity=-0.5
+      )
+    with self.assertRaises(ValueError):
+      primitives.exponential_mechanism(
+          self.rng, np.array([]), epsilon=1.0, sensitivity=1.0
       )
 
-  def test_string_data_type(self):
-    data = np.array(["a", "b", "a", "c"])
-    selected, _, _ = primitives._select_partitions_sips(
-        self.rng, data, gdp_budget=10.0, delta=1e-5
-    )
-    self.assertTrue(all(isinstance(p, str) for p in selected))
 
-  def test_user_level_dp_weighting(self):
-    # Partition 1 has 10 unique users (1 to 10), each contributing 1 time.
-    # Partition 2 has 1 user (11) contributing 10 times.
-    data = np.array([1] * 10 + [2] * 10)
-    user_ids = np.array(list(range(1, 11)) + [11] * 10)
+class JitterFactorTest(absltest.TestCase):
 
-    selected, _, _ = primitives._select_partitions_sips(
-        self.rng, data, gdp_budget=10.0, delta=1e-5, user_ids=user_ids
-    )
-    self.assertIn(1, selected)
-    self.assertNotIn(2, selected)
+  def test_jitter_factor_calculation(self):
+    self.assertEqual(primitives.jitter_factor(0), 1)
+    self.assertEqual(primitives.jitter_factor(1), 4)
+    self.assertEqual(primitives.jitter_factor(16), 64)
 
-  @parameterized.named_parameters(
-      ("item_level_default_rounds", None, None),
-      ("item_level_3_rounds", None, 3),
-      ("user_level_default_rounds", np.array([1, 2, 3]), None),
-      ("user_level_5_rounds", np.array([1, 2, 3]), 5),
+
+class QuantilesFromHistogramTest(parameterized.TestCase):
+
+  def test_no_levels_returns_empty(self):
+    rng = np.random.default_rng(0)
+    counts = np.array([10])
+    for jitter_strategy in ("symmetric", "refine"):
+      edges = primitives.quantiles_from_histogram(
+          rng, counts, np.array([]), jitter_strategy
+      )
+      self.assertEmpty(edges)
+
+  @parameterized.product(
+      levels=(1, 2, 3, 4),
+      jitter_strategy=("symmetric", "refine"),
   )
-  def test_configurations(self, user_ids, num_rounds):
-    data = np.array([1, 2, 3])
-    gdp_budget = 10.0
-    _, _, sigma = primitives._select_partitions_sips(
-        self.rng,
-        data,
-        gdp_budget=gdp_budget,
-        delta=1e-5,
-        num_rounds=num_rounds,
-        user_ids=user_ids,
+  def test_edge_count_matches_levels(self, levels, jitter_strategy):
+    rng = np.random.default_rng(0)
+    grid_size = 10001
+    counts = rng.integers(0, 20, size=grid_size)
+    edges = primitives.quantiles_from_histogram(
+        rng,
+        counts,
+        epsilon_levels=np.ones(levels),
+        jitter_strategy=jitter_strategy,
     )
-    # Calculate expected max_sigma based on budget allocation
-    if num_rounds is None:
-      num_rounds = 1 if user_ids is None else 3
-    allocation_factor = 0.3  # default in primitives.py
-    fractions = allocation_factor ** np.arange(num_rounds)[::-1]
-    fractions /= fractions.sum()
-    gdp_rounds = gdp_budget * fractions
-    expected_max_sigma = float(np.max(1.0 / np.sqrt(gdp_rounds)))
+    self.assertLen(edges, 2**levels - 1)
 
-    self.assertAlmostEqual(sigma, expected_max_sigma)
+  @parameterized.parameters(1, 2, 3, 4)
+  def test_edge_count_matches_levels_with_spike(self, levels):
+    counts = np.zeros(101, dtype=np.int64)
+    counts[:40] = 1
+    counts[40] = 1000
+    counts[41:80] = 1
+    edges = primitives.quantiles_from_histogram(
+        np.random.default_rng(0),
+        counts,
+        epsilon_levels=np.array([np.inf] * levels),
+        jitter_strategy="refine",
+    )
+    self.assertLen(edges, 2**levels - 1)
 
-  def test_mismatched_user_ids_raises(self):
-    data = np.array([1, 2, 3])
-    user_ids = np.array([1, 2])
-    with self.assertRaises(ValueError):
-      primitives._select_partitions_sips(
-          self.rng, data, gdp_budget=10.0, delta=1e-5, user_ids=user_ids
+  def test_integer_edges_are_integer_indices(self):
+    counts = np.zeros(101, dtype=np.int64)
+    counts[40] = 5000
+    counts[:40] = 50
+    counts[41:] = 50
+    edges = primitives.quantiles_from_histogram(
+        np.random.default_rng(0),
+        counts,
+        epsilon_levels=np.array([np.inf] * 3),
+        jitter_strategy="refine",
+    )
+    for edge in edges:
+      self.assertEqual(edge, int(edge))
+      self.assertBetween(edge, 0, counts.size - 1)
+
+  def test_exact_budget_matches_numpy_smooth(self):
+    rng = np.random.default_rng(0)
+    data = rng.integers(0, 100, size=50000)
+    counts = np.bincount(data, minlength=101)
+    edges = primitives.quantiles_from_histogram(
+        rng,
+        counts,
+        epsilon_levels=np.array([np.inf] * 3),
+        jitter_strategy="refine",
+    )
+    expected = np.quantile(data, [0.125, 0.25, 0.375, 0.5, 0.625, 0.75, 0.875])
+    np.testing.assert_allclose(edges, expected, atol=1.0)
+
+  def test_exact_budget_matches_numpy_with_spike(self):
+    below = np.arange(1, 40).repeat(230)
+    spike = np.full(13500, 40)
+    above = np.arange(41, 80).repeat(190)
+    data = np.concatenate([below, spike, above])
+    counts = np.bincount(data, minlength=101)
+    edges = primitives.quantiles_from_histogram(
+        np.random.default_rng(0),
+        counts,
+        epsilon_levels=np.array([np.inf] * 3),
+        jitter_strategy="refine",
+    )
+    expected = np.quantile(data, [0.125, 0.25, 0.375, 0.5, 0.625, 0.75, 0.875])
+    np.testing.assert_allclose(edges, expected, atol=1.0)
+
+  def test_spike_owns_consecutive_edges(self):
+    counts = np.zeros(101, dtype=np.int64)
+    counts[:40] = 20
+    counts[40] = 20000  # ~96% of the mass.
+    counts[41:80] = 20
+    edges = primitives.quantiles_from_histogram(
+        np.random.default_rng(0),
+        counts,
+        epsilon_levels=np.array([np.inf] * 3),
+        jitter_strategy="refine",
+    )
+    self.assertEqual(edges[1:6], [40, 40, 40, 40, 40])
+
+  def test_unsupported_max_records_per_user_raises(self):
+    rng = np.random.default_rng(0)
+    with self.assertRaises(NotImplementedError):
+      primitives.quantiles_from_histogram(
+          rng,
+          np.array([1, 2, 3]),
+          epsilon_levels=np.ones(2),
+          jitter_strategy="refine",
+          max_records_per_user=2,
       )
 
 
@@ -162,8 +244,6 @@ class SelectPartitionsGaussianThresholdingTest(absltest.TestCase):
     self.assertCountEqual(selected_partitions, [1, 2, 3, 4, 5])
 
   def test_rare_items_not_selected(self):
-    # One item with many occurrences, another with just 1.
-    # With moderate budget and tight delta, the rare item should be dropped.
     data = np.array([1] * 100 + [2])
     selected_partitions, _, _ = (
         primitives.select_partitions_gaussian_thresholding(
@@ -183,7 +263,6 @@ class SelectPartitionsGaussianThresholdingTest(absltest.TestCase):
     self.assertTrue(all(isinstance(p, str) for p in selected_partitions))
 
   def test_min_count_filters_low_count_partitions(self):
-    # Partition 1 has count 50, partition 2 has count 3.
     data = np.array([1] * 50 + [2] * 3)
     selected, _, _ = primitives.select_partitions_gaussian_thresholding(
         self.rng, data, gdp_budget=10.0, delta=1e-5, min_count=5
@@ -220,8 +299,6 @@ class SelectPartitionsGaussianThresholdingTest(absltest.TestCase):
       )
 
   def test_min_count_increases_threshold(self):
-    # With very high budget (no noise), threshold is approximately min_count.
-    # Partitions with count exactly at min_count should pass.
     data = np.array([1] * 10 + [2] * 10)
     selected, _, _ = primitives.select_partitions_gaussian_thresholding(
         self.rng, data, gdp_budget=np.inf, delta=0.1, min_count=10
@@ -243,9 +320,9 @@ class EnsurePublicPartitionsTest(absltest.TestCase):
         self.rng, selected, counts, 0.0, public
     )
     np.testing.assert_array_equal(sel, ["a", "b", "c"])
-    self.assertEqual(cts[0], 10.0)  # count for 'a'
-    self.assertEqual(cts[1], 0.0)  # noise for 'b' (stddev=0)
-    self.assertEqual(cts[2], 20.0)  # count for 'c'
+    self.assertEqual(cts[0], 10.0)
+    self.assertEqual(cts[1], 0.0)
+    self.assertEqual(cts[2], 20.0)
 
   def test_all_present_is_noop(self):
     selected = np.array(["a", "b"])

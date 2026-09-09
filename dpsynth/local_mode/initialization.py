@@ -22,7 +22,6 @@ import math
 import dp_accounting
 from dpsynth import api
 from dpsynth import domain
-from dpsynth.local_mode import _quantiles
 from dpsynth.local_mode import primitives
 from dpsynth.local_mode import vectorized_transformations as vtx
 import numpy as np
@@ -90,7 +89,7 @@ def compute_grid_spec(
   """Returns (lower, upper, grid_size) for the quantile candidate grid."""
   min_value = float(attribute.min_value)
   if attribute.dtype == 'int':
-    m = _quantiles.jitter_factor(num_partitions)
+    m = primitives.jitter_factor(num_partitions)
     budget = max(2, max_grid_size // m)
     int_range = int(attribute.max_value - attribute.min_value + 1)
     step = max(1, math.ceil(int_range / budget))
@@ -212,7 +211,7 @@ class NumericalInitializer(api.CalibratedMechanism):
   ) -> NumericalMeasurement:
     """Returns a NumericalMeasurement from pre-aggregated histogram counts."""
     jitter_strategy = 'refine' if self.attribute.dtype == 'int' else 'symmetric'
-    indices = _quantiles.quantiles_from_histogram(
+    indices = primitives.quantiles_from_histogram(
         rng,
         counts,
         epsilon_levels=np.asarray(self.epsilon_levels),
