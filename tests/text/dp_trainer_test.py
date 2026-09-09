@@ -65,7 +65,7 @@ class DPTrainerTest(absltest.TestCase):
     ).configure(zcdp_rho=0.5)
     # Single band: sigma = sqrt(T / (2 * rho)) = 10.
     self.assertAlmostEqual(trainer.mechanism_config.noise_multiplier, 10.0)
-    self.assertIsNotNone(trainer.dp_event)
+    self.assertIsNotNone(trainer.dp_event(group_size=1))
 
   def test_raises_before_calibration(self):
     params, loss_fn = _dummy_params_and_loss()
@@ -76,7 +76,7 @@ class DPTrainerTest(absltest.TestCase):
         optimizer=optax.adamw(1e-4),
     )
     with self.assertRaises(ValueError):
-      _ = trainer.dp_event
+      _ = trainer.dp_event(group_size=1)
 
     with self.assertRaises(ValueError):
       trainer(rng=42, data={'x': jnp.ones((10, 4, 4))})
@@ -123,7 +123,9 @@ class DPTrainerTest(absltest.TestCase):
         optimizer=optax.adamw(1e-4),
     ).configure(zcdp_rho=float('inf'))
 
-    self.assertIsInstance(trainer.dp_event, dp_accounting.NonPrivateDpEvent)
+    self.assertIsInstance(
+        trainer.dp_event(group_size=1), dp_accounting.NonPrivateDpEvent
+    )
     train_state = trainer(rng=42, data={'x': jnp.ones((10, 4, 4))})
     self.assertIsNotNone(train_state)
 

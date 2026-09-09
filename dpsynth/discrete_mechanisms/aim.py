@@ -66,18 +66,17 @@ def _worst_approximated(
     eps: float,
     sigma: float,
     domain: mbi.Domain,
-    max_records_per_user: int = 1,
 ) -> mbi.Clique:
   """Returns the worst approximated candidate in the given candidates."""
   errors = {}
   for cl in candidates:
     wgt = candidates[cl]
     diff = data.project(cl).datavector() - estimates[cl].datavector()
-    bias = jnp.sqrt(2 / jnp.pi) * max_records_per_user * sigma * domain.size(cl)
+    bias = jnp.sqrt(2 / jnp.pi) * sigma * domain.size(cl)
     errors[cl] = wgt * (jnp.linalg.norm(diff, ord=1) - bias)
 
-  max_sensitivity = max_records_per_user * max(
-      candidates.values(),
+  max_sensitivity = max(
+      candidates.values()
   )  # if all weights are 0, could be a problem
   keys, values = list(errors.keys()), np.array(list(errors.values()))
   idx = common.exponential_mechanism(
@@ -130,12 +129,10 @@ class AIMConfig(api.MechanismConfig):
         domain, self.workload, self.max_marginal_size
     )
 
-  def configure(self, _=None, *, zcdp_rho, delta=0, max_records_per_user=1):
-    api.validate_max_records_per_user(max_records_per_user)
+  def configure(self, _=None, *, zcdp_rho, delta=0):
     return AIM(
         config=self,
         zcdp_rho=zcdp_rho,
-        max_records_per_user=max_records_per_user,
     )
 
 
@@ -145,12 +142,11 @@ class AIM(api.CalibratedMechanism):
 
   config: AIMConfig
   zcdp_rho: float
-  max_records_per_user: int = 1
 
-  @property
-  def dp_event(self) -> dp_accounting.DpEvent:
+  def dp_event(self, group_size: int) -> dp_accounting.DpEvent:
     """Returns the DP event for the AIM mechanism."""
-    return dp_accounting.ZCDpEvent(self.zcdp_rho)
+    api.validate_group_size(group_size)
+    return dp_accounting.ZCDpEvent(self.zcdp_rho * (group_size**2))
 
   def __call__(
       self,
@@ -218,7 +214,6 @@ class AIM(api.CalibratedMechanism):
             epsilon,
             sigma,
             data.domain,
-            max_records_per_user=self.max_records_per_user,
         )
 
       summary = mbi.summarize(
@@ -245,7 +240,6 @@ class AIM(api.CalibratedMechanism):
             data,  # pyrefly: ignore[bad-argument-type]
             [marginal_query],  # pyrefly: ignore[bad-argument-type]
             sigma,
-            max_records_per_user=self.max_records_per_user,
         )[0]
         measurements.append(measurement)
         old_estimate = model.project(marginal_query).datavector()
@@ -270,12 +264,7 @@ class AIM(api.CalibratedMechanism):
       ##########################################
       # Anneal epsilon and sigma if necessary. #
       ##########################################
-      threshold = (
-          self.max_records_per_user
-          * sigma
-          * np.sqrt(2 / np.pi)
-          * data.domain.size(marginal_query)
-      )
+      threshold = sigma * np.sqrt(2 / np.pi) * data.domain.size(marginal_query)
       if np.linalg.norm(new_estimate - old_estimate, ord=1) <= threshold:
         # No useful information at this noise level, increase budget per round.
         rho_per_round *= self.config.anneal_factor

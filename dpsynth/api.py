@@ -55,10 +55,9 @@ class CalibratedMechanism(abc.ABC):
   - ``__call__``: run the mechanism on data.
   """
 
-  @property
   @abc.abstractmethod
-  def dp_event(self) -> dp_accounting.DpEvent:
-    """The DpEvent characterizing the privacy cost of this mechanism."""
+  def dp_event(self, group_size: int) -> dp_accounting.DpEvent:
+    """The DpEvent characterizing the privacy cost for the given group size."""
 
   @abc.abstractmethod
   def __call__(self, *args: Any, **kwargs: Any) -> Any:
@@ -128,9 +127,7 @@ class MechanismConfig(abc.ABC):
     return cls._registry.get(name)
 
   @abc.abstractmethod
-  def configure(
-      self, domain=None, *, zcdp_rho, delta=0, max_records_per_user=1
-  ) -> CalibratedMechanism:
+  def configure(self, domain=None, *, zcdp_rho, delta=0) -> CalibratedMechanism:
     """Returns a calibrated mechanism for the given zCDP budget.
 
     Converts the zCDP budget into the mechanism's natural privacy parameter
@@ -152,12 +149,6 @@ class MechanismConfig(abc.ABC):
       delta: Approximate DP delta consumed by the mechanism itself (e.g., for
         thresholding). Defaults to 0 (pure zCDP). Mechanisms that need delta
         should raise if it is 0.
-      max_records_per_user: Assumed upper bound on the number of records a
-        single user contributes. Values greater than 1 scale the added noise
-        (and mechanism sensitivity) to provide user-level rather than
-        record-level DP; the privacy accounting is unchanged. This bound is NOT
-        enforced -- soundness relies on the caller guaranteeing it via
-        preprocessing.
 
     Returns:
       A calibrated, runnable mechanism.
@@ -248,7 +239,7 @@ class MechanismConfig(abc.ABC):
       epsilon: float,
       delta: float,
       poisson_sampling_prob: float = 1.0,
-      max_records_per_user: int = 1,
+      group_size: int = 1,
   ) -> CalibratedMechanism:
     """Calibrate the mechanism to a target (epsilon, delta)-DP guarantee.
 
@@ -263,23 +254,17 @@ class MechanismConfig(abc.ABC):
       poisson_sampling_prob: If specified, calibrate the mechanism assuming the
         input data is subsampled with the given probability. The actual sampling
         is **NOT** handled internally by the calibrated mechanism.
-      max_records_per_user: Assumed upper bound on the number of records a
-        single user contributes. Added noise (and mechanism sensitivity) is
-        scaled by this factor to provide user-level rather than record-level DP;
-        the privacy accounting is unchanged. Soundness relies on the caller
-        enforcing this bound.
+      group_size: Bounded entity contribution size for user/group-level DP.
 
     Returns:
       A calibrated, runnable mechanism.
     """
+    validate_group_size(group_size)
 
     def make_event_fn(rho: float) -> dp_accounting.DpEvent:
-      base = self.configure(
-          domain,
-          zcdp_rho=rho,
-          delta=delta,
-          max_records_per_user=max_records_per_user,
-      ).dp_event
+      base = self.configure(domain, zcdp_rho=rho, delta=delta).dp_event(
+          group_size=group_size
+      )
       sampled = dp_accounting.PoissonSampledDpEvent(poisson_sampling_prob, base)
       return base if poisson_sampling_prob == 1.0 else sampled
 
@@ -288,12 +273,7 @@ class MechanismConfig(abc.ABC):
         target_epsilon=epsilon,
         target_delta=delta,
     )
-    return self.configure(
-        domain,
-        zcdp_rho=optimal_rho,
-        delta=delta,
-        max_records_per_user=max_records_per_user,
-    )
+    return self.configure(domain, zcdp_rho=optimal_rho, delta=delta)
 
 
 class DPMechanism(MechanismConfig, CalibratedMechanism, abc.ABC):
@@ -310,7 +290,7 @@ class DPMechanism(MechanismConfig, CalibratedMechanism, abc.ABC):
   """
 
 
-def validate_max_records_per_user(value: int) -> None:
-  """Raises ValueError if the per-user record bound is not a positive int."""
+def validate_group_size(value: int) -> None:
+  """Raises ValueError if group_size is not a positive int."""
   if value < 1:
-    raise ValueError(f'max_records_per_user must be >= 1, got {value}.')
+    raise ValueError(f'group_size must be >= 1, got {value}.')

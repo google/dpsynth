@@ -254,7 +254,7 @@ class SerializeTest(parameterized.TestCase):
         discrete_mechanism=mst.MSTConfig(pgm_iters=100)
     )
     mech = config.calibrate(dom, epsilon=1.0, delta=1e-5)
-    event = mech.dp_event
+    event = mech.dp_event(group_size=1)
     yaml_str = dpsynth.to_yaml(event)
     loaded = dpsynth.from_yaml(yaml_str)
     self.assertEqual(loaded, event)

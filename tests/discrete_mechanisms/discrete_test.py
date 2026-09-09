@@ -105,7 +105,7 @@ class DiscreteMechanismTest(absltest.TestCase):
         one_way_budget_fraction=0.25,
     )
     synth = config.configure(zcdp_rho=100.0)
-    event = synth.dp_event
+    event = synth.dp_event(group_size=1)
     self.assertIsNotNone(event)
 
   def test_calibrate_works(self):

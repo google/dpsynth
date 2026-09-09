@@ -110,7 +110,7 @@ class MSTTest(absltest.TestCase):
 
   def test_dp_event_returns_zcdp(self):
     config = mst.MSTConfig().configure(zcdp_rho=1.0)
-    event = config.dp_event
+    event = config.dp_event(group_size=1)
     self.assertIsInstance(event, dp_accounting.ZCDpEvent)
 
 

@@ -59,22 +59,18 @@ class DiscreteConfig(api.MechanismConfig):
   use_jax_for_bincount: bool = False
   use_jax_for_generation: bool = False
 
-  def configure(self, _=None, *, zcdp_rho, delta=0, max_records_per_user=1):
+  def configure(self, _=None, *, zcdp_rho, delta=0):
     """Configures the synthesizer with a zCDP budget."""
-    api.validate_max_records_per_user(max_records_per_user)
-
     one_way_rho = zcdp_rho * self.one_way_budget_fraction
     remaining_rho = zcdp_rho * (1 - self.one_way_budget_fraction)
     inner = self.mechanism.configure(
         zcdp_rho=remaining_rho,
         delta=delta,
-        max_records_per_user=max_records_per_user,
     )
     return DiscreteMechanism(
         config=self,
         base_mechanism=inner,
         one_way_gdp_budget=accounting.zcdp_to_gdp(one_way_rho),
-        max_records_per_user=max_records_per_user,
     )
 
 
@@ -85,17 +81,18 @@ class DiscreteMechanism(api.CalibratedMechanism):
   config: DiscreteConfig
   base_mechanism: api.CalibratedMechanism
   one_way_gdp_budget: float
-  max_records_per_user: int = 1
 
-  @property
-  def dp_event(self) -> dp_accounting.DpEvent:
+  def dp_event(self, group_size: int) -> dp_accounting.DpEvent:
     """Composes one-way measurement event with the inner mechanism's event."""
+    api.validate_group_size(group_size)
     events = []
     if self.one_way_gdp_budget > 0:
-      noise_multiplier = accounting.gdp_gaussian_sigma(self.one_way_gdp_budget)
+      noise_multiplier = (
+          accounting.gdp_gaussian_sigma(self.one_way_gdp_budget) / group_size
+      )
       events.append(dp_accounting.GaussianDpEvent(noise_multiplier))
 
-    inner_event = self.base_mechanism.dp_event
+    inner_event = self.base_mechanism.dp_event(group_size)
     if isinstance(inner_event, dp_accounting.ComposedDpEvent):
       events.extend(inner_event.events)
     elif not isinstance(inner_event, dp_accounting.NoOpDpEvent):
@@ -146,7 +143,6 @@ class DiscreteMechanism(api.CalibratedMechanism):
           data=data,  # pyrefly: ignore[bad-argument-type]
           marginal_queries=one_way_cliques,  # pyrefly: ignore[bad-argument-type]
           gdp_sigma=accounting.gdp_gaussian_sigma(self.one_way_gdp_budget),
-          max_records_per_user=self.max_records_per_user,
       )
     else:
       measurements = []
