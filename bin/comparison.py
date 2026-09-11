@@ -22,7 +22,6 @@ from absl import app
 from absl import flags
 from absl import logging
 from dpsynth import domain
-import fancyflags as ff
 import pandas as pd
 import sdmetrics
 
@@ -84,19 +83,16 @@ _COLUMNS_TO_COMPARE = flags.DEFINE_list(
 )
 
 
-_COLUMNS_TO_CROSS_COMPARE = ff.DEFINE_dict(
-    'cross_compare',
-    categorical_columns=ff.MultiString(
-        ['sex', 'race'],
-        'Multiple categorical columns to use for cross-column comparison. We'
-        ' will group by all the categorical columns and compare the mean with'
-        ' each of the numerical columns.',
-    ),
-    numerical_columns=ff.MultiString(
-        ['age'],
-        'Multiple numerical columns to cross compare, we will compare the mean'
-        ' of each column for all the categorical columns.',
-    ),
+_CROSS_COMPARE_CATEGORICAL_COLUMNS = flags.DEFINE_list(
+    'cross_compare_categorical_columns',
+    ['sex', 'race'],
+    'Categorical columns to group by for cross-column comparison.',
+)
+
+_CROSS_COMPARE_NUMERICAL_COLUMNS = flags.DEFINE_list(
+    'cross_compare_numerical_columns',
+    ['age'],
+    'Numerical columns whose grouped means are compared.',
 )
 
 
@@ -273,7 +269,8 @@ def main(_) -> None:
   sdmetrics_metadata = _create_metadata_from_domain_yaml(domain_path)
   columns_to_compare = _COLUMNS_TO_COMPARE.value
   columns_to_cross_compare = CompareGroupByColumns(
-      **_COLUMNS_TO_CROSS_COMPARE.value
+      categorical_columns=_CROSS_COMPARE_CATEGORICAL_COLUMNS.value or [],
+      numerical_columns=_CROSS_COMPARE_NUMERICAL_COLUMNS.value or [],
   )
 
   # Compare histograms of the given columns.
