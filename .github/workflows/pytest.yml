@@ -96,7 +96,7 @@ jobs:
       - name: Install dependencies
         run: |
           uv pip install --system -r pylock.toml
-          uv pip install --system -e .
+          uv pip install --system --no-deps -e .
 
       - name: Run pyrefly
         run: pyrefly check
