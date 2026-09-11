@@ -32,36 +32,68 @@ import yaml
 PathType = epath.PathLike
 
 
+_DP_EVENTS: dict[str, type[dp_accounting.DpEvent]] = {
+    "GaussianDpEvent": dp_accounting.GaussianDpEvent,
+    "ZCDpEvent": dp_accounting.ZCDpEvent,
+    "SelfComposedDpEvent": dp_accounting.SelfComposedDpEvent,
+    "ComposedDpEvent": dp_accounting.ComposedDpEvent,
+    "ExponentialMechanismDpEvent": dp_accounting.ExponentialMechanismDpEvent,
+    "EpsilonDeltaDpEvent": dp_accounting.dp_event.EpsilonDeltaDpEvent,
+    "NoOpDpEvent": dp_accounting.NoOpDpEvent,
+    "NonPrivateDpEvent": dp_accounting.NonPrivateDpEvent,
+    "PoissonSampledDpEvent": dp_accounting.PoissonSampledDpEvent,
+}
+if hasattr(dp_accounting, "RandomAllocationDpEvent"):
+  _DP_EVENTS["RandomAllocationDpEvent"] = dp_accounting.RandomAllocationDpEvent
+
+_DP_EVAL_GLOBALS = {**_DP_EVENTS, "inf": float("inf"), "nan": float("nan")}
+
+
 def _resolve_type(type_name: str) -> type[Any] | None:
   """Resolves a class name to its Python class."""
   cls = api.MechanismConfig.get_subclass(type_name)
   if cls is not None:
     return cls
-  if hasattr(domain, type_name):
-    return getattr(domain, type_name)
-  if hasattr(relational_domain, type_name):
-    return getattr(relational_domain, type_name)
-  if hasattr(reporting, type_name):
-    return getattr(reporting, type_name)
-  if hasattr(dp_accounting.dp_event, type_name):
-    candidate = getattr(dp_accounting.dp_event, type_name)
-    if isinstance(candidate, type) and issubclass(
-        candidate, dp_accounting.DpEvent
-    ):
-      return candidate
-  return None
+  for mod in (domain, relational_domain, reporting):
+    if hasattr(mod, type_name):
+      return getattr(mod, type_name)
+  return _DP_EVENTS.get(type_name)
+
+
+def _parse_dp_event_str(s: str) -> dp_accounting.DpEvent:
+  """Parses a string constructor expression into a DpEvent instance."""
+  try:
+    res = eval(s.strip(), {"__builtins__": {}}, _DP_EVAL_GLOBALS)  # pylint: disable=eval-used
+  except Exception as e:
+    raise ValueError(f"Could not parse DpEvent expression '{s}': {e}") from e
+  if not isinstance(res, dp_accounting.DpEvent):
+    raise ValueError(f"Expression did not evaluate to a DpEvent: '{s}'")
+  return res
 
 
 def _unstructure_dataclass(cl: type[Any], conv: cattrs.Converter) -> Any:
+  """Creates an unstructure function for a dataclass with type metadata."""
   base_fn = cattrs.gen.make_dict_unstructure_fn(
       cl, conv, _cattrs_omit_if_default=True
   )
-  return lambda obj: {'type': obj.__class__.__name__, **base_fn(obj)}
+  return lambda obj: {"type": obj.__class__.__name__, **base_fn(obj)}
 
 
-def _structure_polymorphic(data: Any, _: Any, conv: cattrs.Converter) -> Any:
-  if isinstance(data, Mapping) and 'type' in data:
-    cls = _resolve_type(data['type'])
+def _structure_dp_event(data: Any, conv: cattrs.Converter) -> Any:
+  """Structures a string expression or dict into a DpEvent."""
+  if isinstance(data, str):
+    return _parse_dp_event_str(data)
+  if isinstance(data, Mapping) and "type" in data:
+    cls = _DP_EVENTS.get(data["type"])
+    if cls is not None:
+      return cattrs.gen.make_dict_structure_fn(cls, conv)(data, cls)
+  return data
+
+
+def _structure_polymorphic(data: Any, conv: cattrs.Converter) -> Any:
+  """Structures polymorphic dicts into target types."""
+  if isinstance(data, Mapping) and "type" in data:
+    cls = _resolve_type(data["type"])
     if cls is not None:
       return cattrs.gen.make_dict_structure_fn(cls, conv)(data, cls)
     raise ValueError(f"Unknown type: '{data['type']}'")
@@ -82,13 +114,22 @@ def _make_converter() -> cattrs.Converter:
       api.MechanismConfig,
       lambda obj: _unstructure_dataclass(obj.__class__, conv)(obj),
   )
-  conv.register_unstructure_hook(
-      dp_accounting.DpEvent,
-      lambda obj: _unstructure_dataclass(obj.__class__, conv)(obj),
-  )
+
+  def _unstructure_dp_event(obj: dp_accounting.DpEvent) -> Any:
+    if isinstance(obj, dp_accounting.ComposedDpEvent):
+      return {
+          "type": "ComposedDpEvent",
+          "events": [conv.unstructure(e) for e in obj.events],
+      }
+    return repr(obj)
+
   conv.register_unstructure_hook_factory(
       lambda cl: isinstance(cl, type) and issubclass(cl, dp_accounting.DpEvent),
-      lambda cl: _unstructure_dataclass(cl, conv),
+      lambda _: _unstructure_dp_event,
+  )
+  conv.register_unstructure_hook(
+      dp_accounting.DpEvent,
+      _unstructure_dp_event,
   )
   conv.register_unstructure_hook(
       tuple,
@@ -97,15 +138,19 @@ def _make_converter() -> cattrs.Converter:
 
   # 2. Polymorphic structuring for abstract base classes and unions
   conv.register_structure_hook(
-      api.MechanismConfig, lambda data, _: _structure_polymorphic(data, _, conv)
+      api.MechanismConfig, lambda data, _: _structure_polymorphic(data, conv)
   )
   conv.register_structure_hook(
       domain.AttributeType,
-      lambda data, _: _structure_polymorphic(data, _, conv),
+      lambda data, _: _structure_polymorphic(data, conv),
   )
   conv.register_structure_hook(
       dp_accounting.DpEvent,
-      lambda data, _: _structure_polymorphic(data, _, conv),
+      lambda data, _: _structure_dp_event(data, conv),
+  )
+  conv.register_structure_hook_factory(
+      lambda cl: isinstance(cl, type) and issubclass(cl, dp_accounting.DpEvent),
+      lambda _: lambda data, _: _structure_dp_event(data, conv),
   )
 
   # 3. Structure Sequence[T] consistently as list
@@ -147,12 +192,15 @@ def to_yaml(obj: Any, filepath: str | PathType | None = None) -> str:
     The YAML string representation.
   """
   unstructured = converter.unstructure(obj)
-  yaml_str = yaml.dump(
-      unstructured,
-      Dumper=yaml.SafeDumper,
-      default_flow_style=False,
-      sort_keys=False,
-  )
+  if isinstance(unstructured, str):
+    yaml_str = f"{unstructured}\n"
+  else:
+    yaml_str = yaml.dump(
+        unstructured,
+        Dumper=yaml.SafeDumper,
+        default_flow_style=False,
+        sort_keys=False,
+    )
   if filepath is not None:
     epath.Path(filepath).write_text(yaml_str)
   return yaml_str
@@ -185,13 +233,10 @@ def from_yaml(
   if expected_type is not None:
     return converter.structure(data, expected_type)
 
-  if isinstance(data, Mapping) and 'type' in data:
-    type_name = data['type']
-    target_cls = _resolve_type(type_name)
-    if target_cls is not None:
-      return cattrs.gen.make_dict_structure_fn(target_cls, converter)(
-          data, target_cls
-      )
-    raise ValueError(f"Unknown type: '{type_name}'")
+  if isinstance(data, str):
+    try:
+      return _parse_dp_event_str(data)
+    except Exception:  # pylint: disable=broad-exception-caught
+      return data
 
-  return data
+  return _structure_polymorphic(data, converter)
