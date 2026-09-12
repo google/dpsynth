@@ -81,7 +81,7 @@ def _worst_approximated(
   )  # if all weights are 0, could be a problem
   keys, values = list(errors.keys()), np.array(list(errors.values()))
   idx = common.exponential_mechanism(
-      values, eps, max_sensitivity, rng, monotonic=True
+      values, eps, max_sensitivity, rng, monotonic=False
   )
   return keys[idx]
 
