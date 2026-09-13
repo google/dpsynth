@@ -22,6 +22,8 @@ using the dp_accounting library.
 """
 
 import math
+import scipy.special
+import scipy.stats
 
 
 def zcdp_delta(rho: float, eps: float) -> float:
@@ -96,6 +98,44 @@ def zcdp_exponential_eps(rho: float) -> float:
 def gdp_gaussian_sigma(budget: float) -> float:
   """Return the Gaussian mechanism sigma that satisfies `budget`-GDP."""
   return math.sqrt(1.0 / budget)
+
+
+def gdp_bounded_range_musq(nu: float) -> float:
+  """Return the squared GDP parameter mu^2 of a bounded range mechanism.
+
+  A mechanism with bounded range parameter nu satisfies mu-GDP for
+  mu = -2 * Phi^{-1}(1 / (exp(nu / 2) + 1)).
+
+  Args:
+    nu: The bounded range parameter of the mechanism.
+  """
+  assert nu >= 0
+  mu = -2.0 * scipy.stats.norm.ppf(1.0 / (math.exp(nu / 2.0) + 1.0))
+  return mu**2
+
+
+def gdp_bounded_range_nu(musq: float) -> float:
+  """Return the largest bounded range parameter nu that satisfies mu-GDP.
+
+  This is the inverse of `gdp_bounded_range_musq`, given by nu = 2 * L(mu)
+  with L(t) = log(Phi(t / 2) / Phi(-t / 2)).
+
+  Args:
+    musq: The GDP budget mu^2 to spend on the bounded range mechanism.
+  """
+  assert musq >= 0
+  mu = math.sqrt(musq)
+  denom = scipy.stats.norm.cdf(-mu / 2.0)
+  if denom == 0.0:
+    return 2.0 * (
+        scipy.special.log_ndtr(mu / 2.0) - scipy.special.log_ndtr(-mu / 2.0)
+    )
+  return 2.0 * math.log(scipy.stats.norm.cdf(mu / 2.0) / denom)
+
+
+def gdp_exponential_eps(budget: float) -> float:
+  """Return the exponential mechanism epsilon that satisfies `budget`-GDP."""
+  return gdp_bounded_range_nu(budget)
 
 
 def zcdp_to_gdp(rho: float) -> float:
