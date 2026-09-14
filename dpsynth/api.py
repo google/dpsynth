@@ -191,7 +191,7 @@ class MechanismConfig(abc.ABC):
           f'Target epsilon must be positive, got {target_epsilon}.'
       )
 
-    rho = float('inf')
+    rho = 0.0
     # Rho is roughly quadratic in epsilon, so we use epsilon^2 as a guess.
     init_guess = target_epsilon**2
     pld_error = None
@@ -224,12 +224,12 @@ class MechanismConfig(abc.ABC):
           target_delta=target_delta,
           bracket_interval=dp_accounting.LowerEndpointAndGuess(0.0, init_guess),  # pyrefly: ignore[bad-argument-count]
       )
-      rho = min(rho, rho2)
+      rho = max(rho, rho2)
     except (dp_accounting.UnsupportedEventError, NotImplementedError) as e:
       # Okay if one of the accountants fails.
       rdp_error = e
 
-    if rho == float('inf'):
+    if rho == 0.0:
       raise dp_accounting.UnsupportedEventError(
           'No accountant supports the mechanism:\n'
           f'  PLDAccountant error: {pld_error}\n'

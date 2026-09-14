@@ -38,6 +38,10 @@ class DirectTest(absltest.TestCase):
       actual = result.model.project([col]).datavector()
       np.testing.assert_allclose(actual, expected, atol=1)
 
+  def test_calibrate_gives_expected_gdp_budget(self):
+    calibrated = direct.DirectConfig().calibrate(epsilon=1.0, delta=1e-5)
+    self.assertAlmostEqual(calibrated.gdp_budget, 0.07185134, places=6)
+
 
 if __name__ == '__main__':
   absltest.main()
