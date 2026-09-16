@@ -101,5 +101,8 @@ jobs:
       - name: Run pyrefly
         run: pyrefly check
 
+      - name: Run pyrefly
+        run: pyrefly check
+
       - name: Run core tests
         run: pytest -vv -n auto --import-mode=importlib
