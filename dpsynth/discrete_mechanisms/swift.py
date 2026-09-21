@@ -48,6 +48,10 @@ import numpy as np
 class SWIFTConfig(api.MechanismConfig):
   """Configuration for the SWIFT mechanism.
 
+  Note: When running on CPU with high-dimensional domains, setting
+  `xla_cpu_use_multi_output_fusion=true` via XLA_FLAGS is recommended to
+  prevent long compilation times.
+
   Attributes:
     workload: The set of marginals to consider for the mechanism. Can be a
       mapping from cliques to their weights or just an iterable of cliques.
