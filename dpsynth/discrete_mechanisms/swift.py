@@ -31,6 +31,7 @@ import functools
 import itertools
 import math
 import time
+from typing import Any
 
 from absl import logging
 import dp_accounting
@@ -61,6 +62,8 @@ class SWIFTConfig(api.MechanismConfig):
     max_marginal_size: The maximum size (domain product) of any marginal
       considered in the workload.
     pgm_iters: Number of mirror descent iterations for PGM estimation.
+    tol: Early stopping tolerance for mirror descent in final estimation
+      (default: 1e-4).
     select_budget_frac: Fraction of the total budget used for selecting which
       marginals to measure.
   """
@@ -69,6 +72,7 @@ class SWIFTConfig(api.MechanismConfig):
   max_clique_size: float = 1e7
   max_marginal_size: float = 1e6
   pgm_iters: int = 10_000
+  tol: float | None = 1e-4
   marginal_oracle: mbi.MarginalOracle | None = None
   select_budget_frac: float = 0.1
   use_jax_for_bincount: bool = True
@@ -104,23 +108,22 @@ class SWIFT(api.CalibratedMechanism):
         accounting.gdp_gaussian_sigma(self.gdp_budget)
     )
 
-  def __call__(
+  def select_and_measure_queries(
       self,
       rng: np.random.Generator,
       data: mbi.Dataset | mbi.CliqueVector,
       *,
       initial_measurements: Sequence[mbi.LinearMeasurement] = (),
       constraints: Sequence[mbi.Constraint] = (),
-  ) -> common.DiscreteMechanismResult:
-    common.validate_initial_measurements(initial_measurements)
-    phase_times = {}
-
+      rows: int = 1,
+      phase_times: dict[str, float] | None = None,
+  ) -> tuple[list[mbi.LinearMeasurement], nx.Graph, Any, Any]:
+    """Selects and measures workload queries."""
+    if phase_times is None:
+      phase_times = {}
     select_gdp_budget = self.gdp_budget * self.config.select_budget_frac
     measure_gdp_budget = self.gdp_budget - select_gdp_budget
 
-    #########################################################################
-    # Compile workload into candidate measurements, and precompute answers. #
-    #########################################################################
     with common.timed(phase_times, 'compiled_workload'):
       candidates = common.compiled_workload(
           data.domain,
@@ -138,11 +141,7 @@ class SWIFT(api.CalibratedMechanism):
           constraints=constraints,
       )
 
-    ###########################################
-    # Select subset of candidates to measure. #
-    ###########################################
     with common.timed(phase_times, 'selection'):
-
       with common.timed(phase_times, 'compute_initial_errors'):
         noisy_errors = _compute_initial_errors(
             rng,
@@ -165,28 +164,21 @@ class SWIFT(api.CalibratedMechanism):
     all_cliques = [m.clique for m in initial_measurements] + list(selected)
     logging.info(mbi.summarize(data.domain, all_cliques, jtree))
 
-    ########################################################
-    # Precompile MirrorDescent + synth while measuring.    #
-    ########################################################
     oracle = self.config.marginal_oracle or mbi.marginal_oracles.default_oracle(
         all_cliques, data.domain, has_constraints=bool(constraints)
     )
     closed_oracle = functools.partial(oracle, jtree=jtree)  # pyrefly: ignore[unexpected-keyword]
     estimator = mbi.estimation.MirrorDescent(marginal_oracle=closed_oracle)
-    rows = mbi.estimation.minimum_variance_unbiased_total(initial_measurements)  # pyrefly: ignore[bad-argument-type]
-    rows = int(max(rows, 1))
-
     pgm_future = estimator.precompile(
-        data.domain, list(initial_measurements), extra_cliques=list(selected)  # pyrefly: ignore[bad-argument-type]
+        data.domain,
+        list(initial_measurements),
+        extra_cliques=list(selected),  # pyrefly: ignore[bad-argument-type]
     )
     synth_future = mbi.extensions.precompile(
         data.domain, list(jtree.nodes), rows
     )
     logging.info('[SWIFT] Started precompilation of MirrorDescent + synth.')
 
-    ##########################################
-    # Measure the selected marginal queries. #
-    ##########################################
     with common.timed(phase_times, 'measurement'):
       logging.info('[SWIFT] Starting measurements.')
       new_measurements = _measure_selected_marginals(
@@ -199,35 +191,87 @@ class SWIFT(api.CalibratedMechanism):
       measurements = list(initial_measurements) + new_measurements
       logging.info('[SWIFT] Finished measurements.')
 
-    ########################################################
-    # Estimate the model using all measurements            #
-    ########################################################
-    with common.timed(phase_times, 'estimation'):
+    return measurements, jtree, pgm_future, synth_future
+
+  def estimate_model(
+      self,
+      domain: mbi.Domain,
+      measurements: Sequence[mbi.LinearMeasurement],
+      *,
+      constraints: Sequence[mbi.Constraint] = (),
+      jtree: nx.Graph | None = None,
+      pgm_future: Any = None,
+      phase_times: dict[str, float] | None = None,
+  ) -> mbi.Model:
+    """Estimates the MRF model from measurements."""
+    if phase_times is None:
+      phase_times = {}
+
+    if pgm_future is not None:
       t0 = time.time()
       pgm_future.result()
       logging.info('[SWIFT] PGM precompile wait: %.2fs', time.time() - t0)
 
-      all_cliques = list(jtree.nodes)
-      oracle = (
-          self.config.marginal_oracle
-          or mbi.marginal_oracles.default_oracle(
-              all_cliques, data.domain, has_constraints=bool(constraints)
-          )
-      )
-      closed_oracle = functools.partial(oracle, jtree=jtree)  # pyrefly: ignore[unexpected-keyword]
-      estimator = mbi.estimation.MirrorDescent(marginal_oracle=closed_oracle)
+    if jtree is None:
+      all_cliques = [m.clique for m in measurements]
+      jtree, _ = mbi.junction_tree.make_junction_tree(domain, all_cliques)
+
+    all_cliques = list(jtree.nodes)
+    oracle = self.config.marginal_oracle or mbi.marginal_oracles.default_oracle(
+        all_cliques, domain, has_constraints=bool(constraints)
+    )
+    closed_oracle = functools.partial(oracle, jtree=jtree)  # pyrefly: ignore[unexpected-keyword]
+    estimator = mbi.estimation.MirrorDescent(marginal_oracle=closed_oracle)
+    with common.timed(phase_times, 'estimation'):
       final_model = estimator.estimate(
-          data.domain,
-          measurements,
+          domain,
+          list(measurements),
           iters=self.config.pgm_iters,
-          callback_fn=mbi.callbacks.default(measurements, data.domain),
+          callback_fn=mbi.callbacks.default(list(measurements), domain),
           constraints=constraints,
+          tol=self.config.tol,
       )
       logging.info('[SWIFT] Estimated final model.')
+    return final_model
 
-    t0 = time.time()
-    synth_future.result()
-    logging.info('[SWIFT] Synth precompile wait: %.2fs', time.time() - t0)
+  def __call__(
+      self,
+      rng: np.random.Generator,
+      data: mbi.Dataset | mbi.CliqueVector,
+      *,
+      initial_measurements: Sequence[mbi.LinearMeasurement] = (),
+      constraints: Sequence[mbi.Constraint] = (),
+  ) -> common.DiscreteMechanismResult:
+    common.validate_initial_measurements(initial_measurements)
+    phase_times = {}
+
+    rows = mbi.estimation.minimum_variance_unbiased_total(initial_measurements)  # pyrefly: ignore[bad-argument-type]
+    rows = int(max(rows, 1))
+
+    measurements, jtree, pgm_future, synth_future = (
+        self.select_and_measure_queries(
+            rng,
+            data,
+            initial_measurements=initial_measurements,
+            constraints=constraints,
+            rows=rows,
+            phase_times=phase_times,
+        )
+    )
+
+    final_model = self.estimate_model(
+        data.domain,
+        measurements,
+        constraints=constraints,
+        jtree=jtree,
+        pgm_future=pgm_future,
+        phase_times=phase_times,
+    )
+
+    if synth_future is not None:
+      t0 = time.time()
+      synth_future.result()
+      logging.info('[SWIFT] Synth precompile wait: %.2fs', time.time() - t0)
 
     synthetic_data = common.generate_synthetic_data(
         final_model,
