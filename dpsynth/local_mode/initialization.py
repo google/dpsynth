@@ -18,12 +18,14 @@ from __future__ import annotations
 
 import dataclasses
 import math
+from typing import Any
 
 import dp_accounting
 from dpsynth import api
 from dpsynth import domain
 from dpsynth.local_mode import primitives
 from dpsynth.local_mode import vectorized_transformations as vtx
+import jax
 import numpy as np
 import scipy.stats
 
@@ -79,6 +81,44 @@ class OpenSetMeasurement:
 ColumnMeasurement = (
     NumericalMeasurement | CategoricalMeasurement | OpenSetMeasurement
 )
+
+
+def _register_dataclass_pytree(cls: type[Any]) -> None:
+  """Registers a dataclass as a JAX pytree for serialization and transforms."""
+
+  def flatten(obj):
+    leaves = []
+    aux = []
+    for f in dataclasses.fields(obj):
+      val = getattr(obj, f.name)
+      if isinstance(val, (np.ndarray, jax.Array)):
+        leaves.append(val)
+        aux.append((f.name, True))
+      else:
+        aux.append((f.name, False, val))
+    return tuple(leaves), tuple(aux)
+
+  def unflatten(aux, leaves):
+    kwargs = {}
+    leaf_idx = 0
+    for item in aux:
+      name, is_leaf = item[0], item[1]
+      if is_leaf:
+        kwargs[name] = np.asarray(leaves[leaf_idx])
+        leaf_idx += 1
+      else:
+        kwargs[name] = item[2]
+    return cls(**kwargs)
+
+  jax.tree_util.register_pytree_node(cls, flatten, unflatten)
+
+
+for _cls in (
+    NumericalMeasurement,
+    CategoricalMeasurement,
+    OpenSetMeasurement,
+):
+  _register_dataclass_pytree(_cls)
 
 
 def compute_grid_spec(

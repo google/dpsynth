@@ -19,6 +19,7 @@ from dpsynth import domain
 from dpsynth.local_mode import initialization
 from dpsynth.local_mode import primitives
 from dpsynth.local_mode import vectorized_transformations as vtx
+import jax
 import numpy as np
 
 
@@ -700,6 +701,55 @@ class MaxRecordsPerUserTest(parameterized.TestCase):
     ).configure(attr, zcdp_rho=1.0)
     col_meas = init(np.random.default_rng(0), data)
     self.assertIsNotNone(col_meas.bin_edges)
+
+  def test_measurement_pytree_roundtrip(self):
+    cat_attr = domain.CategoricalAttribute(possible_values=['a', 'b', 'c'])
+    meas_cat = initialization.CategoricalMeasurement(
+        categorical_attribute=cat_attr,
+        noisy_counts=np.array([10.0, 20.0, 30.0]),
+        stddev=1.0,
+    )
+    leaves, treedef = jax.tree.flatten(meas_cat)
+    self.assertLen(leaves, 1)
+    np.testing.assert_array_equal(leaves[0], np.array([10.0, 20.0, 30.0]))
+    unflattened = jax.tree.unflatten(treedef, leaves)
+    self.assertEqual(unflattened.categorical_attribute, cat_attr)
+    np.testing.assert_array_equal(
+        unflattened.noisy_counts, meas_cat.noisy_counts
+    )
+    self.assertEqual(unflattened.stddev, 1.0)
+
+    meas_num_with_counts = initialization.NumericalMeasurement(
+        categorical_attribute=cat_attr,
+        bin_edges=np.array([0.0, 1.0, 2.0]),
+        noisy_counts=np.array([5.0, 15.0]),
+        stddev=0.5,
+    )
+    leaves, treedef = jax.tree.flatten(meas_num_with_counts)
+    self.assertLen(leaves, 2)
+    unflattened = jax.tree.unflatten(treedef, leaves)
+    self.assertEqual(unflattened.categorical_attribute, cat_attr)
+    np.testing.assert_array_equal(
+        unflattened.bin_edges, meas_num_with_counts.bin_edges
+    )
+    np.testing.assert_array_equal(
+        unflattened.noisy_counts, meas_num_with_counts.noisy_counts
+    )
+    self.assertEqual(unflattened.stddev, 0.5)
+
+    meas_num_none_counts = initialization.NumericalMeasurement(
+        categorical_attribute=cat_attr,
+        bin_edges=np.array([0.0, 1.0, 2.0]),
+        noisy_counts=None,
+        stddev=np.nan,
+    )
+    leaves, treedef = jax.tree.flatten(meas_num_none_counts)
+    self.assertLen(leaves, 1)
+    unflattened = jax.tree.unflatten(treedef, leaves)
+    self.assertIsNone(unflattened.noisy_counts)
+    np.testing.assert_array_equal(
+        unflattened.bin_edges, meas_num_none_counts.bin_edges
+    )
 
 
 if __name__ == '__main__':
