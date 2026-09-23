@@ -36,6 +36,7 @@ from typing import Any
 from absl import logging
 import dp_accounting
 from dpsynth import api
+from dpsynth import checkpoint
 from dpsynth.discrete_mechanisms import accounting
 from dpsynth.discrete_mechanisms import clique_tree
 from dpsynth.discrete_mechanisms import common
@@ -248,25 +249,35 @@ class SWIFT(api.CalibratedMechanism):
     rows = mbi.estimation.minimum_variance_unbiased_total(initial_measurements)  # pyrefly: ignore[bad-argument-type]
     rows = int(max(rows, 1))
 
-    measurements, jtree, pgm_future, synth_future = (
-        self.select_and_measure_queries(
-            rng,
-            data,
-            initial_measurements=initial_measurements,
-            constraints=constraints,
-            rows=rows,
-            phase_times=phase_times,
-        )
-    )
+    jtree = None
+    pgm_future = None
+    synth_future = None
 
-    final_model = self.estimate_model(
-        data.domain,
-        measurements,
-        constraints=constraints,
-        jtree=jtree,
-        pgm_future=pgm_future,
-        phase_times=phase_times,
-    )
+    def _measure() -> list[mbi.LinearMeasurement]:
+      nonlocal jtree, pgm_future, synth_future
+      meas, jtree, pgm_future, synth_future = self.select_and_measure_queries(
+          rng,
+          data,
+          initial_measurements=initial_measurements,
+          constraints=constraints,
+          rows=rows,
+          phase_times=phase_times,
+      )
+      return meas
+
+    measurements = checkpoint.get_or_compute('measurements', _measure)
+
+    def _estimate() -> mbi.Model:
+      return self.estimate_model(
+          data.domain,
+          measurements,
+          constraints=constraints,
+          jtree=jtree,
+          pgm_future=pgm_future,
+          phase_times=phase_times,
+      )
+
+    final_model = checkpoint.get_or_compute('model', _estimate)
 
     if synth_future is not None:
       t0 = time.time()

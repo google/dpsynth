@@ -13,8 +13,10 @@
 # limitations under the License.
 
 import itertools
+import os
 
 from absl.testing import absltest
+from dpsynth import checkpoint
 from dpsynth.discrete_mechanisms import clique_tree
 from dpsynth.discrete_mechanisms import common
 from dpsynth.discrete_mechanisms import swift
@@ -145,6 +147,26 @@ class SWIFTTest(absltest.TestCase):
       expected = data.project([col]).datavector()
       actual = result.model.project([col]).datavector()
       np.testing.assert_allclose(actual, expected, atol=1)
+
+  def test_checkpointing(self):
+    temp_dir = self.create_tempdir().full_path
+    data = mbi.Dataset.synthetic(mbi.Domain(['a', 'b', 'c'], [3, 4, 5]), N=1000)
+    config = swift.SWIFTConfig(pgm_iters=10).configure(zcdp_rho=10.0)
+
+    with checkpoint.checkpoint(temp_dir):
+      result1 = config(np.random.default_rng(0), data)
+
+    measurements_path = os.path.join(temp_dir, 'measurements.npz')
+    model_path = os.path.join(temp_dir, 'model.npz')
+    self.assertTrue(os.path.exists(measurements_path))
+    self.assertTrue(os.path.exists(model_path))
+
+    with checkpoint.checkpoint(temp_dir):
+      result2 = config(np.random.default_rng(1), data)
+
+    self.assertIsInstance(result2, common.DiscreteMechanismResult)
+    self.assertLen(result2.measurements, len(result1.measurements))
+    self.assertEqual(result2.model.domain, result1.model.domain)
 
 
 if __name__ == '__main__':

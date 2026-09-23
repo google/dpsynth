@@ -25,6 +25,7 @@ from dpsynth import local_mode
 from dpsynth import relational
 from dpsynth import reporting
 from dpsynth import serialize
+from dpsynth.checkpoint import checkpoint
 from dpsynth.data_generation_v3 import TabularConfig
 from dpsynth.data_generation_v3 import TabularMechanism
 from dpsynth.data_generation_v3 import TabularSynthesizer
@@ -68,6 +69,7 @@ __all__ = [
     'TabularMechanism',
     'TabularSynthesizer',
     'api',
+    'checkpoint',
     'discrete_mechanisms',
     'domain',
     'from_yaml',

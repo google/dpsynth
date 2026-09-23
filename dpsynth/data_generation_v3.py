@@ -23,6 +23,7 @@ import warnings
 from absl import logging
 import dp_accounting
 from dpsynth import api
+from dpsynth import checkpoint
 from dpsynth import constraints
 from dpsynth import discrete_mechanisms
 from dpsynth import domain
@@ -259,30 +260,37 @@ class TabularMechanism(api.CalibratedMechanism):
 
     # Phase 1: Per-column initialization.
     # Measure total count first, then run per-column initializers.
+    def _run_initializers():
+      noisy_total = primitives.add_gaussian_noise(
+          rng,
+          len(data),
+          self.total_count_sigma,
+          self.max_records_per_user,
+      )
+      total = max(1.0, noisy_total)
+      total_measurement = mbi.LinearMeasurement(
+          noisy_measurement=np.array([total]),
+          clique=(),
+          stddev=self.max_records_per_user * self.total_count_sigma,
+      )
 
-    noisy_total = primitives.add_gaussian_noise(
-        rng,
-        len(data),
-        self.total_count_sigma,
-        self.max_records_per_user,
-    )
-    total = max(1.0, noisy_total)
-    total_measurement = mbi.LinearMeasurement(
-        noisy_measurement=np.array([total]),
-        clique=(),
-        stddev=self.max_records_per_user * self.total_count_sigma,
-    )
+      results: dict[str, initialization.ColumnMeasurement] = {}
+      for col, init in self.initializers.items():
+        if isinstance(init, initialization.NumericalInitializer):
+          results[col] = init(
+              rng, data[col].values, estimated_total=float(total)
+          )
+        else:
+          results[col] = init(rng, data[col].values)
+      return total_measurement, results
 
-    results: dict[str, initialization.ColumnMeasurement] = {}
-    for col, init in self.initializers.items():
-      if isinstance(init, initialization.NumericalInitializer):
-        results[col] = init(rng, data[col].values, estimated_total=float(total))
-      else:
-        results[col] = init(rng, data[col].values)
+    total_measurement, results = checkpoint.get_or_compute(
+        'column_measurements', _run_initializers
+    )
 
     # Phase 2: Encode data to the discrete domain.
     codec = TabularCodec.from_measurements(results, self.schema)
-    discrete = codec.encode(data)
+    discrete = checkpoint.get_or_compute('discrete_data', codec.encode, data)
     logging.info('[DPSynth]: Finished encoding data.')
 
     # Phase 3: Run the discrete mechanism and decode back to the input domain.
@@ -318,7 +326,9 @@ class TabularMechanism(api.CalibratedMechanism):
     cfg = self.config.discrete_mechanism
     if hasattr(cfg, 'supporting_cliques'):
       cliques = cfg.supporting_cliques(discrete.domain)
-      discrete = dm_common.precompute_marginals(
+      discrete = checkpoint.get_or_compute(
+          'precomputed_marginals',
+          dm_common.precompute_marginals,
           discrete,
           cliques,  # pyrefly: ignore[bad-argument-type]
           use_jax=self.config.use_jax_for_bincount,

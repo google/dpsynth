@@ -15,10 +15,12 @@
 from __future__ import annotations
 
 import functools
+import os
 
 from absl.testing import absltest
 from absl.testing import parameterized
 import dp_accounting
+import dpsynth
 from dpsynth import constraints
 from dpsynth import data_generation_v3
 from dpsynth import discrete_mechanisms
@@ -348,6 +350,35 @@ class DataGenerationV3Test(parameterized.TestCase):
     # The true count is 0, but DPSynth always outputs at least one row.
     self.assertLen(result.synthetic_data, 1)
 
+  def test_checkpointing(self):
+    temp_dir = self.create_tempdir().full_path
+    domains = {
+        'A': domain.CategoricalAttribute(
+            possible_values=['a', 'b', 'c'], out_of_domain_index=0
+        ),
+        'B': domain.NumericalAttribute(min_value=0.0, max_value=10.0),
+    }
+    df = pd.DataFrame({'A': ['a', 'b', 'c'], 'B': [1.0, 5.0, 10.0]})
+    rng = np.random.default_rng(0)
+    calibrated = TabularConfig().configure(domains, zcdp_rho=100.0)
+
+    with dpsynth.checkpoint(temp_dir):
+      result1 = calibrated(rng, df)
+    self.assertIsInstance(result1.synthetic_data, pd.DataFrame)
+
+    col_meas_path = os.path.join(temp_dir, 'column_measurements.npz')
+    disc_data_path = os.path.join(temp_dir, 'discrete_data.npz')
+    precomp_path = os.path.join(temp_dir, 'precomputed_marginals.npz')
+    self.assertTrue(os.path.exists(col_meas_path))
+    self.assertTrue(os.path.exists(disc_data_path))
+    self.assertTrue(os.path.exists(precomp_path))
+
+    with dpsynth.checkpoint(temp_dir):
+      result2 = calibrated(rng, df)
+
+    self.assertIsInstance(result2.synthetic_data, pd.DataFrame)
+    self.assertListEqual(result2.synthetic_data.columns.tolist(), ['A', 'B'])
+
 
 class MaxRecordsPerUserTest(parameterized.TestCase):
   """Tests the experimental user-level DP knob end to end."""
@@ -566,7 +597,6 @@ class MaxRecordsPerUserTest(parameterized.TestCase):
       self.skipTest(
           'mbi.callbacks.set_log_fn not supported in this mbi version'
       )
-    import dpsynth  # pylint: disable=g-import-not-at-top,unused-import
 
     with self.assertLogs(level='INFO') as logs:
       mbi.callbacks.log('test', 'message', sep=' | ')
