@@ -47,8 +47,10 @@ from dpsynth.text import dp_trainer
 from dpsynth.text import model
 from gemma import gm
 from gemma import peft
+import grain.python as pygrain
 from jax_privacy import execution_plan
 from jax_privacy import training
+import numpy as np
 import optax
 
 
@@ -75,7 +77,7 @@ class DPFineTuner(api.DPMechanism):
   A ``DPMechanism`` that wraps ``DPTrainer`` with tokenization, model loading,
   and LoRA handling. All configuration is specified at construction time;
   ``__call__`` takes ``(rng, data)`` where ``data`` is a sequence of text
-  strings.
+  string pairs or a pygrain MapDataset.
   """
 
   model_variant: model.GemmaModel
@@ -134,23 +136,36 @@ class DPFineTuner(api.DPMechanism):
   def __call__(
       self,
       rng: int,
-      data: Sequence[tuple[str, str]],
+      data: Sequence[tuple[str, str]] | pygrain.MapDataset,
   ) -> FineTuneResult:
     """Tokenizes text, loads the model, and runs DP-SGD fine-tuning.
 
     Args:
       rng: Random seed for batch selection and noise generation.
-      data: Sequence of ``(prompt, response)`` string pairs.
+      data: Sequence of ``(prompt, response)`` string pairs or a
+        ``pygrain.MapDataset``.
 
     Returns:
       A ``FineTuneResult`` with the trained model and merged LoRA parameters.
       Private training state (noise, optimizer) is not exposed.
     """
-    dataset = model.tokenize_texts(
-        data,
-        model_variant=self.model_variant,
-        max_seq_length=self.max_seq_length,
-    )
+    if isinstance(data, pygrain.MapDataset):
+      tokenizer = self.model_variant.tokenizer_class()
+      tokenized = data.map(
+          lambda ex: model.tokenize_example(ex, tokenizer, self.max_seq_length)
+      )
+      # before DPTrainer.
+      elements = list(tokenized)
+      dataset = {
+          'input_tokens': np.stack([x['input_tokens'] for x in elements]),
+          'loss_mask': np.stack([x['loss_mask'] for x in elements]),
+      }
+    else:
+      dataset = model.tokenize_texts(
+          data,
+          model_variant=self.model_variant,
+          max_seq_length=self.max_seq_length,
+      )
 
     lora_config = model.LoraConfig(rank=self.lora_rank)
     module, frozen_params, trainable_params = model.load_gemma(
