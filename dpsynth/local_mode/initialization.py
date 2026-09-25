@@ -101,11 +101,20 @@ def compute_grid_spec(
 
 @dataclasses.dataclass(frozen=True, kw_only=True)
 class NumericalInitializerConfig(api.MechanismConfig):
-  """Configuration for initializing numerical attributes."""
+  """Configuration for initializing numerical attributes.
+
+  Attributes:
+    num_partitions: Number of partitions (must be a power of 2).
+    max_grid_size: Maximum grid size for the histogram.
+    epsilon_ratio: Ratio by which privacy budget epsilon increases at each
+      deeper level of recursive bisection. Defaults to 1.0 (uniform budget split
+      across levels). Setting to sqrt(2) approx 1.414 can provide minor accuracy
+      gains on smooth continuous data.
+  """
 
   num_partitions: int
   max_grid_size: int = 10_000_000
-  epsilon_ratio: float = 2.0
+  epsilon_ratio: float = 1.0
 
   def __post_init__(self):
     if self.max_grid_size < 2:

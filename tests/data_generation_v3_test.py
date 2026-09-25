@@ -379,6 +379,13 @@ class DataGenerationV3Test(parameterized.TestCase):
     self.assertIsInstance(result2.synthetic_data, pd.DataFrame)
     self.assertListEqual(result2.synthetic_data.columns.tolist(), ['A', 'B'])
 
+  def test_numerical_epsilon_ratio_plumbing(self):
+    domains = {'A': domain.NumericalAttribute(min_value=0, max_value=10)}
+    config = TabularConfig(numerical_epsilon_ratio=1.414)
+    calibrated = config.configure(domains, zcdp_rho=10.0)
+    init_mech = calibrated.initializers['A']
+    self.assertEqual(init_mech.config.epsilon_ratio, 1.414)
+
 
 class MaxRecordsPerUserTest(parameterized.TestCase):
   """Tests the experimental user-level DP knob end to end."""

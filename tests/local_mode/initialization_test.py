@@ -167,6 +167,34 @@ class InitializationTest(absltest.TestCase):
     result = initializer.configure(attr, zcdp_rho=1.0)(rng, data)
     self.assertIsNone(result.noisy_counts)
 
+  def test_numerical_initializer_epsilon_ratio_default_and_custom(self):
+    attr = domain.NumericalAttribute(min_value=0, max_value=10)
+    # Default is 1.0 (uniform)
+    init_default = initialization.NumericalInitializerConfig(num_partitions=4)
+    self.assertEqual(init_default.epsilon_ratio, 1.0)
+    calibrated_default = init_default.configure(attr, zcdp_rho=2.0)
+    # For 4 partitions (2 levels), uniform budget splits zcdp_rho equally:
+    # rho/2 each. eps = sqrt(8 * rho_level) = sqrt(8 * 1.0) = sqrt(8).
+    np.testing.assert_allclose(
+        calibrated_default.epsilon_levels,
+        (np.sqrt(8.0), np.sqrt(8.0)),
+    )
+
+    # Custom ratio (e.g. sqrt(2))
+    init_custom = initialization.NumericalInitializerConfig(
+        num_partitions=4, epsilon_ratio=np.sqrt(2)
+    )
+    self.assertEqual(init_custom.epsilon_ratio, np.sqrt(2))
+    calibrated_custom = init_custom.configure(attr, zcdp_rho=2.0)
+    # rho_ratio = 2.0. budget_weights = [2.0, 1.0].
+    # Leaves get 2/3, root gets 1/3.
+    # rho_levels = [2.0 * 2/3, 2.0 * 1/3] = [4/3, 2/3]
+    # eps_levels = [sqrt(8 * 4/3), sqrt(8 * 2/3)]
+    np.testing.assert_allclose(
+        calibrated_custom.epsilon_levels,
+        (np.sqrt(8.0 * 4.0 / 3.0), np.sqrt(8.0 * 2.0 / 3.0)),
+    )
+
   def test_integer_edges_at_max_value_absorbed_into_last_bin(self):
     """Edges at max_value are removed; their count goes to the last bin."""
     attr = domain.NumericalAttribute(min_value=0, max_value=10, dtype='int')

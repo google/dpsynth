@@ -16,7 +16,8 @@
 
 from absl.testing import absltest
 from absl.testing import parameterized
-from dpsynth import checkpoint
+import dpsynth
+from dpsynth import _checkpoint
 from dpsynth import domain
 from dpsynth.local_mode import initialization
 from etils import epath
@@ -27,22 +28,23 @@ import numpy as np
 class CheckpointTest(parameterized.TestCase):
 
   def test_context_manager_scoping(self):
-    self.assertIsNone(checkpoint.get_active_checkpoint_dir())
+    self.assertIs(dpsynth.checkpoint, _checkpoint.checkpoint)
+    self.assertIsNone(_checkpoint.get_active_checkpoint_dir())
 
     temp_dir = self.create_tempdir().full_path
-    with checkpoint.checkpoint(temp_dir) as active_dir:
+    with _checkpoint.checkpoint(temp_dir) as active_dir:
       self.assertIsNotNone(active_dir)
       self.assertEqual(
-          checkpoint.get_active_checkpoint_dir(),
+          _checkpoint.get_active_checkpoint_dir(),
           active_dir,
       )
 
-    self.assertIsNone(checkpoint.get_active_checkpoint_dir())
+    self.assertIsNone(_checkpoint.get_active_checkpoint_dir())
 
   def test_context_manager_none_disabled(self):
-    with checkpoint.checkpoint(None) as active_dir:
+    with _checkpoint.checkpoint(None) as active_dir:
       self.assertIsNone(active_dir)
-      self.assertIsNone(checkpoint.get_active_checkpoint_dir())
+      self.assertIsNone(_checkpoint.get_active_checkpoint_dir())
 
   def test_get_or_compute_disabled_runs_function(self):
     call_count = 0
@@ -52,8 +54,8 @@ class CheckpointTest(parameterized.TestCase):
       call_count += 1
       return 42
 
-    result1 = checkpoint.get_or_compute("test_stage", compute)
-    result2 = checkpoint.get_or_compute("test_stage", compute)
+    result1 = _checkpoint.get_or_compute("test_stage", compute)
+    result2 = _checkpoint.get_or_compute("test_stage", compute)
 
     self.assertEqual(result1, 42)
     self.assertEqual(result2, 42)
@@ -61,7 +63,7 @@ class CheckpointTest(parameterized.TestCase):
 
   def test_get_or_compute_saves_and_loads(self):
     temp_dir = self.create_tempdir().full_path
-    with checkpoint.checkpoint(temp_dir):
+    with _checkpoint.checkpoint(temp_dir):
       call_count = 0
 
       def compute():
@@ -70,12 +72,12 @@ class CheckpointTest(parameterized.TestCase):
         return np.array([1.0, 2.0, 3.0])
 
       # First call: computes and saves.
-      result1 = checkpoint.get_or_compute("array_stage", compute)
+      result1 = _checkpoint.get_or_compute("array_stage", compute)
       self.assertEqual(call_count, 1)
       np.testing.assert_array_equal(result1, [1.0, 2.0, 3.0])
 
       # Second call: loads from checkpoint, skips compute.
-      result2 = checkpoint.get_or_compute("array_stage", compute)
+      result2 = _checkpoint.get_or_compute("array_stage", compute)
       self.assertEqual(call_count, 1)
       np.testing.assert_array_equal(result2, [1.0, 2.0, 3.0])
 

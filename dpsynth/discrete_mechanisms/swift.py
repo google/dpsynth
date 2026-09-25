@@ -35,8 +35,8 @@ from typing import Any
 
 from absl import logging
 import dp_accounting
+from dpsynth import _checkpoint
 from dpsynth import api
-from dpsynth import checkpoint
 from dpsynth.discrete_mechanisms import accounting
 from dpsynth.discrete_mechanisms import clique_tree
 from dpsynth.discrete_mechanisms import common
@@ -265,7 +265,7 @@ class SWIFT(api.CalibratedMechanism):
       )
       return meas
 
-    measurements = checkpoint.get_or_compute('measurements', _measure)
+    measurements = _checkpoint.get_or_compute('measurements', _measure)
 
     def _estimate() -> mbi.Model:
       return self.estimate_model(
@@ -277,7 +277,7 @@ class SWIFT(api.CalibratedMechanism):
           phase_times=phase_times,
       )
 
-    final_model = checkpoint.get_or_compute('model', _estimate)
+    final_model = _checkpoint.get_or_compute('model', _estimate)
 
     if synth_future is not None:
       t0 = time.time()

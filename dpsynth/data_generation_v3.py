@@ -22,8 +22,8 @@ import warnings
 
 from absl import logging
 import dp_accounting
+from dpsynth import _checkpoint
 from dpsynth import api
-from dpsynth import checkpoint
 from dpsynth import constraints
 from dpsynth import discrete_mechanisms
 from dpsynth import domain
@@ -39,12 +39,17 @@ import pandas as pd
 def create_initializers(
     domains: domain.Schema | Mapping[str, domain.AttributeType],
     numerical_bins: int,
+    numerical_epsilon_ratio: float = 1.0,
 ) -> dict[str, api.MechanismConfig]:
   """Creates per-column initializers from the domain specification.
 
   Args:
     domains: Mapping from column names to attribute domain specifications.
     numerical_bins: Number of bins for numerical discretization.
+    numerical_epsilon_ratio: Ratio by which privacy budget epsilon increases at
+      each deeper level of recursive bisection. Defaults to 1.0 (uniform budget
+      split across levels). Setting to sqrt(2) approx 1.414 can provide minor
+      accuracy gains on smooth continuous data.
 
   Returns:
     A dictionary mapping column names to uncalibrated initializer configs.
@@ -58,6 +63,7 @@ def create_initializers(
     if isinstance(attr, domain.NumericalAttribute):
       initializers[col] = initialization.NumericalInitializerConfig(
           num_partitions=numerical_bins,
+          epsilon_ratio=numerical_epsilon_ratio,
       )
     elif isinstance(attr, domain.CategoricalAttribute):
       initializers[col] = initialization.CategoricalInitializerConfig()
@@ -284,13 +290,13 @@ class TabularMechanism(api.CalibratedMechanism):
           results[col] = init(rng, data[col].values)
       return total_measurement, results
 
-    total_measurement, results = checkpoint.get_or_compute(
+    total_measurement, results = _checkpoint.get_or_compute(
         'column_measurements', _run_initializers
     )
 
     # Phase 2: Encode data to the discrete domain.
     codec = TabularCodec.from_measurements(results, self.schema)
-    discrete = checkpoint.get_or_compute('discrete_data', codec.encode, data)
+    discrete = _checkpoint.get_or_compute('discrete_data', codec.encode, data)
     logging.info('[DPSynth]: Finished encoding data.')
 
     # Phase 3: Run the discrete mechanism and decode back to the input domain.
@@ -326,7 +332,7 @@ class TabularMechanism(api.CalibratedMechanism):
     cfg = self.config.discrete_mechanism
     if hasattr(cfg, 'supporting_cliques'):
       cliques = cfg.supporting_cliques(discrete.domain)
-      discrete = checkpoint.get_or_compute(
+      discrete = _checkpoint.get_or_compute(
           'precomputed_marginals',
           dm_common.precompute_marginals,
           discrete,
@@ -388,6 +394,11 @@ class TabularConfig(api.MechanismConfig):
     domains: Mapping from column names to attribute domain specifications.
     discrete_mechanism: The mechanism to run on the discretized data.
     numerical_bins: Number of bins for numerical attribute discretization.
+    numerical_epsilon_ratio: Ratio by which privacy budget epsilon increases at
+      each deeper level of recursive bisection for numerical attribute
+      discretization. Defaults to 1.0 (uniform budget split across levels). A
+      value of sqrt(2) approx 1.414 can provide minor accuracy gains on smooth
+      continuous distributions.
     init_budget_fraction: Fraction of total zCDP budget allocated to per-column
       initialization (the rest goes to the discrete mechanism).
     cross_attribute_constraints: Constraints to enforce on generated data.
@@ -402,6 +413,7 @@ class TabularConfig(api.MechanismConfig):
   domains: Mapping[str, domain.AttributeType] | None = None
   discrete_mechanism: api.MechanismConfig = discrete_mechanisms.MSTConfig()
   numerical_bins: int = 32
+  numerical_epsilon_ratio: float = 1.0
   init_budget_fraction: float = 0.1
   cross_attribute_constraints: Sequence[constraints.Constraint] = ()
   compress_columns: bool = False
@@ -496,7 +508,9 @@ class TabularConfig(api.MechanismConfig):
     api.validate_max_records_per_user(max_records_per_user)
     per_col_deltas = self._compute_per_col_deltas(schema, delta)
 
-    inits = create_initializers(schema, self.numerical_bins)
+    inits = create_initializers(
+        schema, self.numerical_bins, self.numerical_epsilon_ratio
+    )
     init_rho = self.init_budget_fraction * zcdp_rho
     # +1 for the DPGaussianCount that always measures the total.
     per_col_rho = init_rho / (len(inits) + 1)
