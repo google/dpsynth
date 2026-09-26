@@ -72,7 +72,31 @@ def infer_domain(
     enum_format: Literal["name", "number"] = "name",
     ignore_unsupported_fields: bool = False,
 ) -> dict[str, domain.AttributeType]:
-  """Infers attribute domains from a Protobuf definition for a flat schema."""
+  """Infers attribute domains from a Protobuf definition for a flat schema.
+
+  Non-repeated nested message (`TYPE_MESSAGE`) fields are recursively flattened
+  into dot-separated attribute names (e.g. `"account.balance"`). Repeated
+  fields are not supported.
+
+  Example:
+    ```python
+    domains = protobuf.infer_domain(
+        UserProfile,
+        numerical_bounds={"age": (0.0, 120.0), "account.balance": (0.0, 1e4)},
+        ignore_unsupported_fields=True,
+    )
+    ```
+
+  Args:
+    proto: Protobuf `Message` class, instance, or `Descriptor`.
+    numerical_bounds: Mapping from (dot-separated) field name to `(min, max)`
+      bounds for numeric fields.
+    enum_format: Enum representation, either `"name"` or `"number"`.
+    ignore_unsupported_fields: Whether to skip unsupported or unbounded fields.
+
+  Returns:
+    Mapping from field name to `domain.AttributeType`.
+  """
   if enum_format not in ("name", "number"):
     raise ValueError(f"Unknown enum_format '{enum_format}'.")
 
@@ -87,14 +111,20 @@ def infer_domain(
       raise ValueError(f"Repeated field '{field.name}' is not supported.")
 
     if field.type == descriptor.FieldDescriptor.TYPE_MESSAGE:
-      # To extend to nested schemas, message fields could be recursively
-      # flattened with delimited column names or modeled as linked sub-tables.
-      if ignore_unsupported_fields:
-        continue
-      raise ValueError(
-          f"Nested message field '{field.name}' ({field.message_type.name}) is"
-          " not supported in flat schema."
+      prefix = f"{field.name}."
+      sub_bounds = {
+          k.removeprefix(prefix): v
+          for k, v in numerical_bounds.items()
+          if k.startswith(prefix)
+      }
+      sub_domain = infer_domain(
+          field.message_type,
+          numerical_bounds=sub_bounds,
+          enum_format=enum_format,
+          ignore_unsupported_fields=ignore_unsupported_fields,
       )
+      attributes.update({f"{prefix}{k}": v for k, v in sub_domain.items()})
+      continue
 
     if field.type == descriptor.FieldDescriptor.TYPE_ENUM:
       values = [
@@ -107,6 +137,8 @@ def infer_domain(
     elif field.type in _INTEGER_TYPES or field.type in _FLOAT_TYPES:
       dtype = "int" if field.type in _INTEGER_TYPES else "float"
       if field.name not in numerical_bounds:
+        if ignore_unsupported_fields:
+          continue
         raise ValueError(
             f"Numerical bounds must be specified for field '{field.name}'."
         )
@@ -138,25 +170,50 @@ def infer_schema(
     ignore_unsupported_fields: bool = False,
 ) -> domain.Schema:
   """Derives a dpsynth.Schema from a Protobuf definition for a flat schema."""
-  return domain.Schema(
-      infer_domain(
-          proto,
-          numerical_bounds=numerical_bounds,
-          enum_format=enum_format,
-          ignore_unsupported_fields=ignore_unsupported_fields,
-      )
+  attributes = infer_domain(
+      proto,
+      numerical_bounds=numerical_bounds,
+      enum_format=enum_format,
+      ignore_unsupported_fields=ignore_unsupported_fields,
   )
+  return domain.Schema(attributes)
+
+
+def _leaf_field_paths(desc):
+  """Returns dot-separated field paths for all non-repeated leaf fields."""
+  paths = []
+  for field in desc.fields:
+    if _is_repeated(field):
+      continue
+    if field.type == descriptor.FieldDescriptor.TYPE_MESSAGE:
+      sub_paths = _leaf_field_paths(field.message_type)
+      paths.extend(f"{field.name}.{p}" for p in sub_paths)
+    else:
+      paths.append(field.name)
+  return paths
+
+
+def _resolve_leaf(msg, path):
+  """Resolves a dot-separated path to its parent message and leaf field name."""
+  *parents, leaf = path.split(".")
+  for part in parents:
+    msg = getattr(msg, part)
+  return msg, leaf
 
 
 def to_tuple(
     msg: message.Message,
     *,
+    schema: domain.Schema | Mapping[str, domain.AttributeType] | None = None,
     enum_format: Literal["name", "number"] = "name",
 ) -> tuple[Any, ...]:
-  """Converts a flat Protobuf message instance to a tuple of field values."""
+  """Converts a Protobuf message instance to a tuple of field values."""
+  fields = _leaf_field_paths(msg.DESCRIPTOR) if schema is None else schema
   result = []
-  for field in msg.DESCRIPTOR.fields:
-    val = getattr(msg, field.name)
+  for path in fields:
+    sub_msg, leaf = _resolve_leaf(msg, path)
+    field = sub_msg.DESCRIPTOR.fields_by_name[leaf]
+    val = getattr(sub_msg, leaf)
     if (
         field.type == descriptor.FieldDescriptor.TYPE_ENUM
         and enum_format == "name"
@@ -169,12 +226,16 @@ def to_tuple(
 def from_tuple(
     values: Sequence[Any],
     proto: descriptor.Descriptor | type[message.Message] | message.Message,
+    *,
+    schema: domain.Schema | Mapping[str, domain.AttributeType] | None = None,
 ) -> message.Message:
-  """Populates a flat Protobuf message from a sequence of field values."""
+  """Populates a Protobuf message from a sequence of field values."""
   desc = _resolve_descriptor(proto)
+  fields = _leaf_field_paths(desc) if schema is None else schema
   msg = message_factory.GetMessageClass(desc)()
-  for field, val in zip(desc.fields, values):
-    setattr(msg, field.name, val)
+  for path, val in zip(fields, values):
+    sub_msg, leaf = _resolve_leaf(msg, path)
+    setattr(sub_msg, leaf, val)
   return msg
 
 
