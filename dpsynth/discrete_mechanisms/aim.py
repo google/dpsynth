@@ -22,6 +22,7 @@ import dp_accounting
 from dpsynth import api
 from dpsynth.discrete_mechanisms import accounting
 from dpsynth.discrete_mechanisms import common
+from dpsynth.local_mode import primitives
 import jax.numpy as jnp
 import mbi
 import mbi.junction_tree
@@ -80,8 +81,8 @@ def _worst_approximated(
       candidates.values(),
   )  # if all weights are 0, could be a problem
   keys, values = list(errors.keys()), np.array(list(errors.values()))
-  idx = common.exponential_mechanism(
-      values, eps, max_sensitivity, rng, monotonic=False
+  idx = primitives.exponential_mechanism(
+      rng, values, epsilon=eps, sensitivity=max_sensitivity, monotonic=False
   )
   return keys[idx]
 

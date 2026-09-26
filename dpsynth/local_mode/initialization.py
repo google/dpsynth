@@ -25,7 +25,6 @@ from dpsynth import domain
 from dpsynth.local_mode import primitives
 from dpsynth.local_mode import vectorized_transformations as vtx
 import numpy as np
-import scipy.stats
 
 
 def encode_to_grid(values, lower, upper, delta, **_):
@@ -331,8 +330,11 @@ class CategoricalInitializer(api.CalibratedMechanism):
       self, rng: np.random.Generator, counts: np.ndarray
   ) -> CategoricalMeasurement:
     """Returns a CategoricalMeasurement from pre-aggregated counts."""
-    noisy = primitives.add_gaussian_noise(
-        rng, counts, self.sigma, self.max_records_per_user
+    noisy = primitives.gaussian_mechanism(
+        rng,
+        counts,
+        sigma=self.sigma,
+        l2_sensitivity=self.max_records_per_user,
     )
     stddev = self.max_records_per_user * self.sigma
     return CategoricalMeasurement(
@@ -393,23 +395,16 @@ class OpenSetInitializer(api.CalibratedMechanism):
       counts: np.ndarray,
   ) -> OpenSetMeasurement:
     """Returns an OpenSetMeasurement from pre-aggregated value counts."""
-    above_min = counts >= self.config.min_count
-    eligible_idx = np.where(above_min)[0]
-    eligible_counts = counts[above_min].astype(float)
-
-    noisy = primitives.add_gaussian_noise(
-        rng, eligible_counts, self.sigma, self.max_records_per_user
+    selected_partitions, estimated_counts = primitives.gaussian_thresholding(
+        rng,
+        counts,
+        sigma=self.sigma,
+        delta=self.delta,
+        l2_sensitivity=self.max_records_per_user,
+        linf_sensitivity=self.max_records_per_user,
+        min_count=self.config.min_count,
     )
-    noisy_counts = np.asarray(noisy)
-
     stddev = self.max_records_per_user * self.sigma
-    base = float(self.max_records_per_user + self.config.min_count - 1)
-    threshold = base + stddev * scipy.stats.norm.ppf(1.0 - self.delta)
-    passed = noisy_counts >= threshold
-
-    selected_partitions = eligible_idx[passed]
-    estimated_counts = noisy_counts[passed]
-
     selected_values = np.array(
         [str(v) for v in unique_values[selected_partitions]]
     )

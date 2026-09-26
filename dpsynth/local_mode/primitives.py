@@ -38,11 +38,11 @@ Privacy Characterizations:
   mechanism for discrete selection given candidate quality scores.
 - Quantiles (`quantiles_from_histogram`): Composition of exponential mechanisms
   via jittered recursive median bisection over a dense histogram.
-- Gaussian Thresholding (`select_partitions_gaussian_thresholding`): Partition
-  selection mechanism that adds Gaussian noise to counts and tests against a
-  threshold bounding false positives for empty partitions at delta.
-- Gaussian Noise (`add_gaussian_noise`): Standard Gaussian mechanism applied to
-  input summary statistics (e.g., counts).
+- Gaussian Thresholding (`gaussian_thresholding`): Partition selection mechanism
+  that adds Gaussian noise to counts and tests against a threshold bounding
+  false positives for empty partitions at delta.
+- Gaussian Mechanism (`gaussian_mechanism`): Standard Gaussian mechanism applied
+  to input summary statistics (e.g., counts).
 """
 
 from __future__ import annotations
@@ -60,8 +60,9 @@ import scipy.stats
 def exponential_mechanism(
     rng: np.random.Generator,
     quality_scores: np.ndarray,
+    *,
     epsilon: float,
-    sensitivity: float = 1.0,
+    sensitivity: float,
     monotonic: bool = False,
 ) -> int:
   """Selects an index using the discrete exponential mechanism.
@@ -230,102 +231,75 @@ def quantiles_from_histogram(
 # ---------------------------------------------------------------------------
 
 
-def select_partitions_gaussian_thresholding(
+def gaussian_thresholding(
     rng: np.random.Generator,
-    data: np.ndarray,
-    gdp_budget: float,
+    counts: np.ndarray,
+    *,
+    sigma: float,
     delta: float,
+    l2_sensitivity: float,
+    linf_sensitivity: float,
     min_count: int = 1,
-    max_records_per_user: int = 1,
-) -> tuple[np.ndarray, np.ndarray, float]:
+) -> tuple[np.ndarray, np.ndarray]:
   """Selects partitions using Gaussian Thresholding (Weighted Gaussian).
 
-  This implements Algorithm 2 from the DP-SIPS paper (Swanberg et al., 2023)
-  under item-level DP. It is the simplest partition selection mechanism:
+  Implements Algorithm 2 from the DP-SIPS paper (Swanberg et al., 2023) on
+  pre-aggregated partition counts:
 
-    1. Compute the histogram of partition counts.
-    2. Add Gaussian noise calibrated to the privacy budget.
-    3. Return partitions whose noisy count exceeds a threshold chosen to
-       bound the false-positive probability per empty partition at delta.
+    1. Pre-filter partitions with true count below ``min_count``.
+    2. Add Gaussian noise with standard deviation ``l2_sensitivity * sigma``.
+    3. Return indices of partitions whose noisy count exceeds a threshold chosen
+       to bound the false-positive probability per empty partition at ``delta``.
 
-  Under item-level DP each record is treated as a distinct user contributing
-  to exactly one partition, so the histogram has L2 sensitivity 1.  The
-  threshold is T = min_count + sigma * Phi^{-1}(1 - delta), following the
-  paper's formula with max_part = 1 and a shift of (min_count - 1) to
-  account for the minimum count guarantee.
-
-  When ``min_count > 1``, partitions with true count below ``min_count``
-  are pre-filtered and the threshold shifts up accordingly. The privacy
-  guarantee is preserved: partitions where both neighboring datasets are
-  above ``min_count`` are covered by the Gaussian mechanism, and the
-  boundary case (one dataset at ``min_count - 1``, the other at
-  ``min_count``) is covered by the same additive delta.
-
-  When ``max_records_per_user > 1`` the mechanism switches to user-level DP
-  via a naive, conservative reduction: a single user may place all ``k``
-  records in one partition, so the histogram's L2 sensitivity grows to ``k``.
-  Both the noise standard deviation and the threshold are scaled by ``k``,
-  which is equivalent to running the item-level mechanism with ``k`` times the
-  sigma and threshold. This is sound but suboptimal -- a user->record mapping
-  would allow tighter per-user contribution bounding (e.g. capping the number
-  of distinct partitions a user touches) and hence far better utility.
+  A partition that is eligible here (count >= ``min_count``) but ineligible in a
+  neighboring dataset (count <= ``min_count - 1``) can have true count at most
+  ``min_count - 1 + linf_sensitivity``. Bounding the probability that such a
+  partition exceeds ``T`` by ``delta`` yields the threshold
+  ``T = (min_count + linf_sensitivity - 1) + l2_sensitivity * sigma * Phi^{-1}(1
+  - delta)``.
 
   Args:
     rng: A numpy random number generator.
-    data: 1D array of integers, where each element is a partition ID.
-    gdp_budget: Privacy budget in terms of squared Gaussian DP mu parameter
-      (gdp_budget = mu^2 = 1 / sigma^2).
+    counts: 1D array of pre-aggregated partition counts.
+    sigma: The Gaussian noise multiplier (unscaled standard deviation).
     delta: Failure probability (false positive bound per empty partition).
+    l2_sensitivity: L2 sensitivity of the count vector across partitions.
+    linf_sensitivity: L-infinity sensitivity (maximum change to any single
+      partition's count between neighboring datasets).
     min_count: Minimum true count for a partition to be eligible. Partitions
-      with fewer occurrences in the data are never returned. Must be >= 1.
-    max_records_per_user: Assumed upper bound on the number of records a single
-      user contributes. Added noise (and mechanism sensitivity) is scaled by
-      this factor to provide user-level rather than record-level DP; the privacy
-      accounting is unchanged. Soundness relies on the caller enforcing this
-      bound.
+      with fewer occurrences are never returned. Must be >= 1.
 
   Returns:
-    A tuple containing:
-      - selected_partitions: 1D array of partition IDs that passed the
-        threshold.
-      - estimated_counts: 1D array of noisy counts for each selected
-        partition.
-      - stddev: The standard deviation of the Gaussian noise added
-        (``max_records_per_user * sigma``).
+    A tuple ``(selected_indices, noisy_counts)`` where ``selected_indices`` is a
+    1D integer array of indices into ``counts`` that passed the threshold, and
+    ``noisy_counts`` is a 1D float array of their noisy counts.
+
+  Raises:
+    ValueError: If sigma < 0, delta not in (0, 1], l2_sensitivity <= 0,
+      linf_sensitivity <= 0, or min_count < 1.
   """
-  if gdp_budget <= 0 or delta <= 0 or delta > 1:
-    raise ValueError(f'{gdp_budget=} and {delta=} must be positive.')
+  if sigma < 0:
+    raise ValueError(f'{sigma=} must be non-negative.')
+  if delta <= 0 or delta > 1:
+    raise ValueError(f'{delta=} must be in (0, 1].')
+  if l2_sensitivity <= 0 or linf_sensitivity <= 0:
+    raise ValueError(f'{l2_sensitivity=} and {linf_sensitivity=} must be > 0.')
   if min_count < 1:
     raise ValueError(f'{min_count=} must be >= 1.')
 
-  stddev = max_records_per_user / np.sqrt(gdp_budget)
+  counts = np.asarray(counts, dtype=float)
+  eligible_idx = np.flatnonzero(counts >= min_count)
+  noisy_counts = np.asarray(
+      gaussian_mechanism(
+          rng, counts[eligible_idx], sigma=sigma, l2_sensitivity=l2_sensitivity
+      )
+  )
 
-  if data.size == 0:
-    return np.empty(0, dtype=data.dtype), np.empty(0, dtype=float), stddev
-
-  unique_parts, counts = np.unique(data, return_counts=True)
-
-  # Filter partitions below the minimum count before adding noise.
-  above_min = counts >= min_count
-  unique_parts, counts = unique_parts[above_min], counts[above_min]
-  if unique_parts.size == 0:
-    return np.empty(0, dtype=data.dtype), np.empty(0, dtype=float), stddev
-
-  noisy_counts = counts + rng.normal(scale=stddev, size=counts.size)
-
-  # A partition that is a candidate here but absent from a neighbor drives the
-  # per-partition false-positive budget `delta`. One user contributes up to
-  # k = max_records_per_user records, so (i) the noise std is
-  # stddev = k / sqrt(gdp_budget), and (ii) such a partition's true count can
-  # reach (min_count - 1) + k -- the neighbor sits just under the eligibility
-  # cutoff at min_count - 1 and the user piles all k records into it. Bounding
-  #   Pr[(min_count - 1 + k) + N(0, stddev^2) >= T] <= delta
-  # gives T = (min_count + k - 1) + stddev * ppf(1 - delta).
-  base = float(max_records_per_user + min_count - 1)
+  stddev = l2_sensitivity * sigma
+  base = float(linf_sensitivity + min_count - 1)
   threshold = base + stddev * scipy.stats.norm.ppf(1.0 - delta)
   passed = noisy_counts >= threshold
-  # unique_parts is sorted (np.unique), so the output order is deterministic.
-  return unique_parts[passed], noisy_counts[passed], stddev
+  return eligible_idx[passed], noisy_counts[passed]
 
 
 def ensure_public_partitions(
@@ -355,7 +329,11 @@ def ensure_public_partitions(
   missing = public[missing_mask]
   if missing.size == 0:
     return selected, counts
-  noise = rng.normal(scale=stddev, size=missing.size)
+  noise = np.asarray(
+      gaussian_mechanism(
+          rng, np.zeros(missing.size), sigma=stddev, l2_sensitivity=1.0
+      )
+  )
   all_selected = np.concatenate([selected, missing])
   all_counts = np.concatenate([counts, noise])
   # Sort by partition key to ensure deterministic order and avoid leaking
@@ -365,15 +343,16 @@ def ensure_public_partitions(
 
 
 # ---------------------------------------------------------------------------
-# Gaussian Noise
+# Gaussian Mechanism
 # ---------------------------------------------------------------------------
 
 
-def add_gaussian_noise(
+def gaussian_mechanism(
     rng: np.random.Generator,
     counts: np.ndarray | float | int,
+    *,
     sigma: float,
-    max_records_per_user: int = 1,
+    l2_sensitivity: float,
 ) -> float | np.ndarray:
   """Adds Gaussian noise to scalar, 1D array, or multi-dimensional array counts.
 
@@ -381,16 +360,21 @@ def add_gaussian_noise(
     rng: A numpy random number generator.
     counts: The true count(s). Can be a scalar, 1D array, or multi-dimensional
       array.
-    sigma: The Gaussian noise standard deviation.
-    max_records_per_user: Assumed upper bound on the number of records a single
-      user contributes, used to scale the noise for user-level DP.
+    sigma: The Gaussian noise multiplier (unscaled standard deviation).
+    l2_sensitivity: The L2 sensitivity of `counts`. Scales the noise standard
+      deviation as `l2_sensitivity * sigma`.
 
   Returns:
     The noisy count(s) with the same shape as `counts`.
+
+  Raises:
+    ValueError: If sigma < 0 or l2_sensitivity <= 0.
   """
   if sigma < 0:
-    raise ValueError(f'sigma must be positive, got {sigma}')
-  stddev = max_records_per_user * sigma
+    raise ValueError(f'sigma must be non-negative, got {sigma}')
+  if l2_sensitivity <= 0:
+    raise ValueError(f'l2_sensitivity must be positive, got {l2_sensitivity}')
+  stddev = l2_sensitivity * sigma
 
   if isinstance(counts, (int, float, np.generic)):
     noise = float(rng.normal(scale=stddev))

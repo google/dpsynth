@@ -24,13 +24,12 @@ from typing import TypeAlias
 
 from absl import logging
 from dpsynth import transformations
+from dpsynth.local_mode import primitives
 import mbi
 import mbi.clique_utils
 import mbi.junction_tree
 import more_itertools
 import numpy as np
-import scipy
-import scipy.special
 import tqdm
 
 
@@ -217,20 +216,6 @@ def compression_mappings(
   return mappings
 
 
-def exponential_mechanism(
-    quality_scores: np.ndarray,
-    epsilon: float,
-    sensitivity: float,
-    rng: np.random.Generator,
-    monotonic: bool = False,
-) -> int:
-  """Returns an index chosen by the exponential mechanism."""
-  coef = 1.0 if monotonic else 0.5
-  scores = coef * epsilon / sensitivity * quality_scores
-  probas = scipy.special.softmax(scores)
-  return rng.choice(quality_scores.size, p=probas)
-
-
 def measure_marginals_with_noise(
     rng: np.random.Generator,
     data: mbi.Dataset | mbi.CliqueVector,
@@ -272,9 +257,12 @@ def measure_marginals_with_noise(
     )
   measurements = []
   for proj, wgt in zip(marginal_queries, weights):
-    stddev = max_records_per_user * gdp_sigma / wgt
-    x = data.project(proj).datavector()
-    y = x + rng.normal(loc=0, scale=stddev, size=x.size)
+    sigma = gdp_sigma / wgt
+    stddev = max_records_per_user * sigma
+    x = np.asarray(data.project(proj).datavector())
+    y = primitives.gaussian_mechanism(
+        rng, x, sigma=sigma, l2_sensitivity=max_records_per_user
+    )
     measurements.append(mbi.LinearMeasurement(y, proj, stddev))
   return measurements
 
