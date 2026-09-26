@@ -24,7 +24,8 @@ for more information.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+import collections
+from collections.abc import Callable, Mapping, Sequence
 import dataclasses
 import io
 import math
@@ -46,10 +47,8 @@ from dpsynth.local_mode import primitives
 import mbi
 import numpy as np
 
-# A single row of tabular data: column name -> raw value.
-# representation for large pipelines.  Consider supporting named tuples or
-# a schema-aware format (e.g. Beam Rows, protos) to reduce per-element overhead.
-Row = dict[str, Any]
+# A single row of tabular data: column-keyed mapping or positional sequence.
+Row = Mapping[str, Any] | Sequence[Any]
 
 Initializer = (
     initialization.NumericalInitializerConfig
@@ -64,8 +63,16 @@ CalibratedInitializer = (
 )
 
 
+def _extract_columns(batch, columns):
+  """Extracts per-column value sequences from a non-empty batch of rows."""
+  if isinstance(batch[0], Mapping):
+    rows = cast(Sequence[Mapping[str, Any]], batch)
+    return ([row.get(c) for row in rows] for c in columns)
+  return zip(*batch, strict=True)
+
+
 class _EncodeColumns(beam.DoFn):
-  """Encodes each row into (column, key) pairs for all columns at once."""
+  """Encodes a batch of rows into ((column, key), count) pairs."""
 
   def __init__(self, initializers: dict[str, CalibratedInitializer]):
     # Do all setup in __init__ so that process below is cheaper.
@@ -91,21 +98,41 @@ class _EncodeColumns(beam.DoFn):
       else:
         raise TypeError(f'Unsupported initializer type: {type(init)}')
 
-  def process(self, row: Row):
-    for column, kind, params in self._specs:
-      value = row.get(column)
+  def process(self, batch: Sequence[Row]):
+    if not batch:
+      return
+    cols = _extract_columns(batch, (c for c, _, _ in self._specs))
+    for (column, kind, params), values in zip(self._specs, cols, strict=True):
       if kind == 'numerical':
         attribute: domain.NumericalAttribute = params['attribute']
-        value = attribute.standardize(value)
-        if math.isnan(value):
-          continue  # clip_to_range=False: standardize returns NaN --> drop.
-        index = int(initialization.encode_to_grid(value, **params))
-        yield (column, index)
+        try:
+          arr = np.asarray(values, dtype=float)
+        except (ValueError, TypeError):
+          arr = np.asarray(
+              [attribute.standardize(v) for v in values], dtype=float
+          )
+        if attribute.clip_to_range:
+          arr = np.where(np.isnan(arr), attribute.min_value, arr)
+        else:
+          arr = arr[(arr >= attribute.min_value) & (arr <= attribute.max_value)]
+        if attribute.dtype == 'int':
+          arr = np.round(arr)
+        indices = initialization.encode_to_grid(arr, **params)
+        uniq, counts = np.unique(indices, return_counts=True)
+        for idx, count in zip(uniq.tolist(), counts.tolist()):
+          yield (column, idx), count
       elif kind == 'categorical':
-        index = params['lookup'].get(str(value), params['default'])
-        yield (column, index)
+        lookup = params['lookup']
+        default = params['default']
+        counts = collections.Counter(
+            lookup.get(str(v), default) for v in values
+        )
+        for idx, count in counts.items():
+          yield (column, idx), count
       elif kind == 'openset':
-        yield (column, str(value))
+        counts = collections.Counter(str(v) for v in values)
+        for val, count in counts.items():
+          yield (column, val), count
 
 
 def _unpack_count(element):
@@ -131,9 +158,9 @@ def _materialize_pairs(col, pairs):
 class ComputeSufficientStats(beam.PTransform):
   """Computes per-column sufficient statistics in a single pass.
 
-  Encodes all columns in one ``DoFn``, then counts via a single
-  ``Count.PerElement`` and groups by column. The output is a ``PCollection``
-  of ``(column_name, sparse_counts_list)`` pairs.
+  Encodes all columns in batches, then sums counts per ``(column, key)`` and
+  groups by column. The output is a ``PCollection`` of
+  ``(column_name, sparse_counts_list)`` pairs.
 
   Attributes:
     initializers: Calibrated initializers keyed by column name.
@@ -153,8 +180,10 @@ class ComputeSufficientStats(beam.PTransform):
   ) -> beam.PCollection[tuple[str, list[tuple[Any, int]]]]:
     return (
         rows
+        | 'Batch'
+        >> beam.BatchElements(min_batch_size=10000, max_batch_size=50000)
         | 'Encode' >> beam.ParDo(_EncodeColumns(self._initializers))
-        | 'Count' >> beam.combiners.Count.PerElement()
+        | 'Count' >> beam.CombinePerKey(sum)
         | 'Unpack' >> beam.Map(_unpack_count)
         # Aggregate data and materialize on the driver (see module header).
         | 'GroupByColumn' >> beam.GroupByKey()
@@ -184,7 +213,7 @@ def _sparse_to_openset(sparse):
   """Converts sparse (value, count) pairs to parallel arrays."""
   if not sparse:
     return np.array([], dtype=object), np.array([], dtype=np.float64)
-  keys, vals = zip(*sparse)
+  keys, vals = zip(*sorted(sparse))
   return np.array(keys), np.array(vals, dtype=np.float64)
 
 
@@ -193,6 +222,8 @@ def run_from_summary(
     sparse_stats: dict[str, list[tuple[Any, int]]],
     initializers: dict[str, CalibratedInitializer],
     rng: np.random.Generator,
+    *,
+    estimated_total: float | None = None,
 ) -> dict[str, initialization.ColumnMeasurement]:
   """Converts materialized sparse stats to ColumnMeasurements on the driver.
 
@@ -204,6 +235,7 @@ def run_from_summary(
       produced by ``ComputeSufficientStats``.
     initializers: Calibrated initializers keyed by column name.
     rng: NumPy random generator for DP noise.
+    estimated_total: Optional noisy total record count for numerical columns.
 
   Returns:
     Per-column ``ColumnMeasurement`` results.
@@ -213,7 +245,9 @@ def run_from_summary(
     sparse = sparse_stats[column]
     if isinstance(init, initialization.NumericalInitializer):
       counts = _sparse_to_dense_numerical(sparse, init.grid_spec[2])
-      results[column] = init.from_summary(rng, counts)
+      results[column] = init.from_summary(
+          rng, counts, estimated_total=estimated_total
+      )
     elif isinstance(init, initialization.CategoricalInitializer):
       counts = _sparse_to_dense_categorical(sparse, init.attribute.size)
       results[column] = init.from_summary(rng, counts)
@@ -224,7 +258,7 @@ def run_from_summary(
 
 
 class _EncodeAndProject(beam.DoFn):
-  """Integer-encodes each row and emits (clique_index, linear_index) pairs."""
+  """Integer-encodes row batches and emits (clique_index, histogram) pairs."""
 
   def __init__(
       self,
@@ -246,35 +280,29 @@ class _EncodeAndProject(beam.DoFn):
       )
       self._clique_meta.append((idx, clique, shape))
 
-  def process(self, row: Row):
-    # ColumnCodec.encode is vectorized, so wrap each scalar in a length-1 array.
+  def process(self, batch: Sequence[Row]):
+    if not batch:
+      return
+    cols = _extract_columns(batch, self._codecs)
     encoded = {
-        col: int(codec.encode(np.asarray([row.get(col)]))[0])
-        for col, codec in self._codecs.items()
+        col: codec.encode(np.asarray(vals, dtype=object))
+        for (col, codec), vals in zip(self._codecs.items(), cols, strict=True)
     }
     # supporting_cliques() never returns the 0-way clique (), so shape is always
     # non-empty here and np.ravel_multi_index is safe.
     for clique_idx, clique_cols, shape in self._clique_meta:
       multi_index = tuple(encoded[c] for c in clique_cols)  # pyrefly: ignore[bad-index]
-      linear = int(np.ravel_multi_index(multi_index, shape))
-      yield clique_idx, linear
-
-
-def _unpack_marginal_count(element):
-  """Restructures ((clique_idx, linear_idx), count) for GroupByKey."""
-  (clique_idx, linear_idx), count = element
-  return clique_idx, (linear_idx, count)
+      linear = np.ravel_multi_index(multi_index, shape)
+      counts = np.bincount(linear, minlength=math.prod(shape)).reshape(shape)
+      yield clique_idx, counts
 
 
 def _assemble_dense_marginal(element, clique_meta, mbi_domain):
-  """Converts sparse counts to an mbi.Factor for one clique."""
-  clique_idx, sparse_pairs = element
+  """Converts a summed histogram array to an mbi.Factor for one clique."""
+  clique_idx, counts = element
   _, clique_cols, shape = clique_meta[clique_idx]
-  total_size = math.prod(shape)
-  dense = np.zeros(total_size, dtype=np.float64)
-  for linear_idx, count in sparse_pairs:
-    dense[linear_idx] = count
-  return mbi.Factor(mbi_domain.project(clique_cols), dense.reshape(shape))  # pyrefly: ignore[bad-argument-type]
+  dense = np.broadcast_to(counts, shape).astype(np.float64)
+  return mbi.Factor(mbi_domain.project(clique_cols), dense)  # pyrefly: ignore[bad-argument-type]
 
 
 # Stage 2 of the two-pass pipeline: compute the joint marginals the DP mechanism
@@ -325,16 +353,15 @@ class ComputeMarginals(beam.PTransform):
 
     return (
         rows
+        | 'Batch'
+        >> beam.BatchElements(min_batch_size=10000, max_batch_size=50000)
         | 'EncodeProject'
         >> beam.ParDo(
             _EncodeAndProject(
                 self._column_measurements, self._domains, self._workload
             )
         )
-        | 'CountPerElement' >> beam.combiners.Count.PerElement()
-        | 'Unpack' >> beam.Map(_unpack_marginal_count)
-        | 'GroupByClique' >> beam.GroupByKey()
-        | 'ToLists' >> beam.MapTuple(_materialize_pairs)
+        | 'SumCounts' >> beam.CombinePerKey(sum)
         | 'ToFactor'
         >> beam.Map(
             _assemble_dense_marginal,
@@ -356,11 +383,11 @@ def _write(value: Any, path: str) -> None:
   """Serializes a driver-bound pipeline result to ``path``."""
   # Writing to a (possibly distributed) filesystem lets the driver read the
   # value back after the pipeline finishes, so it works on remote runners.
-  buf = io.BytesIO()
-  try:
+  if isinstance(value, mbi.CliqueVector):
+    buf = io.BytesIO()
     mbi.save(value, buf)
     data = buf.getvalue()
-  except TypeError:
+  else:
     data = pickle.dumps(value)
   with FileSystems.create(path) as f:
     f.write(data)
@@ -383,6 +410,8 @@ def generate_from_marginals(
     column_measurements: dict[str, initialization.ColumnMeasurement],
     marginals: mbi.CliqueVector,
     total_measurement: mbi.LinearMeasurement,
+    *,
+    num_rows: int | None = None,
 ) -> data_generation_v3.DataGenerationResult:
   """Runs the discrete mechanism and decoding from pre-computed marginals.
 
@@ -392,6 +421,8 @@ def generate_from_marginals(
     column_measurements: Per-column results from pass 1 initialization.
     marginals: The exact joint marginals computed by pass 2.
     total_measurement: The DP-noised total-count measurement (clique ``()``).
+    num_rows: Optional number of synthetic rows to generate. Defaults to the
+      fitted model's noisy total count.
 
   Returns:
     A DataGenerationResult containing the synthetic DataFrame.
@@ -401,6 +432,10 @@ def generate_from_marginals(
   codec = data_generation_v3.TabularCodec.from_measurements(
       column_measurements, synth.schema
   )
+  constraints = (
+      synth.schema.constraints or synth.config.cross_attribute_constraints
+  )
+  mbi_constraints = tuple(c.to_mbi() for c in constraints)
 
   initial_measurements = [total_measurement, *codec.one_way_measurements()]
   logging.info('[DPSynth/Beam]: Running discrete mechanism.')
@@ -409,6 +444,7 @@ def generate_from_marginals(
       rng,
       data=marginals,
       initial_measurements=initial_measurements,
+      constraints=mbi_constraints,
   )
   if mechanism_result.synthetic_data is not None:
     synthetic_discrete = mechanism_result.synthetic_data
@@ -417,6 +453,7 @@ def generate_from_marginals(
         mechanism_result.model,
         rng,
         use_jax=synth.config.use_jax_for_generation,
+        rows=num_rows,
     )
   synthetic_data = codec.decode(synthetic_discrete, rng, column_order)
   return data_generation_v3.DataGenerationResult(
@@ -436,6 +473,7 @@ def _run_two_pass(
     *,
     temp_location: str | None = None,
     pipeline_kwargs: dict[str, Any] | None = None,
+    num_rows: int | None = None,
 ) -> data_generation_v3.DataGenerationResult:
   """Two-pass Beam pipeline that delegates to a local TabularConfig."""
 
@@ -464,16 +502,20 @@ def _run_two_pass(
       count = rows | 'CountRows' >> beam.combiners.Count.Globally()
       _ = count | 'WriteRowCount' >> beam.Map(_write, path=count_path)
     # We run this on the driver so we don't have to track worker-side RNGs.
-    sparse_stats = _read(summary_path)
-    column_measurements = run_from_summary(sparse_stats, inits, rng)
-    num_rows = int(_read(count_path))
-    logging.info('[DPSynth/Beam]: Pass 1 complete.')
+    num_rows_in = int(_read(count_path))
     # pyrefly: ignore[missing-attribute]
     total = primitives.add_gaussian_noise(
-        rng, float(num_rows), sigma, cast(int, synth.max_records_per_user)
+        rng, float(num_rows_in), sigma, cast(int, synth.max_records_per_user)
     )
     total = float(max(1.0, total))
-    total_measurement = mbi.LinearMeasurement(np.array([total]), (), sigma)
+    total_measurement = mbi.LinearMeasurement(
+        np.array([total]), (), synth.max_records_per_user * sigma
+    )
+    sparse_stats = _read(summary_path)
+    column_measurements = run_from_summary(
+        sparse_stats, inits, rng, estimated_total=total
+    )
+    logging.info('[DPSynth/Beam]: Pass 1 complete.')
 
     # Ask the configured discrete mechanism which marginals it needs.
     mbi_domain = data_generation_v3.TabularCodec.from_measurements(
@@ -499,7 +541,12 @@ def _run_two_pass(
 
     # Run the discrete mechanism and decode on the driver.
     return generate_from_marginals(
-        synth, rng, column_measurements, clique_vector, total_measurement
+        synth,
+        rng,
+        column_measurements,
+        clique_vector,
+        total_measurement,
+        num_rows=num_rows,
     )
   finally:
     # Only remove a temp dir we created; never a user-supplied temp_location.
@@ -523,6 +570,8 @@ class BeamTabularMechanism(api.CalibratedMechanism):
       self,
       rng: np.random.Generator,
       create_rows_fn: Callable[[beam.Pipeline], beam.PCollection],
+      *,
+      num_rows: int | None = None,
   ) -> data_generation_v3.DataGenerationResult:
     return _run_two_pass(
         self.synthesizer,
@@ -530,6 +579,7 @@ class BeamTabularMechanism(api.CalibratedMechanism):
         create_rows_fn,
         temp_location=self.temp_location,
         pipeline_kwargs={'options': self.pipeline_options},
+        num_rows=num_rows,
     )
 
 

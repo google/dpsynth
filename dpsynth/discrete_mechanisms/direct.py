@@ -84,7 +84,10 @@ class Direct(api.CalibratedMechanism):
     # Kick off async AOT compilation of the estimator while we measure.
     estimator = mbi.estimation.MirrorDescent(self.config.marginal_oracle)
     pgm_future = estimator.precompile(
-        data.domain, list(initial_measurements), extra_cliques=list(selected)  # pyrefly: ignore[bad-argument-type]
+        data.domain,
+        list(initial_measurements),
+        extra_cliques=list(selected),  # pyrefly: ignore[bad-argument-type]
+        constraints=constraints,
     )
     new_measurements = common.measure_marginals_with_noise(
         rng=rng,
