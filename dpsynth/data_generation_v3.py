@@ -267,11 +267,11 @@ class TabularMechanism(api.CalibratedMechanism):
     # Phase 1: Per-column initialization.
     # Measure total count first, then run per-column initializers.
     def _run_initializers():
-      noisy_total = primitives.add_gaussian_noise(
+      noisy_total = primitives.gaussian_mechanism(
           rng,
           len(data),
-          self.total_count_sigma,
-          self.max_records_per_user,
+          sigma=self.total_count_sigma,
+          l2_sensitivity=self.max_records_per_user,
       )
       total = max(1.0, noisy_total)
       total_measurement = mbi.LinearMeasurement(

@@ -469,8 +469,11 @@ def _run_two_pass(
     num_rows = int(_read(count_path))
     logging.info('[DPSynth/Beam]: Pass 1 complete.')
     # pyrefly: ignore[missing-attribute]
-    total = primitives.add_gaussian_noise(
-        rng, float(num_rows), sigma, cast(int, synth.max_records_per_user)
+    total = primitives.gaussian_mechanism(
+        rng,
+        float(num_rows),
+        sigma=sigma,
+        l2_sensitivity=cast(int, synth.max_records_per_user),
     )
     total = float(max(1.0, total))
     total_measurement = mbi.LinearMeasurement(np.array([total]), (), sigma)

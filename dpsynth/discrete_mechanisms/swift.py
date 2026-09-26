@@ -41,6 +41,7 @@ from dpsynth.discrete_mechanisms import accounting
 from dpsynth.discrete_mechanisms import clique_tree
 from dpsynth.discrete_mechanisms import common
 from dpsynth.discrete_mechanisms import swift_utils
+from dpsynth.local_mode import primitives
 import mbi
 import networkx as nx
 import numpy as np
@@ -425,12 +426,14 @@ def _compute_initial_errors(
 ) -> dict[mbi.Clique, float]:
   """Computes DP initial errors for the SWIFT mechanism."""
   budget_per_clique = gdp_budget / len(cliques)
-  sigma_per_clique = max_records_per_user * accounting.gdp_gaussian_sigma(
-      budget_per_clique
-  )
+  sigma = accounting.gdp_gaussian_sigma(budget_per_clique)
   errors = common.compute_independence_errors(data, model, cliques)  # pyrefly: ignore[bad-argument-type]
   for cl in errors:
-    errors[cl] += rng.normal(loc=0.0, scale=sigma_per_clique)
+    errors[cl] = float(
+        primitives.gaussian_mechanism(
+            rng, errors[cl], sigma=sigma, l2_sensitivity=max_records_per_user
+        )
+    )
   return errors
 
 
@@ -494,11 +497,14 @@ def _measure_selected_marginals(
   measurements = []
   for cl in selected:
     budget_remaining -= selected[cl]
-    sigma = max_records_per_user * accounting.gdp_gaussian_sigma(selected[cl])
-    x = data.project(cl).datavector()
-    y = x + rng.normal(loc=0.0, scale=sigma, size=x.size)
-    measurements.append(mbi.LinearMeasurement(y, cl, sigma))
-    logging.info('[SWIFT] Measured %s with sigma %f', cl, sigma)
+    sigma = accounting.gdp_gaussian_sigma(selected[cl])
+    stddev = max_records_per_user * sigma
+    x = np.asarray(data.project(cl).datavector())
+    y = primitives.gaussian_mechanism(
+        rng, x, sigma=sigma, l2_sensitivity=max_records_per_user
+    )
+    measurements.append(mbi.LinearMeasurement(y, cl, stddev))
+    logging.info('[SWIFT] Measured %s with sigma %f', cl, stddev)
 
   logging.info('[SWIFT] Budget remaining: %f', budget_remaining)
   logging.info('[SWIFT] Measured selected marginals.')
