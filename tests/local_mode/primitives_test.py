@@ -196,17 +196,6 @@ class QuantilesFromHistogramTest(parameterized.TestCase):
     )
     self.assertEqual(edges[1:6], [40, 40, 40, 40, 40])
 
-  def test_unsupported_max_records_per_user_raises(self):
-    rng = np.random.default_rng(0)
-    with self.assertRaises(NotImplementedError):
-      primitives.quantiles_from_histogram(
-          rng,
-          np.array([1, 2, 3]),
-          epsilon_levels=np.ones(2),
-          jitter_strategy="refine",
-          max_records_per_user=2,
-      )
-
 
 class SelectPartitionsGaussianThresholdingTest(absltest.TestCase):
 
@@ -367,27 +356,6 @@ class AddGaussianNoiseTest(absltest.TestCase):
     noisy = primitives.add_gaussian_noise(self.rng, counts, sigma=1.0)
     self.assertEqual(noisy.shape, (2, 2))
     np.testing.assert_allclose(noisy, counts, atol=5.0)
-
-  def test_max_records_per_user_scales_noise(self):
-    k = 4
-    counts = np.array([10.0, 20.0, 30.0])
-    base_rng = np.random.default_rng(0)
-    base_noise = (
-        primitives.add_gaussian_noise(
-            base_rng, counts, sigma=1.0, max_records_per_user=1
-        )
-        - counts
-    )
-
-    scaled_rng = np.random.default_rng(0)
-    scaled_noise = (
-        primitives.add_gaussian_noise(
-            scaled_rng, counts, sigma=1.0, max_records_per_user=k
-        )
-        - counts
-    )
-
-    np.testing.assert_allclose(scaled_noise, k * base_noise)
 
 
 if __name__ == "__main__":

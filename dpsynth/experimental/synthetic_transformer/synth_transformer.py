@@ -47,9 +47,7 @@ class TabularTransformerConfig(api.MechanismConfig):
   emb_dim: int = 64
   dropout: float = 0.0
 
-  def configure(
-      self, _=None, *, zcdp_rho, delta=0, max_records_per_user=1
-  ) -> "TabularTransformer":
+  def configure(self, _=None, *, zcdp_rho, delta=0) -> "TabularTransformer":
     return TabularTransformer(config=self, zcdp_rho=zcdp_rho)
 
   def __post_init__(self):
