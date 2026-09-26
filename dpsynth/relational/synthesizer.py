@@ -146,11 +146,11 @@ def _measure_root_total_count(
     A tuple of (estimated_total, total_measurement) where total_measurement
     is an mbi.LinearMeasurement over clique ().
   """
-  noisy_total = primitives.add_gaussian_noise(
+  noisy_total = primitives.gaussian_mechanism(
       rng,
       root_record_count,
-      total_count_sigma,
-      max_records_per_user,
+      sigma=total_count_sigma,
+      l2_sensitivity=max_records_per_user,
   )
   total = max(1.0, float(noisy_total))
   total_measurement = mbi.LinearMeasurement(
