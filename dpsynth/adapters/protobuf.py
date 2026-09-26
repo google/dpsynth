@@ -16,6 +16,8 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+import functools
+import operator
 from typing import Any, Literal
 
 from dpsynth import domain
@@ -179,6 +181,7 @@ def infer_schema(
   return domain.Schema(attributes)
 
 
+@functools.lru_cache(maxsize=64)
 def _leaf_field_paths(desc):
   """Returns dot-separated field paths for all non-repeated leaf fields."""
   paths = []
@@ -190,7 +193,7 @@ def _leaf_field_paths(desc):
       paths.extend(f"{field.name}.{p}" for p in sub_paths)
     else:
       paths.append(field.name)
-  return paths
+  return tuple(paths)
 
 
 def _resolve_leaf(msg, path):
@@ -201,25 +204,49 @@ def _resolve_leaf(msg, path):
   return msg, leaf
 
 
-def to_tuple(
-    msg: message.Message,
-    *,
-    schema: domain.Schema | Mapping[str, domain.AttributeType] | None = None,
-    enum_format: Literal["name", "number"] = "name",
-) -> tuple[Any, ...]:
-  """Converts a Protobuf message instance to a tuple of field values."""
-  fields = _leaf_field_paths(msg.DESCRIPTOR) if schema is None else schema
-  result = []
-  for path in fields:
-    sub_msg, leaf = _resolve_leaf(msg, path)
-    field = sub_msg.DESCRIPTOR.fields_by_name[leaf]
-    val = getattr(sub_msg, leaf)
+@functools.lru_cache(maxsize=64)
+def _compile_getters(desc, paths, enum_format):
+  """Precompiles a tuple getter and sparse enum maps for fast extraction."""
+  if not paths:
+    return lambda _: (), ()
+  enum_fields = []
+  for idx, path in enumerate(paths):
+    sub_desc = desc
+    *parents, leaf = path.split(".")
+    for part in parents:
+      sub_desc = sub_desc.fields_by_name[part].message_type
+    field = sub_desc.fields_by_name[leaf]
     if (
         field.type == descriptor.FieldDescriptor.TYPE_ENUM
         and enum_format == "name"
     ):
-      val = field.enum_type.values_by_number[val].name
-    result.append(val)
+      enum_map = {v.number: v.name for v in field.enum_type.values}
+      enum_fields.append((idx, enum_map))
+  raw_getter = operator.attrgetter(*paths)
+  getter = (lambda m: (raw_getter(m),)) if len(paths) == 1 else raw_getter
+  return getter, tuple(enum_fields)
+
+
+def to_tuple(
+    msg: message.Message,
+    *,
+    schema: (
+        domain.Schema
+        | Mapping[str, domain.AttributeType]
+        | Sequence[str]
+        | None
+    ) = None,
+    enum_format: Literal["name", "number"] = "name",
+) -> tuple[Any, ...]:
+  """Converts a Protobuf message instance to a tuple of field values."""
+  paths = _leaf_field_paths(msg.DESCRIPTOR) if schema is None else tuple(schema)
+  getter, enum_fields = _compile_getters(msg.DESCRIPTOR, paths, enum_format)
+  values = getter(msg)
+  if not enum_fields:
+    return values
+  result = list(values)
+  for idx, enum_map in enum_fields:
+    result[idx] = enum_map[result[idx]]
   return tuple(result)
 
 
@@ -227,7 +254,12 @@ def from_tuple(
     values: Sequence[Any],
     proto: descriptor.Descriptor | type[message.Message] | message.Message,
     *,
-    schema: domain.Schema | Mapping[str, domain.AttributeType] | None = None,
+    schema: (
+        domain.Schema
+        | Mapping[str, domain.AttributeType]
+        | Sequence[str]
+        | None
+    ) = None,
 ) -> message.Message:
   """Populates a Protobuf message from a sequence of field values."""
   desc = _resolve_descriptor(proto)

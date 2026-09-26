@@ -206,7 +206,7 @@ def undiscretize(
   elif handling == 'sample':
     if not attribute_domain.clip_to_range:
       ood = bin_indices == 0
-      idx = bin_indices - 1
+      idx = np.where(ood, 0, bin_indices - 1)
       result = np.where(ood, sentinel, rng.uniform(lefts[idx], rights[idx]))
     else:
       result = rng.uniform(lefts[bin_indices], rights[bin_indices])

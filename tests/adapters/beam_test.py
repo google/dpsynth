@@ -380,6 +380,37 @@ class BeamTabularConfigTest(parameterized.TestCase):
     self.assertBetween(len(result.synthetic_data), 450, 550)
     self.assertCountEqual(result.synthetic_data.columns, ['age', 'grade'])
 
+  def test_end_to_end_tuple_rows_matches_dict_rows(self):
+    domains = {
+        'age': domain.NumericalAttribute(min_value=0, max_value=100),
+        'grade': domain.CategoricalAttribute(possible_values=['a', 'b', 'c']),
+        'tag': domain.OpenSetCategoricalAttribute(default_value='<OOD>'),
+    }
+    synth = data_generation_v3.TabularConfig()
+    beam_synth = beam_adapter.BeamTabularConfig(synth).calibrate(
+        domains, epsilon=4.0, delta=1e-5
+    )
+    rng_data = np.random.default_rng(0)
+    tuple_rows = [
+        (
+            float(rng_data.integers(0, 100)),
+            str(rng_data.choice(['a', 'b', 'c'])),
+            str(rng_data.choice(['p', 'q'])),
+        )
+        for _ in range(300)
+    ]
+    dict_rows = [{'age': a, 'grade': g, 'tag': t} for a, g, t in tuple_rows]
+
+    np.random.seed(0)
+    res_tuple = beam_synth(np.random.default_rng(42), _rows_fn(tuple_rows))
+    np.random.seed(0)
+    res_dict = beam_synth(np.random.default_rng(42), _rows_fn(dict_rows))
+
+    np.testing.assert_array_equal(
+        res_tuple.synthetic_data.to_numpy(),
+        res_dict.synthetic_data.to_numpy(),
+    )
+
   @parameterized.named_parameters(
       ('mst', discrete_mechanisms.MSTConfig(pgm_iters=250)),
       (
@@ -428,6 +459,18 @@ class BeamTabularConfigTest(parameterized.TestCase):
     result = beam_synth(np.random.default_rng(0), _rows_fn(rows))
 
     self.assertBetween(len(result.synthetic_data), 298, 302)
+
+  def test_num_rows_overrides_generated_count(self):
+    domains = {'a': domain.CategoricalAttribute(possible_values=['x', 'y'])}
+    synth = data_generation_v3.TabularConfig()
+    beam_synth = beam_adapter.BeamTabularConfig(synth).configure(
+        domains, zcdp_rho=100.0
+    )
+    rows = [{'a': 'x'}, {'a': 'y'}] * 150  # 300 input rows.
+
+    result = beam_synth(np.random.default_rng(0), _rows_fn(rows), num_rows=25)
+
+    self.assertLen(result.synthetic_data, 25)
 
   def test_respects_impossible_combinations(self):
     """Cross-attribute constraints reach the discrete mechanism (F4)."""

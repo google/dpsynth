@@ -174,6 +174,7 @@ class SWIFT(api.CalibratedMechanism):
         data.domain,
         list(initial_measurements),
         extra_cliques=list(selected),  # pyrefly: ignore[bad-argument-type]
+        constraints=constraints,
     )
     synth_future = mbi.extensions.precompile(
         data.domain, list(jtree.nodes), rows
