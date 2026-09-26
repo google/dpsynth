@@ -225,12 +225,21 @@ class DataGenerationV3Test(parameterized.TestCase):
         'A': domain.CategoricalAttribute(possible_values=['a', 'b', 'c']),
     }
     config = TabularConfig()
-    # Passing domain positionally works.
-    calibrated = config.calibrate(domains, epsilon=1.0, delta=1e-5)
+    # Passing domain positionally works via both method and top-level function.
+    with self.assertWarnsRegex(
+        DeprecationWarning,
+        'MechanismConfig.calibrate is deprecated. Use dpsynth.calibrate'
+        ' instead.',
+    ):
+      calibrated = config.calibrate(domains, epsilon=1.0, delta=1e-5)
     self.assertIsNotNone(calibrated)
+    calibrated_top = dpsynth.calibrate(config, domains, epsilon=1.0, delta=1e-5)
+    self.assertEqual(calibrated.dp_event, calibrated_top.dp_event)
     # Passing domain as keyword argument raises TypeError.
     with self.assertRaises(TypeError):
       config.calibrate(domain=domains, epsilon=1.0, delta=1e-5)  # pyrefly: ignore[unexpected-keyword]
+    with self.assertRaises(TypeError):
+      dpsynth.calibrate(config, domain=domains, epsilon=1.0, delta=1e-5)  # pyrefly: ignore[unexpected-keyword]
 
   def test_numerical_only_uses_dp_count(self):
     """Numerical-only domains should allocate a DPGaussianCount for total."""

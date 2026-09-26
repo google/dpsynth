@@ -35,10 +35,11 @@ from __future__ import annotations
 
 import abc
 from collections.abc import Callable
-import functools
 from typing import Any
+import warnings
 
 import dp_accounting
+from dpsynth import _calibration
 
 
 class CalibratedMechanism(abc.ABC):
@@ -163,83 +164,6 @@ class MechanismConfig(abc.ABC):
       A calibrated, runnable mechanism.
     """
 
-  def _find_optimal_rho(
-      self,
-      make_event_fn: Callable[[float], dp_accounting.DpEvent],
-      target_epsilon: float,
-      target_delta: float,
-  ) -> float:
-    """Binary-search for the tightest zCDP rho within an (ε, δ) guarantee.
-
-    Tries both RDP and PLD accountants and returns whichever gives the
-    highest rho (more budget = better utility). Neither accountant
-    universally dominates in tightness.
-
-    Args:
-      make_event_fn: Maps a candidate rho to the mechanism's DpEvent.
-      target_epsilon: Target epsilon for (epsilon, delta)-DP.
-      target_delta: Target delta for (epsilon, delta)-DP.
-
-    Returns:
-      The optimal zCDP rho.
-
-    Raises:
-      UnsupportedEventError: If no accountant supports the DpEvent.
-    """
-    if target_epsilon <= 0:
-      raise ValueError(
-          f'Target epsilon must be positive, got {target_epsilon}.'
-      )
-
-    rho = 0.0
-    # Rho is roughly quadratic in epsilon, so we use epsilon^2 as a guess.
-    init_guess = target_epsilon**2
-    pld_error = None
-    try:
-      # Scale value_discretization_interval with target_epsilon to avoid
-      # the discretization dominating the epsilon at smaller budgets, which
-      # causes calibration to fail.
-      value_discretization_interval = min(1e-4, 1e-1 * target_epsilon)
-      accountant_fn = functools.partial(
-          dp_accounting.pld.PLDAccountant,
-          value_discretization_interval=value_discretization_interval,
-      )
-      rho = dp_accounting.calibrate_dp_mechanism(
-          make_fresh_accountant=accountant_fn,
-          make_event_from_param=make_event_fn,
-          target_epsilon=target_epsilon,
-          target_delta=target_delta,
-          bracket_interval=dp_accounting.LowerEndpointAndGuess(0.0, init_guess),  # pyrefly: ignore[bad-argument-count]
-      )
-    except (dp_accounting.UnsupportedEventError, NotImplementedError) as e:
-      # Okay if one of the accountants fails.
-      pld_error = e
-    rdp_error = None
-    try:
-      # Rho is roughly quadratic in epsilon, so we use epsilon^2 as a guess.
-      rho2 = dp_accounting.calibrate_dp_mechanism(
-          make_fresh_accountant=dp_accounting.rdp.RdpAccountant,
-          make_event_from_param=make_event_fn,
-          target_epsilon=target_epsilon,
-          target_delta=target_delta,
-          bracket_interval=dp_accounting.LowerEndpointAndGuess(0.0, init_guess),  # pyrefly: ignore[bad-argument-count]
-      )
-      rho = max(rho, rho2)
-    except (dp_accounting.UnsupportedEventError, NotImplementedError) as e:
-      # Okay if one of the accountants fails.
-      rdp_error = e
-
-    if rho == 0.0:
-      raise dp_accounting.UnsupportedEventError(
-          'No accountant supports the mechanism:\n'
-          f'  PLDAccountant error: {pld_error}\n'
-          f'  RdpAccountant error: {rdp_error}'
-      )
-
-    # RDP can also be better than PLD in some cases due to looseness in the
-    # handling of certain DpEvents like the ExponentialMechanismDpEvent.
-    return rho
-
   def calibrate(
       self,
       domain=None,
@@ -249,50 +173,25 @@ class MechanismConfig(abc.ABC):
       delta: float,
       poisson_sampling_prob: float = 1.0,
       max_records_per_user: int = 1,
+      accountant_fn: (
+          Callable[[], dp_accounting.PrivacyAccountant] | None
+      ) = None,
   ) -> CalibratedMechanism:
-    """Calibrate the mechanism to a target (epsilon, delta)-DP guarantee.
-
-    Performs a binary search over zCDP budgets, calling ``configure`` at each
-    candidate and inspecting the resulting ``dp_event``. Tries both RDP and
-    PLD accounting and picks whichever gives the tightest result.
-
-    Args:
-      domain: Optional domain specification, forwarded to ``configure()``.
-      epsilon: Target epsilon for (epsilon, delta)-DP.
-      delta: Target delta for (epsilon, delta)-DP.
-      poisson_sampling_prob: If specified, calibrate the mechanism assuming the
-        input data is subsampled with the given probability. The actual sampling
-        is **NOT** handled internally by the calibrated mechanism.
-      max_records_per_user: Assumed upper bound on the number of records a
-        single user contributes. Added noise (and mechanism sensitivity) is
-        scaled by this factor to provide user-level rather than record-level DP;
-        the privacy accounting is unchanged. Soundness relies on the caller
-        enforcing this bound.
-
-    Returns:
-      A calibrated, runnable mechanism.
-    """
-
-    def make_event_fn(rho: float) -> dp_accounting.DpEvent:
-      base = self.configure(
-          domain,
-          zcdp_rho=rho,
-          delta=delta,
-          max_records_per_user=max_records_per_user,
-      ).dp_event
-      sampled = dp_accounting.PoissonSampledDpEvent(poisson_sampling_prob, base)
-      return base if poisson_sampling_prob == 1.0 else sampled
-
-    optimal_rho = self._find_optimal_rho(
-        make_event_fn=make_event_fn,
-        target_epsilon=epsilon,
-        target_delta=delta,
+    """Deprecated. Use ``dpsynth.calibrate`` instead."""
+    warnings.warn(
+        'MechanismConfig.calibrate is deprecated. Use dpsynth.calibrate'
+        ' instead.',
+        DeprecationWarning,
+        stacklevel=2,
     )
-    return self.configure(
+    return _calibration.calibrate(
+        self,
         domain,
-        zcdp_rho=optimal_rho,
+        epsilon=epsilon,
         delta=delta,
+        poisson_sampling_prob=poisson_sampling_prob,
         max_records_per_user=max_records_per_user,
+        accountant_fn=accountant_fn,
     )
 
 

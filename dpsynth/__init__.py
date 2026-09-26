@@ -25,6 +25,7 @@ from dpsynth import local_mode
 from dpsynth import relational
 from dpsynth import reporting
 from dpsynth import serialize
+from dpsynth._calibration import calibrate
 from dpsynth._checkpoint import checkpoint
 from dpsynth.data_generation_v3 import TabularConfig
 from dpsynth.data_generation_v3 import TabularMechanism
@@ -69,6 +70,7 @@ __all__ = [
     'TabularMechanism',
     'TabularSynthesizer',
     'api',
+    'calibrate',
     'checkpoint',
     'discrete_mechanisms',
     'domain',
