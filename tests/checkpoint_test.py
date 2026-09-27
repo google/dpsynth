@@ -16,8 +16,10 @@
 
 from absl.testing import absltest
 from absl.testing import parameterized
+
 import dpsynth
 from dpsynth import _checkpoint
+
 from dpsynth import domain
 from dpsynth.local_mode import initialization
 from etils import epath
@@ -28,11 +30,13 @@ import numpy as np
 class CheckpointTest(parameterized.TestCase):
 
   def test_context_manager_scoping(self):
+
     self.assertIs(dpsynth.checkpoint, _checkpoint.checkpoint)
     self.assertIsNone(_checkpoint.get_active_checkpoint_dir())
 
     temp_dir = self.create_tempdir().full_path
     with _checkpoint.checkpoint(temp_dir) as active_dir:
+
       self.assertIsNotNone(active_dir)
       self.assertEqual(
           _checkpoint.get_active_checkpoint_dir(),
@@ -53,6 +57,7 @@ class CheckpointTest(parameterized.TestCase):
       nonlocal call_count
       call_count += 1
       return 42
+
 
     result1 = _checkpoint.get_or_compute("test_stage", compute)
     result2 = _checkpoint.get_or_compute("test_stage", compute)
@@ -158,6 +163,28 @@ class CheckpointTest(parameterized.TestCase):
         [1.0, 2.0],
     )
     self.assertEqual(loaded_dict["open"].stddev, 0.5)
+
+  def test_mbi_dataset_serialization(self):
+    temp_dir = self.create_tempdir().full_path
+    mbi_domain = mbi.Domain(["a", "b"], [2, 3])
+    dataset = mbi.Dataset(
+        {
+            "a": np.array([0, 1, 0]),
+            "b": np.array([2, 1, 0]),
+        },
+        mbi_domain,
+        weights=np.array([1.0, 2.0, 3.0]),
+    )
+
+    path = epath.Path(temp_dir) / "dataset.npz"
+    mbi.save(dataset, path)
+    self.assertTrue(path.exists())
+    loaded = mbi.load(path)
+
+    self.assertEqual(loaded.domain, mbi_domain)
+    np.testing.assert_array_equal(loaded.data["a"], dataset.data["a"])
+    np.testing.assert_array_equal(loaded.data["b"], dataset.data["b"])
+    np.testing.assert_array_equal(loaded.weights, dataset.weights)
 
 
 if __name__ == "__main__":
