@@ -147,11 +147,11 @@ class NestedTabularMechanism(api.CalibratedMechanism):
     """Runs the mechanism on per-type DataFrames, returns synthetic records."""
     shared_cols = list(self.schema.shared_schema.attributes)
 
-    types = list(self.detail_synths.keys())
+    types = list(self.type_vocabulary)
     data = dict(data)
     for t in types:
-      if t not in data:
-        columns = list(self.schema.per_type_schemas[t].attributes)
+      if t not in data or data[t].empty:
+        columns = shared_cols + list(self.schema.per_type_schemas[t].attributes)
         data[t] = pd.DataFrame(columns=columns)
 
     shared_dfs = [
@@ -167,10 +167,10 @@ class NestedTabularMechanism(api.CalibratedMechanism):
 
     synthetic_details: dict[str, pd.DataFrame] = {}
     detail_results: dict[str, data_generation_v3.DataGenerationResult] = {}
-    for type_name in types:
+    for type_name, synth in self.detail_synths.items():
       detail_cols = list(self.schema.per_type_schemas[type_name].attributes)
-      sub_df = data[type_name][detail_cols]
-      res = self.detail_synths[type_name](rng, sub_df)
+      sub_df = data[type_name].reindex(columns=detail_cols)
+      res = synth(rng, sub_df)
       synthetic_details[type_name] = res.synthetic_data
       detail_results[type_name] = res
 
@@ -299,6 +299,8 @@ class NestedTabularConfig(api.MechanismConfig):
 
     detail_synths = {}
     for type_name, type_schema in schema.per_type_schemas.items():
+      if not type_schema.attributes:
+        continue
       config = data_generation_v3.TabularConfig(
           domains=type_schema.attributes,
           discrete_mechanism=self.detail_mechanism,
