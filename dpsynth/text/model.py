@@ -197,6 +197,40 @@ def format_response(response: str, tokenizer: Any) -> str:
   return f'{response}{eot}'
 
 
+def tokenize_example(
+    example: tuple[str, str],
+    tokenizer: Any,
+    max_seq_length: int,
+) -> dict[str, np.ndarray]:
+  """Tokenizes a single (prompt, response) pair for supervised fine-tuning.
+
+  Prompt tokens are masked out (``loss_mask=0``) so only the response
+  contributes to the training loss.
+
+  Args:
+    example: ``(prompt, response)`` string pair.
+    tokenizer: Gemma tokenizer instance.
+    max_seq_length: Maximum sequence length (including special tokens).
+
+  Returns:
+    Dict with ``'input_tokens'`` and ``'loss_mask'`` (int32 ``[L]``).
+  """
+  prompt, response = example
+  prompt_str = format_prompt(prompt, tokenizer)
+  response_str = format_response(response, tokenizer)
+  prompt_ids = tokenizer.encode(prompt_str, add_bos=True)
+  response_ids = tokenizer.encode(response_str, add_eos=True)
+
+  ids = prompt_ids + response_ids
+  length = min(len(ids), max_seq_length)
+  tokens = np.zeros(max_seq_length, dtype=np.int32)
+  mask = np.zeros(max_seq_length, dtype=np.int32)
+  tokens[:length] = ids[:length]
+  mask[min(len(prompt_ids), length) : length] = 1
+
+  return {'input_tokens': tokens, 'loss_mask': mask}
+
+
 def tokenize_texts(
     examples: Sequence[tuple[str, str]],
     model_variant: GemmaModel,
@@ -221,20 +255,10 @@ def tokenize_texts(
   tokens = np.zeros((len(examples), max_seq_length), dtype=np.int32)
   mask = np.zeros((len(examples), max_seq_length), dtype=np.int32)
 
-  for i, (prompt, response) in enumerate(examples):
-    # Embed turn tags as strings so SentencePiece handles tokenization
-    # boundaries correctly (encoding pieces separately can shift BPE merges).
-    prompt_str = format_prompt(prompt, tokenizer)
-    response_str = format_response(response, tokenizer)
-    prompt_ids = tokenizer.encode(prompt_str, add_bos=True)
-    response_ids = tokenizer.encode(response_str, add_eos=True)
-
-    ids = prompt_ids + response_ids
-    length = min(len(ids), max_seq_length)
-    tokens[i, :length] = ids[:length]
-    # Mask: 0 for prompt, 1 for response.
-    resp_start = min(len(prompt_ids), length)
-    mask[i, resp_start:length] = 1
+  for i, example in enumerate(examples):
+    tokenized = tokenize_example(example, tokenizer, max_seq_length)
+    tokens[i] = tokenized['input_tokens']
+    mask[i] = tokenized['loss_mask']
 
   logging.info(
       'Tokenized %d examples (max_seq_length=%d)',
