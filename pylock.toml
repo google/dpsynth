@@ -1508,7 +1508,7 @@ wheels = [{ url = "https://files.pythonhosted.org/packages/41/09/5b161152e2d90f7
 [[packages]]
 name = "mbi"
 version = "2.0.0"
-vcs = { type = "git", url = "https://github.com/ryan112358/mbi.git", commit-id = "6f7f4b8564a25e57b08da9718f751eb3732e5c01" }
+vcs = { type = "git", url = "https://github.com/ryan112358/mbi.git", commit-id = "e9d10d045247577db2d4742b15de325817b5bc59" }
 
 [[packages]]
 name = "mcp"
