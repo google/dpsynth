@@ -112,6 +112,44 @@ class NestedTabularConfigTest(absltest.TestCase):
     with self.assertRaises(ValueError):
       synth.configure(schema, zcdp_rho=10.0, max_records_per_user=5)
 
+  def test_empty_detail_schema(self):
+    shared_schema = domain.Schema({
+        'platform': domain.CategoricalAttribute(
+            possible_values=['web', 'mobile']
+        ),
+    })
+    per_type_schemas = {
+        'click': domain.Schema({
+            'element': domain.CategoricalAttribute(
+                possible_values=['button', 'link']
+            ),
+        }),
+        'marker': domain.Schema({}),
+    }
+    schema = nested.NestedSchema(
+        shared_schema=shared_schema,
+        per_type_schemas=per_type_schemas,
+    )
+    synth = nested.NestedTabularConfig()
+    calibrated = synth.configure(schema, zcdp_rho=100.0)
+    self.assertNotIn('marker', calibrated.detail_synths)
+    self.assertIn('click', calibrated.detail_synths)
+
+    rng = np.random.default_rng(42)
+    data = {
+        'click': pd.DataFrame({
+            'platform': ['web', 'mobile'] * 10,
+            'element': ['button', 'link'] * 10,
+        }),
+        'marker': pd.DataFrame({
+            'platform': ['web', 'mobile'] * 10,
+        }),
+    }
+    result = calibrated(rng, data)
+    self.assertIn('marker', result.synthetic_data)
+    self.assertIn('platform', result.synthetic_data['marker'].columns)
+    self.assertLen(result.synthetic_data['marker'].columns, 1)
+
 
 def load_tests(loader, tests, ignore):
   del loader, ignore  # Unused.
