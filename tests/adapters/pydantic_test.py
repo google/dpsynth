@@ -238,6 +238,41 @@ class PydanticTest(absltest.TestCase):
     ):
       pydantic_api.infer_domain(ModelWithUnsupportedType)
 
+  def test_infer_domain_with_numerical_bounds(self):
+    class Nested(pydantic.BaseModel):
+      val: float | None = pydantic.Field(description="Signal value")
+
+    class Root(pydantic.BaseModel):
+      steps: Nested
+      hrv: Nested
+
+    schema = pydantic_api.infer_domain(
+        Root,
+        numerical_bounds={
+            "steps.val": (0.0, 50000.0),
+            "hrv.val": (0.0, 300.0),
+        },
+    )
+    self.assertEqual(
+        schema,
+        {
+            "steps.val": domain.NumericalAttribute(
+                min_value=0.0,
+                max_value=50000.0,
+                clip_to_range=False,
+                dtype="float",
+                description="Signal value",
+            ),
+            "hrv.val": domain.NumericalAttribute(
+                min_value=0.0,
+                max_value=300.0,
+                clip_to_range=False,
+                dtype="float",
+                description="Signal value",
+            ),
+        },
+    )
+
   def test_open_set_str_description_and_optional_roundtrip(self):
     class ModelWithDescriptions(pydantic.BaseModel):
       timezone: str | None = pydantic.Field(description="IANA timezone")

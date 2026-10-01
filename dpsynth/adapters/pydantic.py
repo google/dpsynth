@@ -68,6 +68,7 @@ def _get_base_type(annotation: type[Any]) -> tuple[bool, type[Any]]:
 
 def _numerical_attribute_from_field_info(
     field_info: FieldInfo,
+    bounds: tuple[float, float] | None = None,
 ) -> domain.NumericalAttribute:
   """Infers a NumericalAttribute from a pydantic FieldInfo."""
   # NumericalAttribute uses a convention where both the min_value and max_value
@@ -94,6 +95,8 @@ def _numerical_attribute_from_field_info(
           upper_bound = math.nextafter(meta.lt, -math.inf)
       case _:
         continue
+  if bounds is not None:
+    lower_bound, upper_bound = bounds
   if lower_bound is None or upper_bound is None:
     raise ValueError("Must specify lower and upper bounds for numeric fields.")
 
@@ -132,9 +135,11 @@ def _categorical_attribute_from_field_info(
 
 def infer_domain(
     model_cls: type[pydantic.BaseModel],
+    *,
+    numerical_bounds: Mapping[str, tuple[float, float]] | None = None,
 ) -> dict[str, domain.AttributeType]:
   """Infers the domain of a pydantic model."""
-
+  numerical_bounds = numerical_bounds or {}
   attributes: dict[str, domain.AttributeType] = {}
   for name, meta in model_cls.model_fields.items():
     _, base_type = _get_base_type(meta.annotation)  # pyrefly: ignore[bad-argument-type]
@@ -143,10 +148,18 @@ def infer_domain(
     is_model = is_class and issubclass(base_type, pydantic.BaseModel)
     is_literal = typing.get_origin(base_type) is Literal
     if is_model:
-      sub = infer_domain(base_type)
-      attributes.update({f"{name}.{k}": v for k, v in sub.items()})
+      prefix = f"{name}."
+      sub_bounds = {
+          k.removeprefix(prefix): v
+          for k, v in numerical_bounds.items()
+          if k.startswith(prefix)
+      }
+      sub = infer_domain(base_type, numerical_bounds=sub_bounds)
+      attributes.update({f"{prefix}{k}": v for k, v in sub.items()})
     elif base_type in (int, float):
-      attributes[name] = _numerical_attribute_from_field_info(meta)
+      attributes[name] = _numerical_attribute_from_field_info(
+          meta, bounds=numerical_bounds.get(name)
+      )
     elif base_type is str:
       attributes[name] = domain.OpenSetCategoricalAttribute(
           description=meta.description
