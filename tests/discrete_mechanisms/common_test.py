@@ -28,22 +28,6 @@ def assert_serializable(obj):
 
 class CommonTest(absltest.TestCase):
 
-  def test_exponential_mechanism(self):
-    rng = np.random.default_rng(0)
-    scores = np.array([5, 20, -10, 3])
-    idx = common.exponential_mechanism(
-        scores, epsilon=1.0, sensitivity=1.0, rng=rng
-    )
-    self.assertIn(idx, [0, 1, 2, 3])
-    idx = common.exponential_mechanism(
-        scores, epsilon=1.0, sensitivity=1e-8, rng=rng
-    )
-    self.assertEqual(idx, 1)
-    idx = common.exponential_mechanism(
-        scores, epsilon=1e8, sensitivity=1.0, rng=rng
-    )
-    self.assertEqual(idx, 1)
-
   def test_measure_marginals_with_noise(self):
     data = mbi.Dataset.synthetic(mbi.Domain(["a", "b", "c"], [3, 4, 5]), N=1000)
     marginal_queries = [("a",), ("b",), ("c",)]

@@ -26,6 +26,7 @@ import dp_accounting
 from dpsynth import api
 from dpsynth.discrete_mechanisms import accounting
 from dpsynth.discrete_mechanisms import common
+from dpsynth.local_mode import primitives
 import mbi
 import networkx as nx
 import numpy as np
@@ -93,8 +94,11 @@ def dp_maximum_spanning_tree(
   for _ in range(r - 1):
     candidates = [e for e in candidates if not ds.connected(*e)]
     wgts = np.array([weights[e] for e in candidates])
-    idx = common.exponential_mechanism(
-        wgts, exponential_mechanism_epsilon, sensitivity=sensitivity, rng=rng
+    idx = primitives.exponential_mechanism(
+        rng,
+        wgts,
+        epsilon=exponential_mechanism_epsilon,
+        sensitivity=sensitivity,
     )
     e = candidates[idx]
     tree.add_edge(*e)
