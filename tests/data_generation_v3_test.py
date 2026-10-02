@@ -606,6 +606,96 @@ class MaxRecordsPerUserTest(parameterized.TestCase):
       mbi.callbacks.log('test', 'message', sep=' | ')
     self.assertTrue(any('test | message' in output for output in logs.output))
 
+  def test_numerical_categorical_constraint_end_to_end(self):
+    domains = {
+        'age': domain.NumericalAttribute(
+            min_value=0, max_value=100, dtype='int', bin_edges=[10, 17, 50]
+        ),
+        'group': domain.CategoricalAttribute(['child', 'adult']),
+    }
+    c = constraints.Constraint(
+        attribute_names=('age', 'group'),
+        attribute_domains=(domains['age'], domains['group']),
+        possible_combinations=[((0, 17), 'child'), ((17, 100), 'adult')],
+    )
+    schema = domain.Schema(domains, constraints=[c])
+    df = pd.DataFrame({
+        'age': [5, 12, 17, 18, 35, 60] * 20,
+        'group': ['child', 'child', 'child', 'adult', 'adult', 'adult'] * 20,
+    })
+    rng = np.random.default_rng(0)
+    calibrated = TabularConfig(numerical_bins=4).configure(schema, budget=10.0)
+    syn = calibrated(rng, df).synthetic_data
+    self.assertTrue((syn.loc[syn['group'] == 'child', 'age'] <= 17).all())
+    self.assertTrue((syn.loc[syn['group'] == 'adult', 'age'] >= 18).all())
+
+  def test_numerical_none_constraint_end_to_end(self):
+    domains = {
+        'status': domain.CategoricalAttribute(['missing', 'present']),
+        'score': domain.NumericalAttribute(
+            min_value=0.0,
+            max_value=100.0,
+            clip_to_range=False,
+            bin_edges=[25.0, 50.0, 75.0],
+        ),
+    }
+    c = constraints.Constraint(
+        attribute_names=('status', 'score'),
+        attribute_domains=(domains['status'], domains['score']),
+        possible_combinations=[
+            ('missing', None),
+            ('present', (0.0, 100.0)),
+        ],
+    )
+    schema = domain.Schema(domains, constraints=[c])
+    df = pd.DataFrame({
+        'status': ['missing', 'present'] * 50,
+        'score': [np.nan, 42.0] * 50,
+    })
+    rng = np.random.default_rng(0)
+    calibrated = TabularConfig(numerical_bins=4).configure(schema, budget=10.0)
+    syn = calibrated(rng, df).synthetic_data
+    self.assertTrue(syn.loc[syn['status'] == 'missing', 'score'].isna().all())
+    self.assertTrue(syn.loc[syn['status'] == 'present', 'score'].notna().all())
+
+  @parameterized.product(
+      dtype=['int', 'float'],
+      interval_handling=['midpoint', 'sample'],
+  )
+  def test_inequality_constraint_chain_end_to_end(
+      self, dtype, interval_handling
+  ):
+    domains = {
+        col: domain.NumericalAttribute(
+            min_value=0,
+            max_value=100,
+            dtype=dtype,
+            interval_handling=interval_handling,
+            bin_edges=[25, 50, 75],
+        )
+        for col in ('low', 'mid', 'high')
+    }
+    schema = domain.Schema(
+        domains,
+        constraints=[
+            constraints.InequalityConstraint(
+                'low', 'mid', (domains['low'], domains['mid'])
+            ),
+            constraints.InequalityConstraint(
+                'mid', 'high', (domains['mid'], domains['high'])
+            ),
+        ],
+    )
+    rng = np.random.default_rng(0)
+    low = rng.integers(0, 40, size=200)
+    mid = rng.integers(low, 70)
+    high = rng.integers(mid, 101)
+    df = pd.DataFrame({'low': low, 'mid': mid, 'high': high})
+    calibrated = TabularConfig(numerical_bins=4).configure(schema, budget=10.0)
+    syn = calibrated(rng, df).synthetic_data
+    self.assertTrue((syn['low'] <= syn['mid']).all())
+    self.assertTrue((syn['mid'] <= syn['high']).all())
+
 
 if __name__ == '__main__':
   absltest.main()

@@ -138,6 +138,156 @@ class ConstraintToMbiTest(parameterized.TestCase):
     self.assertEqual(vals[0, 1], -np.inf)
     self.assertEqual(vals[2, 0], -np.inf)
 
+  def test_numerical_categorical_possible_combinations(self):
+    age = domain.NumericalAttribute(
+        min_value=0, max_value=100, dtype='int', bin_edges=[10, 17, 50]
+    )
+    status = domain.CategoricalAttribute(['minor', 'adult'])
+    c = constraints.Constraint(
+        attribute_names=('age', 'status'),
+        attribute_domains=(age, status),
+        possible_combinations=[((0, 17), 'minor'), ((17, 100), 'adult')],
+    )
+    mbi_c = c.to_mbi()
+    vals = np.asarray(mbi_c.potential.values)
+    # Bins 0 ([0, 10]) and 1 ((10, 17]) allow 'minor' (0) and forbid 'adult' (1)
+    self.assertEqual(vals[0, 0], 0.0)
+    self.assertEqual(vals[0, 1], -np.inf)
+    self.assertEqual(vals[1, 0], 0.0)
+    self.assertEqual(vals[1, 1], -np.inf)
+    # Bins 2 ((17, 50]) and 3 ((50, 100]) allow 'adult' (1)
+    self.assertEqual(vals[2, 1], 0.0)
+    self.assertEqual(vals[2, 0], -np.inf)
+    self.assertEqual(vals[3, 1], 0.0)
+    self.assertEqual(vals[3, 0], -np.inf)
+
+  def test_numerical_none_possible_combinations(self):
+    status = domain.CategoricalAttribute(['missing', 'valid'])
+    score = domain.NumericalAttribute(
+        min_value=0.0, max_value=100.0, clip_to_range=False, bin_edges=[50.0]
+    )
+    c = constraints.Constraint(
+        attribute_names=('status', 'score'),
+        attribute_domains=(status, score),
+        possible_combinations=[
+            ('missing', None),
+            ('valid', (0.0, 100.0)),
+        ],
+    )
+    mbi_c = c.to_mbi()
+    vals = np.asarray(mbi_c.potential.values)
+    # shape is (2, 3): score has OOD at 0, [0, 50] at 1, (50, 100] at 2.
+    expected = np.full((2, 3), -np.inf)
+    expected[0, 0] = 0.0
+    expected[1, 1] = 0.0
+    expected[1, 2] = 0.0
+    np.testing.assert_array_equal(vals, expected)
+
+  def test_numerical_validation_errors(self):
+    num_no_edges = domain.NumericalAttribute(min_value=0.0, max_value=10.0)
+    num_clipped = domain.NumericalAttribute(
+        min_value=0.0, max_value=10.0, clip_to_range=True, bin_edges=[5.0]
+    )
+    cat = domain.CategoricalAttribute(['a', 'b'])
+    with self.assertRaisesRegex(ValueError, 'requires bin_edges'):
+      constraints.Constraint(
+          attribute_names=('num', 'cat'),
+          attribute_domains=(num_no_edges, cat),
+          possible_combinations=[((0.0, 10.0), 'a')],
+      )
+    with self.assertRaisesRegex(ValueError, 'clip_to_range=False'):
+      constraints.Constraint(
+          attribute_names=('num', 'cat'),
+          attribute_domains=(num_clipped, cat),
+          possible_combinations=[(None, 'a')],
+      )
+    with self.assertRaisesRegex(ValueError, 'must use'):
+      constraints.Constraint(
+          attribute_names=('num', 'cat'),
+          attribute_domains=(num_clipped, cat),
+          possible_combinations=[((-1.0, 5.0), 'a')],
+      )
+    with self.assertRaisesRegex(ValueError, 'must use'):
+      constraints.Constraint(
+          attribute_names=('num', 'cat'),
+          attribute_domains=(num_clipped, cat),
+          possible_combinations=[((0.0, 3.0), 'a')],
+      )
+    with self.assertRaisesRegex(ValueError, 'requires low < high'):
+      constraints.Constraint(
+          attribute_names=('num', 'cat'),
+          attribute_domains=(num_clipped, cat),
+          possible_combinations=[((5.0, 5.0), 'a')],
+      )
+    with self.assertRaisesRegex(ValueError, 'CategoricalAttribute'):
+      constraints.Constraint(
+          attribute_names=('num', 'cat'),
+          attribute_domains=(num_clipped, cat),
+          functional_dependency={(0.0, 5.0): 'a', (5.0, 10.0): 'b'},
+      )
+
+
+class InequalityConstraintTest(parameterized.TestCase):
+
+  def test_validation_errors(self):
+    num_no_edges = domain.NumericalAttribute(min_value=0.0, max_value=10.0)
+    num = domain.NumericalAttribute(
+        min_value=0.0, max_value=10.0, bin_edges=[5.0]
+    )
+    num_other = domain.NumericalAttribute(
+        min_value=0.0, max_value=10.0, bin_edges=[3.0]
+    )
+    cat = domain.CategoricalAttribute(['a', 'b'])
+    with self.assertRaisesRegex(ValueError, 'must be distinct'):
+      constraints.InequalityConstraint('x', 'x', (num, num))
+    with self.assertRaisesRegex(ValueError, 'requires bin_edges'):
+      constraints.InequalityConstraint('x', 'y', (num_no_edges, num))
+    with self.assertRaisesRegex(ValueError, 'matching discretizations'):
+      constraints.InequalityConstraint('x', 'y', (num, num_other))
+    with self.assertRaisesRegex(ValueError, 'NumericalAttribute'):
+      constraints.InequalityConstraint(
+          'x', 'y', (num, cat)  # pyrefly: ignore[bad-argument-type]
+      )
+
+  def test_to_mbi_float_with_shared_and_unaligned_edges(self):
+    low_attr = domain.NumericalAttribute(
+        min_value=0.0, max_value=100.0, bin_edges=[50.0]
+    )
+    high_attr = domain.NumericalAttribute(
+        min_value=0.0, max_value=100.0, bin_edges=[50.0]
+    )
+    c = constraints.InequalityConstraint('low', 'high', (low_attr, high_attr))
+    mbi_c = c.to_mbi()
+    vals = np.asarray(mbi_c.potential.values)
+    # Bin 0 is [0, 50], Bin 1 is (50, 100]. (low=1, high=0) is impossible.
+    expected = np.zeros((2, 2))
+    expected[1, 0] = -np.inf
+    np.testing.assert_array_equal(vals, expected)
+
+  def test_to_mbi_int_with_ood(self):
+    low_attr = domain.NumericalAttribute(
+        min_value=0,
+        max_value=10,
+        dtype='int',
+        clip_to_range=False,
+        bin_edges=[5],
+    )
+    high_attr = domain.NumericalAttribute(
+        min_value=0,
+        max_value=10,
+        dtype='int',
+        clip_to_range=False,
+        bin_edges=[5],
+    )
+    c = constraints.InequalityConstraint('low', 'high', (low_attr, high_attr))
+    mbi_c = c.to_mbi()
+    vals = np.asarray(mbi_c.potential.values)
+    # Index 0 is OOD (unconstrained by inequality).
+    # Index 1 is [0, 5], Index 2 is [6, 10]. Only (low=2, high=1) is invalid.
+    expected = np.zeros((3, 3))
+    expected[2, 1] = -np.inf
+    np.testing.assert_array_equal(vals, expected)
+
 
 if __name__ == '__main__':
   absltest.main()

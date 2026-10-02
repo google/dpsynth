@@ -112,15 +112,34 @@ class ColumnCodec:
     )
 
 
+def _decode_with_inequalities(ids, decoded, inequalities):
+  """Swaps inverted samples within shared bins so lower <= upper holds."""
+  # MBI constraints already forbid strictly inverted bin pairs (bin_low >
+  # bin_high), so inversions only occur when lower and upper land in the same
+  # bin and sample independently. Repeated compare-and-swap sorts shared-bin
+  # samples across inequality chains while preserving bin assignments and OODs.
+  for _ in inequalities:
+    for c in inequalities:
+      lo, hi = c.lower_attribute, c.upper_attribute
+      swap = (ids[lo] == ids[hi]) & (decoded[lo] > decoded[hi])
+      decoded[lo], decoded[hi] = (
+          np.where(swap, decoded[hi], decoded[lo]),
+          np.where(swap, decoded[lo], decoded[hi]),
+      )
+
+
 @dataclasses.dataclass(frozen=True)
 class TabularCodec:
   """Encodes a table to the discrete domain and decodes synthetic output back.
 
   Attributes:
     columns: Per-column codecs, keyed by column name.
+    cross_attribute_constraints: Optional cross-attribute constraints for
+      decode-time tightening.
   """
 
   columns: Mapping[str, ColumnCodec]
+  cross_attribute_constraints: Sequence[constraints.ConstraintType] = ()
 
   @classmethod
   def from_measurements(
@@ -134,7 +153,10 @@ class TabularCodec:
         for col in domains
         if col in results
     }
-    return cls(columns=columns)
+    schema_constraints = (
+        domains.constraints if isinstance(domains, domain.Schema) else ()
+    )
+    return cls(columns=columns, cross_attribute_constraints=schema_constraints)
 
   @property
   def mbi_domain(self) -> mbi.Domain:
@@ -179,12 +201,20 @@ class TabularCodec:
       synthetic: mbi.Dataset,
       rng: np.random.Generator,
       column_order: Sequence[str] | None = None,
+      *,
+      cross_attribute_constraints: Sequence[constraints.ConstraintType] = (),
   ) -> pd.DataFrame:
     """Decodes synthetic discrete data back to a DataFrame."""
     ids = synthetic.to_dict()
     cols = self.columns if column_order is None else column_order
     decoded = {col: self.columns[col].decode(ids[col], rng) for col in cols}
-    return pd.DataFrame(decoded)
+    active = cross_attribute_constraints or self.cross_attribute_constraints
+    inequalities = [
+        c for c in active if isinstance(c, constraints.InequalityConstraint)
+    ]
+    if inequalities:
+      _decode_with_inequalities(ids, decoded, inequalities)
+    return pd.DataFrame({col: decoded[col] for col in cols})
 
 
 @dataclasses.dataclass
@@ -233,7 +263,7 @@ class TabularMechanism(api.CalibratedMechanism):
       rng: np.random.Generator,
       data: pd.DataFrame,
       *,
-      cross_attribute_constraints: Sequence[constraints.Constraint] = (),
+      cross_attribute_constraints: Sequence[constraints.ConstraintType] = (),
       num_rows: int | None = None,
   ) -> DataGenerationResult:
     """Generates differentially private synthetic data.
@@ -289,7 +319,7 @@ class TabularMechanism(api.CalibratedMechanism):
       column_measurements: Mapping[str, initialization.ColumnMeasurement],
       data: mbi.Dataset | mbi.CliqueVector,
       *,
-      cross_attribute_constraints: Sequence[constraints.Constraint] = (),
+      cross_attribute_constraints: Sequence[constraints.ConstraintType] = (),
       num_rows: int | None = None,
   ) -> DataGenerationResult:
     """Runs the discrete mechanism and decoding from initialized measurements."""
@@ -367,7 +397,11 @@ class TabularMechanism(api.CalibratedMechanism):
           synthetic_data=synthetic_discrete,
       )
 
-    synthetic_data = codec.decode(synthetic_discrete, rng)
+    synthetic_data = codec.decode(
+        synthetic_discrete,
+        rng,
+        cross_attribute_constraints=cross_attribute_constraints,
+    )
     logging.info('[DPSynth]: Converted data back to original domain.')
 
     return DataGenerationResult(
@@ -413,7 +447,7 @@ class TabularConfig(api.MechanismConfig):
   numerical_bins: int = 32
   numerical_epsilon_ratio: float = 1.0
   init_budget_fraction: float = 0.1
-  cross_attribute_constraints: Sequence[constraints.Constraint] = ()
+  cross_attribute_constraints: Sequence[constraints.ConstraintType] = ()
   compress_columns: bool = False
   use_jax_for_bincount: bool = False
   use_jax_for_generation: bool = False
