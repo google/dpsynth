@@ -237,6 +237,31 @@ class InitializationTest(absltest.TestCase):
         f' edges={result.bin_edges}',
     )
 
+  def test_numerical_initializer_pinned_edges_float(self):
+    attr = domain.NumericalAttribute(min_value=0.0, max_value=100.0)
+    rng = np.random.default_rng(0)
+    init = initialization.NumericalInitializerConfig(
+        num_partitions=4, pinned_edges=[0.0, 18.5, 65.0]
+    ).configure(attr, zcdp_rho=np.inf)
+    data = np.linspace(0.0, 100.0, 200)
+    result = init(rng, data)
+    for edge in (0.0, 18.5, 65.0):
+      self.assertIn(edge, result.bin_edges)
+    self.assertLen(result.noisy_counts, result.categorical_attribute.size)
+    self.assertAlmostEqual(result.noisy_counts.sum(), len(data))
+
+  def test_numerical_initializer_pinned_edges_int(self):
+    attr = domain.NumericalAttribute(min_value=0, max_value=100, dtype='int')
+    rng = np.random.default_rng(0)
+    init = initialization.NumericalInitializerConfig(
+        num_partitions=4, pinned_edges=[0.0, 17.0]
+    ).configure(attr, zcdp_rho=np.inf)
+    data = np.arange(101)
+    result = init(rng, data)
+    self.assertIn(0.0, result.bin_edges)
+    self.assertIn(17.0, result.bin_edges)
+    self.assertEqual(result.noisy_counts.sum(), 101.0)
+
 
 class CategoricalInitializerTest(absltest.TestCase):
 

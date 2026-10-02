@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 import dataclasses
+import graphlib
 import warnings
 
 from absl import logging
@@ -58,11 +59,17 @@ def create_initializers(
   """
   initializers = {}
   attrs = domains.attributes if isinstance(domains, domain.Schema) else domains
+  pinned: dict[str, set[float]] = {}
+  if isinstance(domains, domain.Schema):
+    for c in domains.constraints:
+      for col, edges in getattr(c, 'pinned_edges', {}).items():
+        pinned.setdefault(col, set()).update(edges)
   for col, attr in attrs.items():
     if isinstance(attr, domain.NumericalAttribute):
       initializers[col] = initialization.NumericalInitializerConfig(
           num_partitions=numerical_bins,
           epsilon_ratio=numerical_epsilon_ratio,
+          pinned_edges=tuple(sorted(pinned.get(col, ()))),
       )
     elif isinstance(attr, domain.CategoricalAttribute):
       initializers[col] = initialization.CategoricalInitializerConfig()
@@ -112,15 +119,78 @@ class ColumnCodec:
     )
 
 
+def _decode_with_inequalities(columns, ids, decoded, inequalities, rng):
+  """Resamples constrained numerical columns so lower <= upper holds row-wise."""
+  # Discretized MBI constraints only forbid strictly inverted bin pairs, so two
+  # attributes in the same or overlapping bins can still decode to inverted
+  # values if undiscretized independently. We tighten each row's bin bounds
+  # across the inequality chain and resample in topological order.
+  sorter = graphlib.TopologicalSorter()
+  for c in inequalities:
+    sorter.add(c.upper_attribute, c.lower_attribute)
+  ordered = list(sorter.static_order())
+
+  # Look up each row's initial [low, high] bin interval for constrained columns.
+  row_low, row_high, row_in_dom = {}, {}, {}
+  for col in ordered:
+    cm = columns[col].column_measurement
+    attr = columns[col].attribute
+    bin_ids = np.asarray(ids[col], dtype=np.intp)
+    full = np.r_[attr.min_value, cm.bin_edges, attr.max_value]
+    bin_lows, bin_highs = full[:-1].copy(), full[1:]
+    if attr.dtype == 'int':
+      bin_lows[1:] += 1.0
+    in_dom = np.ones(len(bin_ids), dtype=bool)
+    row_in_dom[col] = in_dom if attr.clip_to_range else bin_ids > 0
+    idx = bin_ids if attr.clip_to_range else np.maximum(bin_ids - 1, 0)
+    row_low[col], row_high[col] = bin_lows[idx], bin_highs[idx]
+
+  # Propagate upper bounds backward so no lower column exceeds a successor bin.
+  for _ in range(len(inequalities)):
+    for c in reversed(inequalities):
+      lo, hi = c.lower_attribute, c.upper_attribute
+      both = row_in_dom[lo] & row_in_dom[hi]
+      capped = np.minimum(row_high[lo], row_high[hi])
+      row_high[lo] = np.where(both, capped, row_high[lo])
+
+  # Sample in topological order, tightening each column's lower bound to its
+  # already-sampled predecessors and preserving existing sentinels on OOD rows.
+  resolved = {}
+  for col in ordered:
+    attr = columns[col].attribute
+    for c in inequalities:
+      lo = c.lower_attribute
+      if c.upper_attribute == col and lo in resolved:
+        both = row_in_dom[lo] & row_in_dom[col]
+        floored = np.maximum(row_low[col], resolved[lo])
+        row_low[col] = np.where(both, floored, row_low[col])
+    l = row_low[col]
+    r = np.maximum(l, row_high[col])
+    if attr.interval_handling == 'midpoint':
+      val = (l + r) / 2.0
+      val = np.ceil(val - 0.5) if attr.dtype == 'int' else val
+    elif attr.dtype == 'int':
+      low_i, high_i = l.astype(np.int64), r.astype(np.int64) + 1
+      val = rng.integers(low_i, high_i).astype(float)
+    else:
+      val = rng.uniform(l, r)
+    resolved[col] = val
+    val = val.astype(int) if attr.dtype == 'int' else val
+    decoded[col] = np.where(row_in_dom[col], val, decoded[col])
+
+
 @dataclasses.dataclass(frozen=True)
 class TabularCodec:
   """Encodes a table to the discrete domain and decodes synthetic output back.
 
   Attributes:
     columns: Per-column codecs, keyed by column name.
+    cross_attribute_constraints: Optional cross-attribute constraints for
+      decode-time tightening.
   """
 
   columns: Mapping[str, ColumnCodec]
+  cross_attribute_constraints: Sequence[constraints.ConstraintType] = ()
 
   @classmethod
   def from_measurements(
@@ -134,7 +204,10 @@ class TabularCodec:
         for col in domains
         if col in results
     }
-    return cls(columns=columns)
+    schema_constraints = (
+        domains.constraints if isinstance(domains, domain.Schema) else ()
+    )
+    return cls(columns=columns, cross_attribute_constraints=schema_constraints)
 
   @property
   def mbi_domain(self) -> mbi.Domain:
@@ -179,12 +252,20 @@ class TabularCodec:
       synthetic: mbi.Dataset,
       rng: np.random.Generator,
       column_order: Sequence[str] | None = None,
+      *,
+      cross_attribute_constraints: Sequence[constraints.ConstraintType] = (),
   ) -> pd.DataFrame:
     """Decodes synthetic discrete data back to a DataFrame."""
     ids = synthetic.to_dict()
     cols = self.columns if column_order is None else column_order
     decoded = {col: self.columns[col].decode(ids[col], rng) for col in cols}
-    return pd.DataFrame(decoded)
+    active = cross_attribute_constraints or self.cross_attribute_constraints
+    inequalities = [
+        c for c in active if isinstance(c, constraints.InequalityConstraint)
+    ]
+    if inequalities:
+      _decode_with_inequalities(self.columns, ids, decoded, inequalities, rng)
+    return pd.DataFrame({col: decoded[col] for col in cols})
 
 
 @dataclasses.dataclass
@@ -233,7 +314,7 @@ class TabularMechanism(api.CalibratedMechanism):
       rng: np.random.Generator,
       data: pd.DataFrame,
       *,
-      cross_attribute_constraints: Sequence[constraints.Constraint] = (),
+      cross_attribute_constraints: Sequence[constraints.ConstraintType] = (),
       num_rows: int | None = None,
   ) -> DataGenerationResult:
     """Generates differentially private synthetic data.
@@ -289,7 +370,7 @@ class TabularMechanism(api.CalibratedMechanism):
       column_measurements: Mapping[str, initialization.ColumnMeasurement],
       data: mbi.Dataset | mbi.CliqueVector,
       *,
-      cross_attribute_constraints: Sequence[constraints.Constraint] = (),
+      cross_attribute_constraints: Sequence[constraints.ConstraintType] = (),
       num_rows: int | None = None,
   ) -> DataGenerationResult:
     """Runs the discrete mechanism and decoding from initialized measurements."""
@@ -297,7 +378,14 @@ class TabularMechanism(api.CalibratedMechanism):
       cross_attribute_constraints = (
           self.schema.constraints or self.config.cross_attribute_constraints
       )
-    mbi_constraints = tuple(c.to_mbi() for c in cross_attribute_constraints)
+    bin_edges = {
+        col: cm.bin_edges
+        for col, cm in column_measurements.items()
+        if isinstance(cm, initialization.NumericalMeasurement)
+    }
+    mbi_constraints = tuple(
+        c.to_mbi(bin_edges) for c in cross_attribute_constraints
+    )
 
     # Feed one-way column measurements as initial measurements so the mechanism
     # does not re-measure them.
@@ -367,7 +455,11 @@ class TabularMechanism(api.CalibratedMechanism):
           synthetic_data=synthetic_discrete,
       )
 
-    synthetic_data = codec.decode(synthetic_discrete, rng)
+    synthetic_data = codec.decode(
+        synthetic_discrete,
+        rng,
+        cross_attribute_constraints=cross_attribute_constraints,
+    )
     logging.info('[DPSynth]: Converted data back to original domain.')
 
     return DataGenerationResult(
@@ -413,7 +505,7 @@ class TabularConfig(api.MechanismConfig):
   numerical_bins: int = 32
   numerical_epsilon_ratio: float = 1.0
   init_budget_fraction: float = 0.1
-  cross_attribute_constraints: Sequence[constraints.Constraint] = ()
+  cross_attribute_constraints: Sequence[constraints.ConstraintType] = ()
   compress_columns: bool = False
   use_jax_for_bincount: bool = False
   use_jax_for_generation: bool = False
