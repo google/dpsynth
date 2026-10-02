@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 import dataclasses
 import math
 
@@ -125,12 +126,15 @@ class NumericalInitializerConfig(api.MechanismConfig):
     quantile_budget_fraction: Fraction of the zCDP budget allocated to the
       quantile tree; the remainder is allocated to the Gaussian mechanism for
       measuring discretized bin counts. Defaults to 0.5.
+    pinned_edges: Public inner bin edges to include alongside the DP quantile
+      edges (e.g. from cross-attribute constraints).
   """
 
   num_partitions: int
   max_grid_size: int = 10_000_000
   epsilon_ratio: float = 1.0
   quantile_budget_fraction: float = 0.5
+  pinned_edges: Sequence[float] = ()
 
   def __post_init__(self):
     if self.max_grid_size < 2:
@@ -247,6 +251,12 @@ class NumericalInitializer(api.CalibratedMechanism):
     lower, upper, _ = self.grid_spec
     delta = (upper - lower) / max(1, np.asarray(counts).size - 1)
     raw_edges = [lower + i * delta for i in indices]
+    if self.config.pinned_edges:
+      pinned = np.asarray(self.config.pinned_edges, dtype=float)
+      grid_idx = encode_to_grid(pinned, lower, upper, delta, self.attribute)
+      pinned_idx = set(grid_idx)
+      kept = [lower + i * delta for i in indices if i not in pinned_idx]
+      raw_edges = kept + pinned.tolist()
 
     cm = edges_to_column_measurement(
         raw_edges=raw_edges,

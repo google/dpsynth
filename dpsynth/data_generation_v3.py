@@ -58,11 +58,17 @@ def create_initializers(
   """
   initializers = {}
   attrs = domains.attributes if isinstance(domains, domain.Schema) else domains
+  pinned: dict[str, set[float]] = {}
+  if isinstance(domains, domain.Schema):
+    for c in domains.constraints:
+      for col, edges in getattr(c, 'pinned_edges', {}).items():
+        pinned.setdefault(col, set()).update(edges)
   for col, attr in attrs.items():
     if isinstance(attr, domain.NumericalAttribute):
       initializers[col] = initialization.NumericalInitializerConfig(
           num_partitions=numerical_bins,
           epsilon_ratio=numerical_epsilon_ratio,
+          pinned_edges=tuple(sorted(pinned.get(col, ()))),
       )
     elif isinstance(attr, domain.CategoricalAttribute):
       initializers[col] = initialization.CategoricalInitializerConfig()
@@ -297,7 +303,14 @@ class TabularMechanism(api.CalibratedMechanism):
       cross_attribute_constraints = (
           self.schema.constraints or self.config.cross_attribute_constraints
       )
-    mbi_constraints = tuple(c.to_mbi() for c in cross_attribute_constraints)
+    bin_edges = {
+        col: cm.bin_edges
+        for col, cm in column_measurements.items()
+        if isinstance(cm, initialization.NumericalMeasurement)
+    }
+    mbi_constraints = tuple(
+        c.to_mbi(bin_edges) for c in cross_attribute_constraints
+    )
 
     # Feed one-way column measurements as initial measurements so the mechanism
     # does not re-measure them.
