@@ -131,6 +131,24 @@ class NestedTabularMechanism(api.CalibratedMechanism):
   def dp_event(self) -> dp_accounting.DpEvent:
     """Returns the composed DpEvent for the full mechanism."""
     # supports it, instead of falling back to a ZCDpEvent.
+    #
+    # Accounting note (record-level and group privacy):
+    # - For group_size = 1, each record belongs to a single type table, so the
+    #   detail mechanisms run on disjoint partitions (parallel composition) and
+    #   ZCDpEvent(detail_rho) (+ EpsilonDeltaDpEvent(0, detail_delta)) is a
+    #   sound upper bound on any single detail_synths[t].dp_event.
+    # - For group_size = k > 1 with detail_delta == 0 (pure zCDP), a user may
+    #   split k records across types as sum_t k_t <= k. Because detail_synths[t]
+    #   use independent randomness, this composes sequentially across types with
+    #   total zCDP sum_t (k_t^2 * detail_rho) <= (sum_t k_t)^2 * detail_rho
+    #   <= k^2 * detail_rho (worst case: all k records in one type). Thus
+    #   with_group_size(ZCDpEvent(detail_rho), k) = ZCDpEvent(detail_rho * k^2)
+    #   remains sound under group privacy.
+    # - Caveat: when delta > 0, configure() sets detail_delta > 0 even if no
+    #   detail table has open-set columns, which attaches EpsilonDeltaDpEvent
+    #   and causes with_group_size(..., k > 1) to raise UnsupportedEventError
+    #   (and if detail_delta > 0 were ever lifted to k > 1, splitting k records
+    #   across k types would incur up to k * detail_delta failure probability).
     events = [self.shared_synth.dp_event]
     if self.detail_rho is not None and self.detail_rho > 0:
       base = dp_accounting.ZCDpEvent(self.detail_rho)
@@ -234,17 +252,6 @@ class NestedTabularConfig(api.MechanismConfig):
     shared_mechanism: Discrete mechanism for the shared model.
     detail_mechanism: Discrete mechanism for per-type models.
     init_budget_fraction: Within each TabularConfig, fraction for initializers.
-    _allow_multiple_records_per_user: If True, bypass the check that
-      max_records_per_user == 1 in configure / calibrate. The current privacy
-      analysis relies on parallel composition, and hence assumes each user
-      contributes at most 1 record overall.  If users can contribute multiple
-      records to different type tables, that analysis no longer applies
-      directly. We conjecture by plumbing through the same max_records_per_user
-      parameter to all sub-mechanisms, the accounting should still go through
-      the same, but we do not yet have a formal proof for this. To unblock
-      development and evaluation under this conjecture, we allow users to bypass
-      this check, with this explicit warning.  This field will be removed once
-      the conjecture is proven or disproven.
   """
 
   shared_budget_fraction: float = 0.5
@@ -255,7 +262,6 @@ class NestedTabularConfig(api.MechanismConfig):
       default_factory=discrete_mechanisms.MSTConfig
   )
   init_budget_fraction: float = 0.1
-  _allow_multiple_records_per_user: bool = False
 
   def configure(  # pyrefly: ignore[bad-override]
       self,
@@ -263,17 +269,10 @@ class NestedTabularConfig(api.MechanismConfig):
       *,
       zcdp_rho: float,
       delta: float = 0.0,
-      max_records_per_user: int = 1,
   ) -> NestedTabularMechanism:
     """Returns a configured NestedTabularMechanism with the given zCDP budget."""
     if not isinstance(schema, NestedSchema):
       raise TypeError(f"Expected NestedSchema, got {type(schema).__name__}")
-    if not self._allow_multiple_records_per_user and max_records_per_user != 1:
-      raise ValueError(
-          "max_records_per_user must be 1 under parallel composition across"
-          f" detail models, got {max_records_per_user}. Set bypass_check=True"
-          " on NestedTabularConfig to bypass this check."
-      )
 
     # Additive zCDP split; each type gets full rho_detail
     # (parallel composition over disjoint type partitions).
@@ -294,7 +293,6 @@ class NestedTabularConfig(api.MechanismConfig):
     shared_synth = shared_config.configure(
         zcdp_rho=rho_shared,
         delta=delta_shared,
-        max_records_per_user=max_records_per_user,
     )
 
     detail_synths = {}
@@ -309,7 +307,6 @@ class NestedTabularConfig(api.MechanismConfig):
       detail_synths[type_name] = config.configure(
           zcdp_rho=rho_detail,
           delta=delta_detail,
-          max_records_per_user=max_records_per_user,
       )
 
     return NestedTabularMechanism(

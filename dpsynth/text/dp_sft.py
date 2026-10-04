@@ -87,7 +87,7 @@ class DPFineTuner(api.DPMechanism):
   )
   performance_flags: execution_plan.PerformanceFlags | None = None
 
-  def configure(self, _=None, *, zcdp_rho, delta=0.0, max_records_per_user=1):
+  def configure(self, _=None, *, zcdp_rho, delta=0.0):
     """Returns a copy with noise_multiplier calibrated to the zCDP budget.
 
     Sets the noise_multiplier to satisfy ``zcdp_rho`` under a **loose upper
@@ -105,14 +105,11 @@ class DPFineTuner(api.DPMechanism):
     Args:
       zcdp_rho: The zCDP privacy budget (rho).
       delta: Unused. Accepted for interface compatibility.
-      max_records_per_user: Maximum number of records per user.
 
     Returns:
       A new ``DPFineTuner`` with calibrated
       ``mechanism_config.noise_multiplier``.
     """
-    assert max_records_per_user == 1, 'max_records_per_user > 1 not supported.'
-
     num_bands = len(self.mechanism_config.strategy)  # pyrefly: ignore[bad-argument-type]
     rounds = math.ceil(self.mechanism_config.iterations / num_bands)
     noise_multiplier = math.sqrt(rounds / (2.0 * zcdp_rho))

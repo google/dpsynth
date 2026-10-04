@@ -205,15 +205,12 @@ class TabularMechanism(api.CalibratedMechanism):
     schema: The dataset schema and constraints.
     base_mechanism: The calibrated discrete mechanism.
     initializers: Per-column calibrated initializers.
-    max_records_per_user: Assumed upper bound on the number of records a single
-      user contributes.
   """
 
   config: TabularConfig
   schema: domain.Schema
   base_mechanism: discrete_mechanisms.CalibratedMechanism
   initializers: dict[str, api.CalibratedMechanism]
-  max_records_per_user: int = 1
 
   @property
   def dp_event(self) -> dp_accounting.DpEvent:
@@ -449,7 +446,6 @@ class TabularConfig(api.MechanismConfig):
       *,
       zcdp_rho: float,
       delta: float = 0.0,
-      max_records_per_user: int = 1,
   ) -> TabularMechanism:
     """Returns a calibrated mechanism configured with the given privacy budget.
 
@@ -474,12 +470,6 @@ class TabularConfig(api.MechanismConfig):
         (``init_budget_fraction``) is allocated to partition selection for
         open-set columns. Must be positive when open-set categorical attributes
         are present.
-      max_records_per_user: Assumed upper bound on the number of records a
-        single user contributes. Values greater than 1 scale the added noise
-        (and mechanism sensitivity) to provide user-level rather than
-        record-level DP; the privacy accounting is unchanged. This bound is NOT
-        enforced -- soundness relies on the caller guaranteeing it via
-        preprocessing.
 
     Returns:
       A calibrated TabularMechanism ready to be run on tabular data.
@@ -503,7 +493,6 @@ class TabularConfig(api.MechanismConfig):
           ' construction time.'
       )
 
-    api.validate_max_records_per_user(max_records_per_user)
     per_col_deltas = self._compute_per_col_deltas(schema, delta)
 
     inits = create_initializers(
@@ -520,13 +509,11 @@ class TabularConfig(api.MechanismConfig):
             schema[col],
             zcdp_rho=per_col_rho,
             delta=per_col_deltas[col],
-            max_records_per_user=max_records_per_user,
         )
         for col, init in inits.items()
     }
 
     calibrated_discrete = self.discrete_mechanism.configure(
-        max_records_per_user=max_records_per_user,
         zcdp_rho=discrete_rho,
     )
 
@@ -535,7 +522,6 @@ class TabularConfig(api.MechanismConfig):
         schema=schema,
         base_mechanism=calibrated_discrete,
         initializers=calibrated_inits,
-        max_records_per_user=max_records_per_user,
     )
 
 

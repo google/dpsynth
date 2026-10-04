@@ -143,11 +143,8 @@ class NumericalInitializerConfig(api.MechanismConfig):
           f' {self.quantile_budget_fraction}.'
       )
 
-  def configure(
-      self, attribute=None, *, zcdp_rho, delta=0, max_records_per_user=1
-  ):
+  def configure(self, attribute=None, *, zcdp_rho, delta=0):
     assert attribute is not None
-    api.validate_max_records_per_user(max_records_per_user)
 
     levels = int(np.log2(self.num_partitions))
     if 2**levels != self.num_partitions:
@@ -165,7 +162,6 @@ class NumericalInitializerConfig(api.MechanismConfig):
         attribute=attribute,
         epsilon_levels=tuple(eps.tolist()),
         sigma=sigma,
-        max_records_per_user=max_records_per_user,
     )
 
 
@@ -177,11 +173,6 @@ class NumericalInitializer(api.CalibratedMechanism):
   attribute: domain.NumericalAttribute
   epsilon_levels: tuple[float, ...]
   sigma: float
-  max_records_per_user: int = 1
-
-  def __post_init__(self):
-    if self.max_records_per_user != 1:
-      raise NotImplementedError('max_records_per_user != 1 not yet supported.')
 
   @property
   def _num_levels(self) -> int:
@@ -242,7 +233,6 @@ class NumericalInitializer(api.CalibratedMechanism):
         counts,
         epsilon_levels=np.asarray(self.epsilon_levels),
         jitter_strategy=jitter_strategy,
-        max_records_per_user=self.max_records_per_user,
     )
     lower, upper, _ = self.grid_spec
     delta = (upper - lower) / max(1, np.asarray(counts).size - 1)
@@ -259,12 +249,9 @@ class NumericalInitializer(api.CalibratedMechanism):
       bin_counts = in_domain_counts
     else:
       bin_counts = np.r_[ood_count, in_domain_counts]
-    noisy = primitives.add_gaussian_noise(
-        rng, bin_counts, self.sigma, self.max_records_per_user
-    )
-    stddev = self.max_records_per_user * self.sigma
+    noisy = primitives.add_gaussian_noise(rng, bin_counts, self.sigma)
     return dataclasses.replace(
-        cm, noisy_counts=np.asarray(noisy), stddev=stddev
+        cm, noisy_counts=np.asarray(noisy), stddev=self.sigma
     )
 
 
@@ -296,16 +283,12 @@ def edges_to_column_measurement(
 class CategoricalInitializerConfig(api.MechanismConfig):
   """Configuration for initializing categorical attributes."""
 
-  def configure(
-      self, attribute=None, *, zcdp_rho, delta=0, max_records_per_user=1
-  ):
+  def configure(self, attribute=None, *, zcdp_rho, delta=0):
     assert attribute is not None
-    api.validate_max_records_per_user(max_records_per_user)
     return CategoricalInitializer(
         config=self,
         attribute=attribute,
         sigma=math.sqrt(0.5 / zcdp_rho),
-        max_records_per_user=max_records_per_user,
     )
 
 
@@ -316,7 +299,6 @@ class CategoricalInitializer(api.CalibratedMechanism):
   config: CategoricalInitializerConfig
   attribute: domain.CategoricalAttribute
   sigma: float
-  max_records_per_user: int = 1
 
   @property
   def dp_event(self) -> dp_accounting.DpEvent:
@@ -335,12 +317,9 @@ class CategoricalInitializer(api.CalibratedMechanism):
       self, rng: np.random.Generator, counts: np.ndarray
   ) -> CategoricalMeasurement:
     """Returns a CategoricalMeasurement from pre-aggregated counts."""
-    noisy = primitives.add_gaussian_noise(
-        rng, counts, self.sigma, self.max_records_per_user
-    )
-    stddev = self.max_records_per_user * self.sigma
+    noisy = primitives.add_gaussian_noise(rng, counts, self.sigma)
     return CategoricalMeasurement(
-        self.attribute, noisy_counts=np.asarray(noisy), stddev=stddev
+        self.attribute, noisy_counts=np.asarray(noisy), stddev=self.sigma
     )
 
 
@@ -350,15 +329,11 @@ class OpenSetInitializerConfig(api.MechanismConfig):
 
   min_count: int = 1
 
-  def configure(
-      self, attribute=None, *, zcdp_rho, delta=0, max_records_per_user=1
-  ):
+  def configure(self, attribute=None, *, zcdp_rho, delta=0):
     assert attribute is not None
-    api.validate_max_records_per_user(max_records_per_user)
     return OpenSetInitializer(
         config=self,
         attribute=attribute,
-        max_records_per_user=max_records_per_user,
         sigma=math.sqrt(0.5 / zcdp_rho),
         delta=delta,
     )
@@ -370,7 +345,6 @@ class OpenSetInitializer(api.CalibratedMechanism):
 
   config: OpenSetInitializerConfig
   attribute: domain.OpenSetCategoricalAttribute
-  max_records_per_user: int = 1
   sigma: float
   delta: float
 
@@ -401,13 +375,11 @@ class OpenSetInitializer(api.CalibratedMechanism):
     eligible_idx = np.where(above_min)[0]
     eligible_counts = counts[above_min].astype(float)
 
-    noisy = primitives.add_gaussian_noise(
-        rng, eligible_counts, self.sigma, self.max_records_per_user
-    )
+    noisy = primitives.add_gaussian_noise(rng, eligible_counts, self.sigma)
     noisy_counts = np.asarray(noisy)
 
-    stddev = self.max_records_per_user * self.sigma
-    base = float(self.max_records_per_user + self.config.min_count - 1)
+    stddev = self.sigma
+    base = float(self.config.min_count)
     threshold = base + stddev * scipy.stats.norm.ppf(1.0 - self.delta)
     passed = noisy_counts >= threshold
 
