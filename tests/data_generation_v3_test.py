@@ -494,14 +494,6 @@ class MaxRecordsPerUserTest(parameterized.TestCase):
     calibrated = config.configure(schema, zcdp_rho=100.0)
     self.assertEqual(calibrated.schema.constraints, (mock_constraint,))
 
-  def test_tabular_synthesizer_deprecated(self):
-    with self.assertWarnsRegex(
-        DeprecationWarning,
-        'TabularSynthesizer is deprecated. Use TabularConfig for configuration '
-        'and TabularMechanism for the calibrated runnable mechanism.',
-    ):
-      data_generation_v3.TabularSynthesizer(domains={})
-
   def test_compress_columns(self):
     domains = {
         'A': domain.CategoricalAttribute(

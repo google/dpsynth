@@ -29,7 +29,6 @@ from dpsynth._calibration import calibrate
 from dpsynth._checkpoint import checkpoint
 from dpsynth.data_generation_v3 import TabularConfig
 from dpsynth.data_generation_v3 import TabularMechanism
-from dpsynth.data_generation_v3 import TabularSynthesizer
 from dpsynth.discrete_mechanisms.discrete import DiscreteConfig
 from dpsynth.discrete_mechanisms.discrete import DiscreteMechanism
 from dpsynth.domain import CategoricalAttribute
@@ -68,7 +67,6 @@ __all__ = [
     'Schema',
     'TabularConfig',
     'TabularMechanism',
-    'TabularSynthesizer',
     'api',
     'calibrate',
     'checkpoint',

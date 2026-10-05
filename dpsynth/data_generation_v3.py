@@ -18,7 +18,6 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 import dataclasses
-import warnings
 
 from absl import logging
 import dp_accounting
@@ -536,17 +535,4 @@ class TabularConfig(api.MechanismConfig):
         base_mechanism=calibrated_discrete,
         initializers=calibrated_inits,
         max_records_per_user=max_records_per_user,
-    )
-
-
-@dataclasses.dataclass(frozen=True, kw_only=True)
-class TabularSynthesizer(TabularConfig):
-  """Deprecated. Use TabularConfig and TabularMechanism instead."""
-
-  def __post_init__(self):
-    warnings.warn(
-        'TabularSynthesizer is deprecated. Use TabularConfig for configuration '
-        'and TabularMechanism for the calibrated runnable mechanism.',
-        DeprecationWarning,
-        stacklevel=2,
     )
