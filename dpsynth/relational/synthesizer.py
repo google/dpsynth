@@ -311,16 +311,16 @@ def _encode_and_compress_tables(
     raw_mappings = dm_common.compression_mappings(
         one_ways, compress_columns=compress_columns
     )
-    mappings: dict[str, np.ndarray] = {
+    mappings: dict[str | int, np.ndarray] = {
         str(col): arr for col, arr in raw_mappings.items()
     }
     if mappings:
-      dataset = dataset.compress(mappings)
-      one_ways = [m.compress(mappings, dataset.domain) for m in one_ways]
+      dataset = dataset.compress(mappings)  # pytype: disable=wrong-arg-types  # pylint: disable=g-blanket-type-suppression
+      one_ways = [m.compress(mappings, dataset.domain) for m in one_ways]  # pytype: disable=wrong-arg-types  # pylint: disable=g-blanket-type-suppression
 
     codecs[table_name] = codec
     compressed_datasets[table_name] = dataset
-    compression_mappings[table_name] = mappings
+    compression_mappings[table_name] = mappings  # pytype: disable=unsupported-operation  # pylint: disable=g-blanket-type-suppression
     one_ways_by_table[table_name] = one_ways
 
   return codecs, compressed_datasets, compression_mappings, one_ways_by_table
@@ -827,8 +827,10 @@ def _decompress_synthetic_datasets(
   for table_name, dataset in synth_datasets.items():
     mappings = compression_mappings.get(table_name, {})
     if mappings:
-      raw_mappings = {str(col): arr for col, arr in mappings.items()}
-      decompressed[table_name] = dataset.decompress(raw_mappings)
+      raw_mappings: dict[str | int, np.ndarray] = {
+          str(col): arr for col, arr in mappings.items()
+      }
+      decompressed[table_name] = dataset.decompress(raw_mappings)  # pytype: disable=wrong-arg-types  # pylint: disable=g-blanket-type-suppression
     else:
       decompressed[table_name] = dataset
   return decompressed
