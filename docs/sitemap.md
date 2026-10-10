@@ -33,6 +33,7 @@
     *   [1. `CategoricalAttribute` (Known Finite Domain)](data_and_terminology.md#1-categoricalattribute-known-finite-domain)
     *   [2. `OpenSetCategoricalAttribute` (Unknown Categorical Domain)](data_and_terminology.md#2-opensetcategoricalattribute-unknown-categorical-domain)
     *   [3. `NumericalAttribute` (Continuous or Integer Range)](data_and_terminology.md#3-numericalattribute-continuous-or-integer-range)
+    *   [4. `FreeFormTextAttribute` (Unstructured Text)](data_and_terminology.md#4-freeformtextattribute-unstructured-text)
 *   [Writing a `domain.yaml` Specification](data_and_terminology.md#writing-a-domainyaml-specification)
     *   [YAML Syntax & Parsing Rules](data_and_terminology.md#yaml-syntax--parsing-rules)
     *   [Example: `adult_domain.yaml`](data_and_terminology.md#example-adult_domainyaml)

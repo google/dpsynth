@@ -1,38 +1,50 @@
-# DPSynth: Differentially Private Synthetic Tabular Data
+# DPSynth: Differentially Private Synthetic Data Generation
 
 <!-- disableFinding(LINK_RELATIVE_G3DOC) -->
 
 [TOC]
 
 DPSynth is a comprehensive library and toolset for generating **Differentially
-Private (DP) synthetic tabular data**. Given a sensitive dataset of records
-defined with respect to a tabular schema (such as CSV, Protobuf, TFRecord, or
-SQL tables), DPSynth generates a synthetic version of the dataset. The synthetic
-data preserves the multi-dimensional structure, relational correlations, and
-statistical properties of the original data while rigorously satisfying
-mathematical differential privacy (`(epsilon, delta)-DP`).
+Private (DP) synthetic data** across a wide range of data modalities (including
+discrete, tabular, relational, nested, sequence, and free-form text data). Given
+a sensitive dataset of records, DPSynth generates a synthetic version of the
+dataset that preserves the multi-dimensional structure, relational
+correlations, and statistical properties of the original data while rigorously
+satisfying mathematical differential privacy (`(epsilon, delta)-DP`).
 
 --------------------------------------------------------------------------------
 
 ## Why DPSynth?
 
-In modern data science, sharing sensitive tabular data for analytics, testing,
-or model training presents significant privacy risks. Standard anonymization
+In modern data science, sharing sensitive datasets for analytics, testing, or
+model training presents significant privacy risks. Standard anonymization
 techniques (like masking or `k`-anonymity) are notoriously vulnerable to linkage
 attacks.
 
-DPSynth solves this by employing state-of-the-art Differential Privacy
-mechanisms (including **AIM**, **MST**, and **SWIFT**) paired with Graphical
-Model (Private-PGM) inference. The resulting synthetic records can be freely
-shared, analyzed, or published without compromising the privacy of any
-individual present in the source data.
+DPSynth solves this by providing a unified library of Differential Privacy
+mechanisms spanning discrete and graphical model synthesis (including **AIM**,
+**MST**, and **SWIFT** paired with Private-PGM inference), relational and
+nested synthesis, and LLM-based text and mixed-modality generation. The
+resulting synthetic records can be freely shared, analyzed, or published
+without compromising the privacy of any individual present in the source data.
 
 --------------------------------------------------------------------------------
 
 ## Core APIs and Execution Models
 
-DPSynth provides two unified execution models designed to scale from small local
-dataframes to massive distributed datasets across computing clusters:
+All mechanisms in DPSynth implement the lightweight
+[`MechanismConfig` / `CalibratedMechanism` API](mechanism_api.md). While the
+library supports a wide range of modalities, they are currently at different
+levels of maturity: basic tabular and discrete data are the most mature and
+well-tested, whereas newer modalities in experimental and research modules are
+still being developed, stress-tested, and improved. We expect the overall APIs
+(`MechanismConfig`, `CalibratedMechanism`) to remain mostly unchanged, and
+future changes should mostly (though not guaranteed) impact internal
+implementations rather than the public-facing APIs.
+
+For tabular and discrete synthesis specifically, DPSynth provides two unified
+execution models designed to scale from small local dataframes to massive
+distributed datasets across computing clusters:
 
 ```
                ┌────────────────────────────────────────┐
