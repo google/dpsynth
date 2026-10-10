@@ -119,6 +119,10 @@ contributor expanding the library, explore the documentation below:
 *   **[Mechanism API Architecture](mechanism_api.md)**: Design decisions,
     the 3-step pipeline, configure vs. calibrate semantics, and tight
     privacy accounting.
+*   **[Privacy Accounting Philosophy](accounting_philosophy.md)**:
+    `MechanismConfig` vs. stateless primitives, self-contained mechanisms,
+    adaptivity levels, record vs. user-level group privacy, and fine-grained
+    reporting via `PrivacyReport`.
 
 --------------------------------------------------------------------------------
 
@@ -171,6 +175,7 @@ contributors_guide
 :hidden:
 
 mechanism_api
+accounting_philosophy
 ```
 
 ```{toctree}
