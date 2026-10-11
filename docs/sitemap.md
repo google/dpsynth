@@ -22,6 +22,23 @@
 --------------------------------------------------------------------------------
 
 <details>
+<summary>📁 <a href="specifying_domains.md">Specifying Attribute Domains</a></summary>
+
+*   [Why Domains Must Be Specified Up Front](specifying_domains.md#why-domains-must-be-specified-up-front)
+*   [Supported Attribute Types](specifying_domains.md#supported-attribute-types)
+    *   [Out-of-Domain Handling](specifying_domains.md#out-of-domain-handling)
+*   [Specifying Domains in the DPSynth Language](specifying_domains.md#specifying-domains-in-the-dpsynth-language)
+*   [Deriving Domains from Structured Containers](specifying_domains.md#deriving-domains-from-structured-containers)
+    *   [1. From Pydantic Models (`dpsynth.adapters.pydantic`)](specifying_domains.md#1-from-pydantic-models-dpsynthadapterspydantic)
+    *   [2. From Protocol Buffers (`dpsynth.adapters.protobuf`)](specifying_domains.md#2-from-protocol-buffers-dpsynthadaptersprotobuf)
+    *   [3. From Pandas Dtypes (`dpsynth.adapters.pandas`)](specifying_domains.md#3-from-pandas-dtypes-dpsynthadapterspandas)
+    *   [Customizing Inferred Domains](specifying_domains.md#customizing-inferred-domains)
+
+</details>
+
+--------------------------------------------------------------------------------
+
+<details>
 <summary>📁 <a href="data_and_terminology.md">Data Model and Terminology</a></summary>
 
 *   [Core Terminology](data_and_terminology.md#core-terminology)
