@@ -48,6 +48,8 @@ argument to :class:`~dpsynth.TabularConfig`.
    NumericalAttribute
    OpenSetCategoricalAttribute
    FreeFormTextAttribute
+   Schema
+   Workload
 
 ----
 
