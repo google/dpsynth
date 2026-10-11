@@ -57,6 +57,33 @@ def _resolve_type(type_name: str) -> type[Any] | None:
   return None
 
 
+def _unstructure_workload(obj: domain.Workload) -> dict[str, Any]:
+  cliques = [list(cl) for cl in obj.keys()]
+  weights = list(obj.values())
+  result: dict[str, Any] = {'type': 'Workload', 'cliques': cliques}
+  if any(w != 1.0 for w in weights):
+    result['weights'] = weights
+  return result
+
+
+def _structure_workload(data: Any, _: Any) -> domain.Workload:
+  """Structures a YAML representation into a domain.Workload."""
+  if isinstance(data, domain.Workload):
+    return data
+  if isinstance(data, Sequence) and not isinstance(data, str):
+    return domain.Workload(data)
+  if isinstance(data, Mapping) and 'cliques' in data:
+    cliques = data['cliques']
+    weights = data.get('weights')
+    if weights is not None:
+      if len(cliques) != len(weights):
+        raise ValueError('Workload cliques and weights must have same length.')
+      weighted = {tuple(cl): float(w) for cl, w in zip(cliques, weights)}
+      return domain.Workload(weighted)
+    return domain.Workload(cliques)
+  raise ValueError(f'Cannot structure {data!r} as Workload.')
+
+
 def _unstructure_dataclass(cl: type[Any], conv: cattrs.Converter) -> Any:
   base_fn = cattrs.gen.make_dict_unstructure_fn(
       cl, conv, _cattrs_omit_if_default=True
@@ -67,6 +94,8 @@ def _unstructure_dataclass(cl: type[Any], conv: cattrs.Converter) -> Any:
 def _structure_polymorphic(data: Any, _: Any, conv: cattrs.Converter) -> Any:
   if isinstance(data, Mapping) and 'type' in data:
     cls = _resolve_type(data['type'])
+    if cls is domain.Workload:
+      return _structure_workload(data, cls)
     if cls is not None:
       return cattrs.gen.make_dict_structure_fn(cls, conv)(data, cls)
     raise ValueError(f"Unknown type: '{data['type']}'")
@@ -83,6 +112,7 @@ def _make_converter() -> cattrs.Converter:
   conv.register_unstructure_hook_factory(
       dataclasses.is_dataclass, lambda cl: _unstructure_dataclass(cl, conv)
   )
+  conv.register_unstructure_hook(domain.Workload, _unstructure_workload)
   conv.register_unstructure_hook(
       api.MechanismConfig,
       lambda obj: _unstructure_dataclass(obj.__class__, conv)(obj),
@@ -105,6 +135,7 @@ def _make_converter() -> cattrs.Converter:
   )
 
   # 2. Polymorphic structuring for abstract base classes and unions
+  conv.register_structure_hook(domain.Workload, _structure_workload)
   conv.register_structure_hook(
       api.MechanismConfig, lambda data, _: _structure_polymorphic(data, _, conv)
   )
@@ -201,6 +232,8 @@ def from_yaml(
   if isinstance(data, Mapping) and 'type' in data:
     type_name = data['type']
     target_cls = _resolve_type(type_name)
+    if target_cls is domain.Workload:
+      return _structure_workload(data, target_cls)
     if target_cls is not None:
       return cattrs.gen.make_dict_structure_fn(target_cls, converter)(
           data, target_cls

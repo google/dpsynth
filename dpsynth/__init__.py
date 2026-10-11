@@ -38,6 +38,7 @@ from dpsynth.domain import FreeFormTextAttribute
 from dpsynth.domain import NumericalAttribute
 from dpsynth.domain import OpenSetCategoricalAttribute
 from dpsynth.domain import Schema
+from dpsynth.domain import Workload
 from dpsynth.reporting import PrivacyReport
 from dpsynth.serialize import from_yaml
 from dpsynth.serialize import to_yaml
@@ -70,6 +71,7 @@ __all__ = [
     'TabularConfig',
     'TabularMechanism',
     'TabularSynthesizer',
+    'Workload',
     'api',
     'calibrate',
     'checkpoint',

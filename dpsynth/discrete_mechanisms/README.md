@@ -51,17 +51,17 @@ does not model relationships between columns.
 
 **Public API:** `IndependentConfig`
 
-## `direct.py` — Caller-Defined Workload
+## `direct.py` - Caller-Defined Workload
 
-Implements `DirectConfig`, which measures the cliques supplied through
-`prespecified_marginal_queries`. It performs no data-dependent selection and
-does not create its own one-way measurements, so the full budget is available
-for the specified workload. Initial measurements supplied by another layer are
-included when fitting the final model.
+Implements `DirectConfig`, which measures the cliques supplied through the
+`workload` parameter of `configure()` / `dpsynth.calibrate()`. It performs no
+data-dependent selection and does not create its own one-way measurements, so
+the full budget is available for the specified workload. Initial measurements
+supplied by another layer are included when fitting the final model.
 
-**Public API:** `DirectConfig(prespecified_marginal_queries=...)`
+**Public API:** `DirectConfig`
 
-## `mst.py` — Private Pairwise Spanning-Tree Selection
+## `mst.py` - Private Pairwise Spanning-Tree Selection
 
 Implements `MSTConfig`, the default general-purpose mechanism for preserving
 pairwise relationships. It begins with one-way marginals, privately selects
@@ -75,27 +75,27 @@ selection and measurement; `_select()` calls the spanning-tree selection logic.
 `dp_maximum_spanning_tree()` and `_select_two_way_marginal_queries()` implement
 the private pairwise-selection step.
 
-## `aim.py` — Adaptive Iterative Selection
+## `aim.py` - Adaptive Iterative Selection
 
 Implements `AIMConfig`, an adaptive workload-based mechanism. Instead of
 selecting cliques once, it repeatedly finds a marginal that the current model
 approximates poorly, measures it, and updates the model.
 
-**Public API:** `AIMConfig(workload=...)`
+**Public API:** `AIMConfig`
 
 **Internal behavior:** `_one_way_cliques()` limits initial measurements to the
 workload; `_allocate_budget()` reserves rho for the adaptive loop; `_run()`
 replaces the standard base execution path. Helper functions filter valid
 candidates and privately choose the worst-approximated marginal.
 
-## `swift.py` — Workload and Clique-Tree Mechanism
+## `swift.py` - Workload and Clique-Tree Mechanism
 
 Implements `SWIFT`, a workload-informed mechanism that selects
 marginals while controlling clique-tree complexity. It uses a custom
 junction-tree-aware estimation and sampling path rather than the standard
 one-pass implementation in `base.py`.
 
-**Public API:** `SWIFTConfig(workload=...)`
+**Public API:** `SWIFTConfig`
 
 **Internal behavior:** `_allocate_budget()` splits rho between selection and
 measurement; `_run()` compiles the workload, selects supported cliques, builds a

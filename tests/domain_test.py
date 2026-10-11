@@ -292,5 +292,54 @@ class SchemaTest(absltest.TestCase):
     self.assertSequenceEqual(s.constraints, (mock_constraint,))
 
 
+class WorkloadTest(parameterized.TestCase):
+
+  def test_from_unweighted_list_of_tuples_and_lists(self):
+    w = domain.Workload([('a', 'b'), ['b', 'c']])
+    self.assertLen(w, 2)
+    self.assertEqual(dict(w), {('a', 'b'): 1.0, ('b', 'c'): 1.0})
+    self.assertEqual(w[('a', 'b')], 1.0)
+    self.assertIn(('b', 'c'), w)
+    self.assertListEqual(list(w.keys()), [('a', 'b'), ('b', 'c')])
+    self.assertListEqual(list(w.values()), [1.0, 1.0])
+
+  def test_from_weighted_mapping(self):
+    w = domain.Workload({('a', 'b'): 2.5, ('c',): 0.5})
+    self.assertEqual(dict(w), {('a', 'b'): 2.5, ('c',): 0.5})
+
+  def test_from_any(self):
+    self.assertIsNone(domain.Workload.from_any(None))
+    w = domain.Workload([('a', 'b')])
+    self.assertIs(domain.Workload.from_any(w), w)
+    self.assertEqual(domain.Workload.from_any([('a', 'b')]), w)
+
+  @parameterized.named_parameters(
+      dict(testcase_name='bare_string', cliques=['ab']),
+      dict(testcase_name='empty_clique', cliques=[()]),
+      dict(testcase_name='non_string_element', cliques=[(1, 2)]),
+      dict(testcase_name='duplicate_in_clique', cliques=[('a', 'a')]),
+      dict(testcase_name='zero_weight', cliques={('a',): 0.0}),
+      dict(testcase_name='negative_weight', cliques={('a',): -1.0}),
+      dict(testcase_name='nan_weight', cliques={('a',): math.nan}),
+      dict(testcase_name='inf_weight', cliques={('a',): math.inf}),
+  )
+  def test_invalid_workload_raises(self, cliques):
+    with self.assertRaises(ValueError):
+      domain.Workload(cliques)
+
+  def test_validate_unknown_attribute_raises(self):
+    w = domain.Workload([('a', 'b'), ('b', 'unknown')])
+    with self.assertRaisesRegex(ValueError, 'Unknown workload attributes'):
+      w.validate(['a', 'b', 'c'])
+
+  def test_validate_uncovered_attribute_logs_warning(self):
+    w = domain.Workload([('a', 'b')])
+    with self.assertLogs(level='WARNING') as logs:
+      w.validate(['a', 'b', 'c'])
+    self.assertTrue(
+        any('Attributes not in workload' in msg for msg in logs.output)
+    )
+
+
 if __name__ == '__main__':
   absltest.main()

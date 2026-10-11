@@ -43,7 +43,7 @@ ignore this advice, so that downstream mechanisms don't generate out-of-domain
 values when none should exist.
 """
 
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 import dataclasses
 import functools
 import math
@@ -355,6 +355,102 @@ class Schema:
 
   def items(self):
     return self.attributes.items()
+
+
+@dataclasses.dataclass(frozen=True, init=False)
+class Workload(Mapping[tuple[str, ...], float]):
+  """Canonical representation of a marginal query workload.
+
+  Accepts either a mapping from attribute tuples to positive float weights, or
+  an iterable of attribute sequences (normalized to unit weight 1.0).
+
+  Attributes:
+    cliques: Mapping from attribute tuple to positive float weight.
+  """
+
+  cliques: Mapping[tuple[str, ...], float]
+
+  def __init__(
+      self,
+      cliques: Mapping[Sequence[str], float] | Iterable[Sequence[str]] = (),
+  ):
+    if isinstance(cliques, Mapping):
+      raw_items = cliques.items()
+    else:
+      raw_items = ((cl, 1.0) for cl in cliques)
+
+    normalized: dict[tuple[str, ...], float] = {}
+    for cl, weight in raw_items:
+      if isinstance(cl, str) or not isinstance(cl, Sequence):
+        raise ValueError(f'Clique must be a sequence of strings, got {cl!r}.')
+      clique = tuple(cl)
+      if not clique:
+        raise ValueError('Workload cliques must be non-empty.')
+      if not all(isinstance(col, str) for col in clique):
+        raise ValueError(f'Clique elements must be strings, got {clique!r}.')
+      if len(set(clique)) != len(clique):
+        raise ValueError(f'Clique has duplicate attributes: {clique!r}.')
+      w = float(weight)
+      if not math.isfinite(w) or w <= 0:
+        raise ValueError(f'Weight for {clique!r} must be positive: {weight}.')
+      normalized[clique] = w
+
+    object.__setattr__(self, 'cliques', normalized)
+
+  @classmethod
+  def from_any(
+      cls,
+      workload: 'WorkloadInput | None',
+      attributes: Iterable[str] | None = None,
+  ) -> 'Workload | None':
+    """Coerces a raw workload into a Workload and optionally validates it."""
+    if workload is None:
+      return None
+    resolved = workload if isinstance(workload, cls) else cls(workload)
+    if attributes is not None:
+      resolved.validate(attributes)
+    return resolved
+
+  def __getitem__(self, key: tuple[str, ...]) -> float:
+    return self.cliques[key]
+
+  def __iter__(self) -> Iterator[tuple[str, ...]]:
+    return iter(self.cliques)
+
+  def __len__(self) -> int:
+    return len(self.cliques)
+
+  def keys(self):
+    return self.cliques.keys()
+
+  def values(self):
+    return self.cliques.values()
+
+  def items(self):
+    return self.cliques.items()
+
+  def validate(self, attributes: Iterable[str]) -> None:
+    """Validates that the workload is consistent with schema attributes.
+
+    Args:
+      attributes: Collection of attribute names in the schema or domain.
+
+    Raises:
+      ValueError: If any clique references an attribute not in `attributes`.
+    """
+    attr_set = set(attributes)
+    workload_attrs = set().union(*self.keys()) if self.cliques else set()
+    unknown = workload_attrs - attr_set
+    if unknown:
+      raise ValueError(f'Unknown workload attributes: {sorted(unknown)}.')
+    uncovered = attr_set - workload_attrs
+    if uncovered:
+      logging.warning('Attributes not in workload: %s', sorted(uncovered))
+
+
+WorkloadInput: TypeAlias = (
+    Workload | Mapping[Sequence[str], float] | Iterable[Sequence[str]]
+)
 
 
 def to_yaml_file(domain: Mapping[str, AttributeType], filepath: str | PathType):
